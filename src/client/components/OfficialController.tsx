@@ -104,9 +104,10 @@ function multiColorKey(s: ShockerView): string {
   return `s:${s.id}`;
 }
 
-function multiColorForKey(key: string, keys: string[]): string {
-  const idx = Math.max(0, keys.indexOf(key));
-  return MULTI_COLORS[idx % MULTI_COLORS.length]!;
+function multiColorForKey(key: string, _keys?: string[]): string {
+  let hash = 0;
+  for (let i = 0; i < key.length; i++) hash = (hash * 31 + key.charCodeAt(i)) >>> 0;
+  return MULTI_COLORS[hash % MULTI_COLORS.length]!;
 }
 
 function shockerUsableInt(s: ShockerView): number {
@@ -1030,22 +1031,27 @@ export function OfficialController({
                               key={chipKey}
                               type="button"
                               className={`q-btn q-btn-item non-selectable no-outline q-btn--${
-                                selected
-                                  ? multiShock
-                                    ? 'outline'
-                                    : 'standard bg-secondary text-dark'
-                                  : 'outline text-secondary'
+                                selected && !multiShock
+                                  ? 'standard bg-secondary text-dark'
+                                  : multiShock
+                                    ? 'standard'
+                                    : 'outline text-secondary'
                               } q-btn--rectangle q-btn--actionable q-btn--dense`}
                               style={
-                                multiShock && selected && color
-                                  ? {
-                                      borderColor: color,
-                                      color,
-                                      boxShadow: `inset 3px 0 0 ${color}`,
-                                    }
-                                  : multiShock && color
-                                    ? { borderColor: `${color}66` }
-                                    : undefined
+                                multiShock && color
+                                  ? selected
+                                    ? {
+                                        background: color,
+                                        borderColor: color,
+                                        color: '#121212',
+                                      }
+                                    : {
+                                        background: 'transparent',
+                                        border: `1px solid ${color}`,
+                                        color,
+                                        opacity: 0.55,
+                                      }
+                                  : undefined
                               }
                               onClick={() => {
                                 if (!multiShock) {
@@ -2072,7 +2078,10 @@ function VerticalQuasarSlider({
               }
             }}
           >
-            <div className="q-slider__track relative-position no-outline" style={{ width: 5 }}>
+            <div
+              className="q-slider__track relative-position no-outline"
+              style={{ width: limitMarkers.length > 1 ? Math.min(4 + limitMarkers.length * 4, 22) : 5 }}
+            >
               <div className="q-slider__inner absolute" style={{ bottom: '0%', height: '100%' }} />
               {activity < device ? (
                 <div
@@ -2102,27 +2111,56 @@ function VerticalQuasarSlider({
                   }}
                 />
               ) : null}
-              {limitMarkers.map((m) => {
-                const at = clamp(m.intensity, 0, scaleMax);
-                return (
-                  <div
-                    key={m.key}
-                    className="absolute"
-                    title={`${m.label} limit ${m.intensity}%`}
-                    style={{
-                      left: -3,
-                      right: -3,
-                      bottom: `calc(${at}% - 1px)`,
-                      height: 2,
-                      background: m.color,
-                      boxShadow: `0 0 0 1px rgba(0,0,0,.35)`,
-                      pointerEvents: 'none',
-                      zIndex: 2,
-                    }}
-                  />
-                );
-              })}
-              {random ? (
+              {limitMarkers.length > 1 ? (
+                <div
+                  className="absolute"
+                  style={{
+                    left: 0,
+                    right: 0,
+                    bottom: 0,
+                    top: 0,
+                    display: 'flex',
+                    gap: 1,
+                    pointerEvents: 'none',
+                    zIndex: 1,
+                  }}
+                >
+                  {limitMarkers.map((m) => {
+                    const fillTo = random
+                      ? Math.min(hi, m.intensity)
+                      : Math.min(usable, m.intensity);
+                    const fillFrom = random ? Math.min(lo, fillTo) : 0;
+                    const height = Math.max(0, fillTo - fillFrom);
+                    return (
+                      <div key={m.key} style={{ flex: 1, position: 'relative' }}>
+                        <div
+                          title={`${m.label} · up to ${m.intensity}%`}
+                          style={{
+                            position: 'absolute',
+                            left: 0,
+                            right: 0,
+                            bottom: `${(fillFrom / scaleMax) * 100}%`,
+                            height: `${(height / scaleMax) * 100}%`,
+                            background: m.color,
+                            borderRadius: 1,
+                          }}
+                        />
+                        <div
+                          style={{
+                            position: 'absolute',
+                            left: -1,
+                            right: -1,
+                            bottom: `calc(${(clamp(m.intensity, 0, scaleMax) / scaleMax) * 100}% - 1px)`,
+                            height: 2,
+                            background: m.color,
+                            boxShadow: '0 0 0 1px rgba(0,0,0,.35)',
+                          }}
+                        />
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : random ? (
                 <div
                   className="q-slider__selection absolute text-secondary"
                   style={{ bottom: `${loPct}%`, height: `${Math.max(0, hiPct - loPct)}%` }}

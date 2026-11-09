@@ -1,5 +1,23 @@
 import type { DiscordParticipant, ParticipantStatus } from '../participants';
 
+const MULTI_COLORS = [
+  '#79c6db',
+  '#ce93d8',
+  '#81c784',
+  '#ffb74d',
+  '#f48fb1',
+  '#90caf9',
+  '#aed581',
+  '#ff8a65',
+] as const;
+
+function colorForUserId(id: string): string {
+  const key = `u:${id}`;
+  let hash = 0;
+  for (let i = 0; i < key.length; i++) hash = (hash * 31 + key.charCodeAt(i)) >>> 0;
+  return MULTI_COLORS[hash % MULTI_COLORS.length]!;
+}
+
 type Props = {
   participants: DiscordParticipant[];
   statuses: Record<string, ParticipantStatus>;
@@ -30,9 +48,8 @@ export function FriendsParticipantList({
   onLinkAccount,
 }: Props) {
   const others = participants.filter((p) => p.id !== currentUserId);
-  const selectedSet = new Set(
-    selectedTargetIds ?? (selectedTargetId ? [selectedTargetId] : []),
-  );
+  const selectedIds = selectedTargetIds ?? (selectedTargetId ? [selectedTargetId] : []);
+  const selectedSet = new Set(selectedIds);
 
   return (
     <div className="column flex q-mt-xs official-friends-list">
@@ -112,15 +129,25 @@ export function FriendsParticipantList({
                 .filter(Boolean)
                 .join('')
             : null;
+          const multiColor = multiSelect && active ? colorForUserId(p.id) : undefined;
 
           return (
             <button
               key={p.id}
               type="button"
               disabled={!selectable}
-              className={`official-friend-btn ${active ? 'active' : ''} ${
+              className={`official-friend-btn ${active && !multiSelect ? 'active' : ''} ${
                 selectable ? '' : 'disabled'
               } ${banned ? 'blocked' : ''} ${eStop && !banned ? 'estop' : ''}`}
+              style={
+                multiSelect && multiColor
+                  ? {
+                      background: multiColor,
+                      borderColor: multiColor,
+                      color: '#121212',
+                    }
+                  : undefined
+              }
               onClick={() => {
                 if (!selectable) return;
                 if (multiSelect) {
