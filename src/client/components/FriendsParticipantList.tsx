@@ -4,7 +4,11 @@ type Props = {
   participants: DiscordParticipant[];
   statuses: Record<string, ParticipantStatus>;
   currentUserId: string;
-  selectedTargetId: string | null;
+  /** Single-select (legacy) — ignored when selectedTargetIds is provided */
+  selectedTargetId?: string | null;
+  /** Multi-select ids when Multishock / multi friend targeting is on */
+  selectedTargetIds?: string[];
+  multiSelect?: boolean;
   onSelect: (discordUserId: string | null) => void;
   onRefresh?: () => void;
 };
@@ -14,16 +18,23 @@ export function FriendsParticipantList({
   participants,
   statuses,
   currentUserId,
-  selectedTargetId,
+  selectedTargetId = null,
+  selectedTargetIds,
+  multiSelect = false,
   onSelect,
   onRefresh,
 }: Props) {
   const others = participants.filter((p) => p.id !== currentUserId);
+  const selectedSet = new Set(
+    selectedTargetIds ?? (selectedTargetId ? [selectedTargetId] : []),
+  );
 
   return (
     <div className="column flex q-mt-xs official-friends-list">
       <div className="row items-center justify-between official-friends-header">
-        <div className="text-secondary official-friends-title">DISCORD SHOCKERS</div>
+        <div className="text-secondary official-friends-title">
+          DISCORD SHOCKERS{multiSelect ? ' · MULTI' : ''}
+        </div>
         {onRefresh ? (
           <button
             type="button"
@@ -49,7 +60,7 @@ export function FriendsParticipantList({
           const banned = Boolean(status?.bannedYou);
           const eStop = Boolean(status?.emergencyStop || status?.shockers?.some((s) => s.emergencyStop));
           const selectable = Boolean(status) && (banned || eStop || status?.available || (status?.shockers?.length ?? 0) > 0);
-          const active = selectedTargetId === p.id;
+          const active = selectedSet.has(p.id);
           const label = statusLabel(status);
           const detail = statusDetail(status);
           const primary = !banned ? status?.shockers?.[0] : undefined;
@@ -74,6 +85,10 @@ export function FriendsParticipantList({
               } ${banned ? 'blocked' : ''} ${eStop && !banned ? 'estop' : ''}`}
               onClick={() => {
                 if (!selectable) return;
+                if (multiSelect) {
+                  onSelect(p.id);
+                  return;
+                }
                 onSelect(active ? null : p.id);
               }}
             >

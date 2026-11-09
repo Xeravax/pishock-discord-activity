@@ -17,6 +17,7 @@ import { OfficialController } from './components/OfficialController';
 import type { ShockerView } from './components/ShockerCard';
 import { SharesPanel } from './components/SharesPanel';
 import { CommandLog } from './components/CommandLog';
+import type { PipLastCommandInfo } from './components/PipLastCommand';
 import { AvailabilitySettings } from './components/AvailabilitySettings';
 import {
   ActivityLimitsSettings,
@@ -93,19 +94,22 @@ export function App() {
   const [setupChoices, setSetupChoices] = useState<SetupChoices>({ wantsDiscordShare: true });
   const [actionError, setActionError] = useState<string | null>(null);
   const [legalView, setLegalView] = useState<LegalView>(null);
-  const [friendsMode, setFriendsMode] = useState(false);
+  const [friendsMode, setFriendsMode] = useState(true);
   const [participants, setParticipants] = useState<DiscordParticipant[]>([]);
   const [participantStatus, setParticipantStatus] = useState<Record<string, ParticipantStatus>>({});
-  const [selectedTargetId, setSelectedTargetId] = useState<string | null>(null);
+  const [selectedTargetIds, setSelectedTargetIds] = useState<string[]>([]);
+  const selectedTargetId = selectedTargetIds[0] ?? null;
   const [selectedHubId, setSelectedHubId] = useState<string | null>(null);
   const [pinging, setPinging] = useState(false);
   const [pairDialog, setPairDialog] = useState<ShockerView | null>(null);
+  const [lastCommand, setLastCommand] = useState<PipLastCommandInfo | null>(null);
 
   const token = auth?.accessToken ?? null;
   const participantsRef = useRef(participants);
   participantsRef.current = participants;
   const selfIdRef = useRef(me?.user?.id ?? null);
   selfIdRef.current = me?.user?.id ?? null;
+  const operateInflightRef = useRef(0);
 
   const refreshMe = useCallback(async (accessToken: string) => {
     const data = await apiFetch<MeResponse>('/me', accessToken);
@@ -477,44 +481,48 @@ export function App() {
     : undefined;
 
   const friendShockers = useMemo(() => {
-    if (!selectedTargetId) return [] as ShockerView[];
-    const status = participantStatus[selectedTargetId];
-    const participant = participants.find((p) => p.id === selectedTargetId);
-    // Blocked: no visibility into their shockers
-    if (!status || status.bannedYou) return [];
-    // E-stop / paused / etc: still show shockers (buttons disabled via flags)
-    if (!status.shockers?.length) return [];
-    return status.shockers.map((s): ShockerView => {
-      const deviceMaxIntensity = Math.min(100, s.deviceMaxIntensity ?? s.maxIntensity);
-      const deviceMaxDuration = Math.min(15_000, s.deviceMaxDurationMs ?? s.maxDurationMs);
-      const activityMaxIntensity = Math.min(deviceMaxIntensity, s.maxIntensity);
-      const activityMaxDuration = Math.min(deviceMaxDuration, s.maxDurationMs);
-      const stopped = Boolean(s.emergencyStop);
-      return {
-        id: s.shockerId,
-        name: s.shockerName,
-        hubName: participant?.displayName ?? status.globalName ?? status.username ?? 'Friend',
-        clientId: s.hubClientId ?? undefined,
-        owned: false,
-        targetDiscordUserId: selectedTargetId,
-        paused: s.paused,
-        canShock: !stopped && s.canShock,
-        canVibrate: !stopped && s.canVibrate,
-        canBeep: !stopped && s.canBeep,
-        canHold: !stopped && s.canHold,
-        canPause: false,
-        deviceMaxIntensity,
-        deviceMaxDuration,
-        activityMaxIntensity,
-        activityMaxDuration,
-        maxIntensity: activityMaxIntensity,
-        maxDuration: activityMaxDuration,
-        emergencyStop: stopped,
-        isV3: true,
-        online: true,
-      };
-    });
-  }, [selectedTargetId, participantStatus, participants]);
+    if (!selectedTargetIds.length) return [] as ShockerView[];
+    const rows: ShockerView[] = [];
+    for (const targetId of selectedTargetIds) {
+      const status = participantStatus[targetId];
+      const participant = participants.find((p) => p.id === targetId);
+      // Blocked: no visibility into their shockers
+      if (!status || status.bannedYou) continue;
+      // E-stop / paused / etc: still show shockers (buttons disabled via flags)
+      if (!status.shockers?.length) continue;
+      for (const s of status.shockers) {
+        const deviceMaxIntensity = Math.min(100, s.deviceMaxIntensity ?? s.maxIntensity);
+        const deviceMaxDuration = Math.min(15_000, s.deviceMaxDurationMs ?? s.maxDurationMs);
+        const activityMaxIntensity = Math.min(deviceMaxIntensity, s.maxIntensity);
+        const activityMaxDuration = Math.min(deviceMaxDuration, s.maxDurationMs);
+        const stopped = Boolean(s.emergencyStop);
+        rows.push({
+          id: s.shockerId,
+          name: s.shockerName,
+          hubName: participant?.displayName ?? status.globalName ?? status.username ?? 'Friend',
+          clientId: s.hubClientId ?? undefined,
+          owned: false,
+          targetDiscordUserId: targetId,
+          paused: s.paused,
+          canShock: !stopped && s.canShock,
+          canVibrate: !stopped && s.canVibrate,
+          canBeep: !stopped && s.canBeep,
+          canHold: !stopped && s.canHold,
+          canPause: false,
+          deviceMaxIntensity,
+          deviceMaxDuration,
+          activityMaxIntensity,
+          activityMaxDuration,
+          maxIntensity: activityMaxIntensity,
+          maxDuration: activityMaxDuration,
+          emergencyStop: stopped,
+          isV3: true,
+          online: true,
+        });
+      }
+    }
+    return rows;
+  }, [selectedTargetIds, participantStatus, participants]);
 
   const ownShockers = useMemo(() => {
     if (!selectedHubId) return ownedAndShared;
@@ -525,14 +533,72 @@ export function App() {
   }, [ownedAndShared, selectedHubId]);
 
   const shockers = friendsMode ? friendShockers : ownShockers;
-  const friendBlocked = Boolean(friendsMode && selectedTargetId && selectedFriendStatus?.bannedYou);
+
+  const pipLastCommand = useMemo((): PipLastCommandInfo | null => {
+    if (lastCommand) return lastCommand;
+    const relevant = logs.filter((row) => {
+      const action = String(row.action ?? '').toLowerCase();
+      if (action === 'end' || action === 'stop') return false;
+      const target = (row.targetDiscordUserId as string | null | undefined) ?? null;
+      if (friendsMode) {
+        if (!selectedTargetIds.length) return Boolean(target);
+        return target != null && selectedTargetIds.includes(target);
+      }
+      return !target || target === me?.user?.id;
+    });
+    const row = relevant[0];
+    if (!row) return null;
+    const target = (row.targetDiscordUserId as string | null | undefined) ?? null;
+    const shockerId = row.shockerId as number | null | undefined;
+    return {
+      action: String(row.action),
+      intensity: (row.intensity as number | null | undefined) ?? null,
+      durationMs: (row.durationMs as number | null | undefined) ?? null,
+      targetName: target
+        ? participants.find((p) => p.id === target)?.displayName ??
+          participantStatus[target]?.globalName ??
+          participantStatus[target]?.username ??
+          'Discord Shocker'
+        : friendsMode
+          ? 'Discord Shockers'
+          : 'My Shockers',
+      shockerName:
+        (shockerId != null
+          ? shockers.find((s) => s.id === shockerId)?.name
+          : null) ?? (shockerId != null ? `Shocker ${shockerId}` : null),
+      at: new Date(String(row.createdAt)).getTime() || Date.now(),
+      success: Boolean(row.success),
+    };
+  }, [
+    lastCommand,
+    logs,
+    friendsMode,
+    selectedTargetIds,
+    participants,
+    participantStatus,
+    shockers,
+    me?.user?.id,
+  ]);
+
+  const friendBlocked = Boolean(
+    friendsMode &&
+      selectedTargetIds.length > 0 &&
+      selectedTargetIds.every((id) => participantStatus[id]?.bannedYou),
+  );
   const friendEStop = Boolean(
     friendsMode &&
-      selectedTargetId &&
+      selectedTargetIds.length > 0 &&
       !friendBlocked &&
-      (selectedFriendStatus?.emergencyStop ||
-        friendShockers.some((s) => s.emergencyStop)),
+      (selectedFriendStatus?.emergencyStop || friendShockers.some((s) => s.emergencyStop)),
   );
+
+  useEffect(() => {
+    // Unlinked users only use Discord Shockers — Claim / My Shockers stay hidden
+    if (me && !me.pishockLinked) {
+      setFriendsMode(true);
+      setSelectedHubId(null);
+    }
+  }, [me?.pishockLinked, me]);
 
   const acceptConsent = async () => {
     if (!token) return;
@@ -695,15 +761,47 @@ export function App() {
 
   const operate = async (input: Record<string, unknown>) => {
     if (!token) return;
+    const action = String(input.operation ?? 'operate');
+    // Skip ephemeral hold-end noise in the PIP last-command strip
+    const trackCommand = action !== 'end' && action !== 'stop';
+    const targetId =
+      typeof input.targetDiscordUserId === 'string'
+        ? input.targetDiscordUserId
+        : selectedTargetId && friendsMode
+          ? selectedTargetId
+          : null;
+    const shockerId =
+      typeof input.shockerId === 'number'
+        ? input.shockerId
+        : Number(input.shockerId);
+    const targetName = targetId
+      ? participants.find((p) => p.id === targetId)?.displayName ??
+        participantStatus[targetId]?.globalName ??
+        participantStatus[targetId]?.username ??
+        'Discord Shocker'
+      : friendsMode
+        ? 'Discord Shockers'
+        : 'My Shockers';
+    const shockerName =
+      shockers.find((s) => s.id === shockerId)?.name ??
+      (Number.isFinite(shockerId) ? `Shocker ${shockerId}` : null);
+
+    if (trackCommand) {
+      setLastCommand({
+        action,
+        intensity: typeof input.intensity === 'number' ? input.intensity : null,
+        durationMs: typeof input.durationMs === 'number' ? input.durationMs : null,
+        targetName,
+        shockerName,
+        at: Date.now(),
+        success: true,
+      });
+    }
+
+    operateInflightRef.current += 1;
     setBusy(true);
     setActionError(null);
     try {
-      const targetId =
-        typeof input.targetDiscordUserId === 'string'
-          ? input.targetDiscordUserId
-          : selectedTargetId && friendsMode
-            ? selectedTargetId
-            : null;
       if (targetId) {
         const instanceId = getActivityInstanceId();
         await apiFetch(`/participants/${targetId}/operate`, token, {
@@ -714,12 +812,18 @@ export function App() {
         requirePiShockLink(
           'Link PiShock to control your own shockers or website shares. Discord Shockers work without linking.',
         );
+        if (trackCommand) {
+          setLastCommand((prev) => (prev ? { ...prev, success: false } : prev));
+        }
         return;
       } else {
         await apiFetch('/operate', token, { method: 'POST', body: JSON.stringify(input) });
       }
       await refreshLogs(token).catch(() => undefined);
     } catch (err) {
+      if (trackCommand) {
+        setLastCommand((prev) => (prev ? { ...prev, success: false } : prev));
+      }
       if (err instanceof ApiError && err.code === 'PISHOCK_RELOGIN') {
         await handleReloginNeeded();
         requirePiShockLink('PiShock session expired — link again to control your own devices.');
@@ -730,7 +834,8 @@ export function App() {
         setActionError(err instanceof Error ? err.message : String(err));
       }
     } finally {
-      setBusy(false);
+      operateInflightRef.current = Math.max(0, operateInflightRef.current - 1);
+      if (operateInflightRef.current === 0) setBusy(false);
     }
   };
 
@@ -1016,14 +1121,17 @@ export function App() {
           friendsOpen={friendsMode}
           selectedHubId={selectedHubId}
           pinging={pinging}
+          lastCommand={pipLastCommand}
           showLinkAccount={!me.pishockLinked}
+          showOwnMode={me.pishockLinked}
+          showClaim={me.pishockLinked}
           emptyMessage={
             friendBlocked
               ? 'You are blocked by this user. You cannot view or use any of their shockers.'
-              : friendsMode && selectedTargetId
-                ? 'This user has no shockers shared in the activity.'
+              : friendsMode && selectedTargetIds.length > 0
+                ? 'No shockers shared by the selected participants.'
                 : friendsMode
-                  ? 'Select a Discord Shocker to control.'
+                  ? 'Select Discord Shockers to control.'
                   : 'No shockers'
           }
           accessBanner={
@@ -1045,31 +1153,52 @@ export function App() {
             ) : null
           }
           safetyBanner={!pip ? <SafetyNoticeBar /> : null}
-          friendsPanel={
+          friendsPanel={({ multiShock }) => (
             <FriendsParticipantList
               participants={participants}
               statuses={participantStatus}
               currentUserId={me.user.id}
               selectedTargetId={selectedTargetId}
-              onSelect={(id) => setSelectedTargetId(id)}
+              selectedTargetIds={selectedTargetIds}
+              multiSelect={multiShock}
+              onSelect={(id) => {
+                if (!id) {
+                  setSelectedTargetIds([]);
+                  return;
+                }
+                if (multiShock) {
+                  setSelectedTargetIds((prev) =>
+                    prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id],
+                  );
+                  return;
+                }
+                setSelectedTargetIds((prev) => (prev.length === 1 && prev[0] === id ? [] : [id]));
+              }}
               onRefresh={() => token && refreshParticipants(token, true)}
             />
-          }
+          )}
           onOperate={(input) =>
             operate({
               ...input,
-              targetDiscordUserId: friendsMode ? selectedTargetId : undefined,
+              targetDiscordUserId:
+                typeof input.targetDiscordUserId === 'string'
+                  ? input.targetDiscordUserId
+                  : friendsMode
+                    ? selectedTargetId
+                    : undefined,
             })
           }
           onEmergencyStop={setEmergencyStop}
           onSelectHub={(hubId) => {
+            if (!me.pishockLinked) return;
             setFriendsMode(false);
-            setSelectedTargetId(null);
+            setSelectedTargetIds([]);
             setSelectedHubId(hubId);
           }}
           onOpenOwnShockers={() => {
+            if (!me.pishockLinked) return;
             setFriendsMode(false);
-            setSelectedTargetId(null);
+            setSelectedTargetIds([]);
           }}
           onOpenFriends={() => {
             setFriendsMode(true);
@@ -1181,6 +1310,46 @@ export function App() {
                 ? 'PiShock linked — you can control your devices and opt in to Discord Shockers.'
                 : 'No PiShock login needed to control Discord Shockers. Link only to share yourself or use your own devices.'}
             </div>
+            {me.pishockLinked ? (
+              <button
+                type="button"
+                className="q-item q-item-type row no-wrap q-item--dark q-item--clickable q-link cursor-pointer full-width bg-transparent text-left"
+                onClick={() => {
+                  setFriendsMode(false);
+                  setSelectedTargetIds([]);
+                  setOverlay(null);
+                }}
+              >
+                <div className="q-item__section column q-item__section--avatar q-item__section--side justify-center">
+                  <i className="q-icon mdi mdi-access-point text-secondary" aria-hidden />
+                </div>
+                <div className="q-item__section column q-item__section--main justify-center">
+                  <div className="q-item__label text-grey-3">My Shockers</div>
+                  <div className="q-item__label q-item__label--caption text-grey-5">
+                    Your hubs &amp; devices
+                  </div>
+                </div>
+              </button>
+            ) : null}
+            <button
+              type="button"
+              className="q-item q-item-type row no-wrap q-item--dark q-item--clickable q-link cursor-pointer full-width bg-transparent text-left"
+              onClick={() => {
+                setFriendsMode(true);
+                setOverlay(null);
+                if (token) void refreshParticipants(token, true);
+              }}
+            >
+              <div className="q-item__section column q-item__section--avatar q-item__section--side justify-center">
+                <i className="q-icon mdi mdi-account-group text-secondary" aria-hidden />
+              </div>
+              <div className="q-item__section column q-item__section--main justify-center">
+                <div className="q-item__label text-grey-3">Discord Shockers</div>
+                <div className="q-item__label q-item__label--caption text-grey-5">
+                  Friends in this activity
+                </div>
+              </div>
+            </button>
             {(
               [
                 ['availability', 'Available in Discord', 'mdi-account-check'],
@@ -1188,7 +1357,9 @@ export function App() {
                 ['shares', 'Shares & links', 'mdi-share-variant'],
                 ['logs', 'Command log', 'mdi-history'],
               ] as const
-            ).map(([id, label, icon]) => (
+            )
+              .filter(([id]) => me.pishockLinked || id === 'logs')
+              .map(([id, label, icon]) => (
               <button
                 key={id}
                 type="button"

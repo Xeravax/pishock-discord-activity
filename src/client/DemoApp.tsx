@@ -14,7 +14,7 @@ import type { ShockerView } from './components/ShockerCard';
 import { participantAvatarUrl, type DiscordParticipant, type ParticipantStatus } from './participants';
 
 type Screen = 'consent' | 'login' | 'control' | 'shares' | 'logs' | 'pip' | 'terms' | 'privacy';
-type Overlay = null | 'shares' | 'logs' | 'availability' | 'menu';
+type Overlay = null | 'shares' | 'logs' | 'availability' | 'menu' | 'settings';
 
 const DEMO_PARTICIPANTS: DiscordParticipant[] = [
   {
@@ -171,39 +171,44 @@ const DEMO_LOGS = [
 export function DemoApp() {
   const [screen, setScreen] = useState<Screen>('control');
   const [toast, setToast] = useState<string | null>(null);
-  const [friendsOpen, setFriendsOpen] = useState(false);
-  const [selectedTargetId, setSelectedTargetId] = useState<string | null>('111');
+  const [friendsOpen, setFriendsOpen] = useState(true);
+  const [selectedTargetIds, setSelectedTargetIds] = useState<string[]>(['111']);
+  const selectedTargetId = selectedTargetIds[0] ?? null;
   const [overlay, setOverlay] = useState<Overlay>(null);
+  const demoLinked = true;
 
   const flash = (msg: string) => {
     setToast(msg);
     window.setTimeout(() => setToast(null), 1800);
   };
 
-  const friendShockers: ShockerView[] =
-    selectedTargetId && DEMO_STATUS[selectedTargetId]?.available
-      ? DEMO_STATUS[selectedTargetId]!.shockers.map((s) => ({
-          id: s.shockerId,
-          name: s.shockerName,
-          hubName: DEMO_STATUS[selectedTargetId]!.globalName ?? 'Friend',
-          clientId: s.hubClientId ?? undefined,
-          owned: false,
-          targetDiscordUserId: selectedTargetId,
-          canShock: s.canShock,
-          canVibrate: s.canVibrate,
-          canBeep: s.canBeep,
-          canHold: s.canHold,
-          canPause: false,
-          deviceMaxIntensity: s.deviceMaxIntensity,
-          deviceMaxDuration: s.deviceMaxDurationMs,
-          activityMaxIntensity: s.maxIntensity,
-          activityMaxDuration: s.maxDurationMs,
-          maxIntensity: s.maxIntensity,
-          maxDuration: s.maxDurationMs,
-          isV3: true,
-          online: true,
-        }))
-      : [];
+  const friendShockers: ShockerView[] = selectedTargetIds.flatMap((targetId) => {
+    const status = DEMO_STATUS[targetId];
+    if (!status?.available) return [];
+    return status.shockers.map(
+      (s): ShockerView => ({
+        id: s.shockerId,
+        name: s.shockerName,
+        hubName: status.globalName ?? 'Friend',
+        clientId: s.hubClientId ?? undefined,
+        owned: false,
+        targetDiscordUserId: targetId,
+        canShock: s.canShock,
+        canVibrate: s.canVibrate,
+        canBeep: s.canBeep,
+        canHold: s.canHold,
+        canPause: false,
+        deviceMaxIntensity: s.deviceMaxIntensity,
+        deviceMaxDuration: s.deviceMaxDurationMs,
+        activityMaxIntensity: s.maxIntensity,
+        activityMaxDuration: s.maxDurationMs,
+        maxIntensity: s.maxIntensity,
+        maxDuration: s.maxDurationMs,
+        isV3: true,
+        online: true,
+      }),
+    );
+  });
 
   const shockers = friendsOpen ? friendShockers : DEMO_SHOCKERS.filter((s) => s.owned);
 
@@ -297,27 +302,51 @@ export function DemoApp() {
             shockers={shockers}
             pip={screen === 'pip'}
             friendsOpen={friendsOpen}
+            showOwnMode={demoLinked}
+            showClaim={demoLinked}
             safetyBanner={screen !== 'pip' ? <SafetyNoticeBar /> : null}
-            friendsPanel={
+            friendsPanel={({ multiShock }) => (
               <FriendsParticipantList
                 participants={DEMO_PARTICIPANTS}
                 statuses={DEMO_STATUS}
                 currentUserId="dev-user"
                 selectedTargetId={selectedTargetId}
-                onSelect={setSelectedTargetId}
+                selectedTargetIds={selectedTargetIds}
+                multiSelect={multiShock}
+                onSelect={(id) => {
+                  if (!id) {
+                    setSelectedTargetIds([]);
+                    return;
+                  }
+                  if (multiShock) {
+                    setSelectedTargetIds((prev) =>
+                      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id],
+                    );
+                    return;
+                  }
+                  setSelectedTargetIds((prev) =>
+                    prev.length === 1 && prev[0] === id ? [] : [id],
+                  );
+                }}
                 onRefresh={() => flash('Would refresh Discord participants')}
               />
-            }
+            )}
             onOperate={(input) =>
               flash(
-                `${friendsOpen ? 'participant ' : ''}${input.operation} · id ${input.shockerId} · ${input.intensity}% · ${input.durationMs}ms${
+                `${friendsOpen ? 'participant ' : ''}${input.operation} · id ${input.shockerId}${
+                  input.targetDiscordUserId ? ` · user ${input.targetDiscordUserId}` : ''
+                } · ${input.intensity}% · ${input.durationMs}ms${
                   input.hold ? ' · hold' : ''
                 }${input.warning ? ' · warn' : ''}`,
               )
             }
             onOpenFriends={() => {
-              setFriendsOpen((v) => !v);
-              flash(friendsOpen ? 'Showing owned hub' : 'Showing Discord Shockers');
+              setFriendsOpen(true);
+              flash('Showing Discord Shockers');
+            }}
+            onOpenOwnShockers={() => {
+              setFriendsOpen(false);
+              flash('Showing owned hub');
             }}
             onOpenClaim={() => {
               setOverlay('availability');

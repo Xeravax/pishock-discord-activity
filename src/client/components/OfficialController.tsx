@@ -8,11 +8,14 @@ import {
 } from 'react';
 import type { ShockerView } from './ShockerCard';
 import { AnnouncementBanner } from './AnnouncementBanner';
+import { PipLastCommand, type PipLastCommandInfo } from './PipLastCommand';
 
 export type OfficialOperateInput = {
   shockerId: number;
   shareCode?: string;
   clientId?: number | string;
+  /** Friend operate routing — set per shocker in multishock */
+  targetDiscordUserId?: string;
   operation: 'shock' | 'vibrate' | 'beep' | 'hold' | 'warning' | 'stop' | 'end';
   intensity: number;
   durationMs: number;
@@ -48,7 +51,7 @@ type Props = {
   pip?: boolean;
   hubs?: HubInfo[];
   friendsOpen?: boolean;
-  friendsPanel?: ReactNode;
+  friendsPanel?: ReactNode | ((ctx: { multiShock: boolean }) => ReactNode);
   safetyBanner?: ReactNode;
   /** Shown above controls (e.g. blocked / e-stop notices) */
   accessBanner?: ReactNode;
@@ -56,6 +59,9 @@ type Props = {
   emptyMessage?: string;
   /** Show header CTA when the user has not linked PiShock yet */
   showLinkAccount?: boolean;
+  /** Own hubs / Claim require a linked PiShock session */
+  showOwnMode?: boolean;
+  showClaim?: boolean;
   onOperate: (input: OfficialOperateInput) => void;
   /** Owner-only kill-switch latch (press in / press out) */
   onEmergencyStop?: (input: { shockerId: number; clientId?: number | string; engaged: boolean }) => void;
@@ -75,6 +81,8 @@ type Props = {
   onPingHub?: () => void;
   pinging?: boolean;
   selectedHubId?: string | null;
+  /** Most recent operate — shown prominently in Discord PIP */
+  lastCommand?: PipLastCommandInfo | null;
 };
 
 function clamp(n: number, min: number, max: number) {
@@ -157,6 +165,7 @@ type ControlPrefs = {
   vibDurationMs: number;
   warningLevel: WarningLevel;
   tapMode: boolean;
+  multiShock: boolean;
   activeId?: number;
 };
 
@@ -170,6 +179,7 @@ const DEFAULT_CONTROL_PREFS: ControlPrefs = {
   vibDurationMs: 1000,
   warningLevel: 'none',
   tapMode: false,
+  multiShock: false,
 };
 
 function loadControlPrefs(): ControlPrefs {
@@ -195,6 +205,7 @@ function loadControlPrefs(): ControlPrefs {
           ? 'small'
           : 'none',
       tapMode: Boolean(parsed.tapMode),
+      multiShock: Boolean(parsed.multiShock),
       activeId:
         parsed.activeId == null || Number.isNaN(Number(parsed.activeId))
           ? undefined
@@ -218,6 +229,7 @@ export function OfficialController({
   hub,
   shockers,
   busy,
+  pip = false,
   hubs = [],
   friendsOpen = false,
   friendsPanel,
@@ -225,6 +237,8 @@ export function OfficialController({
   accessBanner,
   emptyMessage = 'No shockers',
   showLinkAccount = false,
+  showOwnMode = true,
+  showClaim = true,
   onOperate,
   onEmergencyStop,
   onSelectHub,
@@ -240,22 +254,72 @@ export function OfficialController({
   onPingHub,
   pinging = false,
   selectedHubId = null,
+  lastCommand = null,
 }: Props) {
   const initialPrefs = useMemo(() => loadControlPrefs(), []);
   const [activeId, setActiveId] = useState(
     () => initialPrefs.activeId ?? shockers[0]?.id ?? 0,
   );
   const [hubMenuOpen, setHubMenuOpen] = useState(false);
+  const [multiShock, setMultiShock] = useState(initialPrefs.multiShock);
+  const [selectedIds, setSelectedIds] = useState<number[]>(() => {
+    const first = initialPrefs.activeId ?? shockers[0]?.id;
+    return first != null ? [first] : [];
+  });
+  /** Collapsed mode dock on compact viewports so it doesn't cover the remote */
+  const [modeDockOpen, setModeDockOpen] = useState(true);
+  const [compactDock, setCompactDock] = useState(false);
+
   const active = useMemo(
     () => shockers.find((s) => s.id === activeId) ?? shockers[0],
     [shockers, activeId],
   );
 
+  const selectedShockers = useMemo(() => {
+    if (!multiShock) return active ? [active] : [];
+    const picked = selectedIds
+      .map((id) => shockers.find((s) => s.id === id))
+      .filter((s): s is ShockerView => Boolean(s));
+    return picked.length ? picked : active ? [active] : [];
+  }, [multiShock, selectedIds, shockers, active]);
+
   useEffect(() => {
     if (!shockers.some((s) => s.id === activeId)) {
-      setActiveId(shockers[0]?.id ?? 0);
+      const next = shockers[0]?.id ?? 0;
+      setActiveId(next);
+      setSelectedIds(next ? [next] : []);
     }
   }, [shockers, activeId]);
+
+  useEffect(() => {
+    setSelectedIds((prev) => {
+      const visible = shockers.map((s) => s.id);
+      const valid = prev.filter((id) => visible.includes(id));
+      if (!multiShock) {
+        if (valid.length) return valid.slice(0, 1);
+        return shockers[0] ? [shockers[0].id] : [];
+      }
+      // Multishock: keep selection and auto-include newly visible shockers
+      const merged = [...valid];
+      for (const id of visible) {
+        if (!merged.includes(id)) merged.push(id);
+      }
+      return merged.length ? merged : shockers[0] ? [shockers[0].id] : [];
+    });
+  }, [shockers, multiShock]);
+
+  useEffect(() => {
+    const mq = window.matchMedia('(max-width: 720px), (max-height: 640px)');
+    const apply = () => {
+      const compact = mq.matches || Boolean(pip);
+      setCompactDock(compact);
+      if (compact) setModeDockOpen(false);
+      else setModeDockOpen(true);
+    };
+    apply();
+    mq.addEventListener('change', apply);
+    return () => mq.removeEventListener('change', apply);
+  }, [pip]);
 
   const [shockIntensity, setShockIntensity] = useState(initialPrefs.shockIntensity);
   const [shockDurationMs, setShockDurationMs] = useState(initialPrefs.shockDurationMs);
@@ -276,22 +340,44 @@ export function OfficialController({
     shockerId: number;
     clientId?: number | string;
     shareCode?: string;
+    targetDiscordUserId?: string;
   } | null>(null);
 
-  const deviceMaxInt = active?.deviceMaxIntensity ?? active?.maxIntensity ?? 100;
-  const deviceMaxDur = active?.deviceMaxDuration ?? active?.maxDuration ?? 15_000;
-  const activityMaxInt = Math.min(
-    deviceMaxInt,
-    active?.activityMaxIntensity ?? active?.maxIntensity ?? deviceMaxInt,
-  );
-  const activityMaxDur = Math.min(
-    deviceMaxDur,
-    active?.activityMaxDuration ?? active?.maxDuration ?? deviceMaxDur,
-  );
-  /** Usable ceiling for this activity */
+  const limitPool = selectedShockers.length
+    ? selectedShockers
+    : active
+      ? [active]
+      : [];
+  const deviceMaxInt = limitPool.length
+    ? Math.min(...limitPool.map((s) => s.deviceMaxIntensity ?? s.maxIntensity ?? 100))
+    : 100;
+  const deviceMaxDur = limitPool.length
+    ? Math.min(...limitPool.map((s) => s.deviceMaxDuration ?? s.maxDuration ?? 15_000))
+    : 15_000;
+  const activityMaxInt = limitPool.length
+    ? Math.min(
+        ...limitPool.map((s) =>
+          Math.min(
+            s.deviceMaxIntensity ?? s.maxIntensity ?? 100,
+            s.activityMaxIntensity ?? s.maxIntensity ?? 100,
+          ),
+        ),
+      )
+    : 100;
+  const activityMaxDur = limitPool.length
+    ? Math.min(
+        ...limitPool.map((s) =>
+          Math.min(
+            s.deviceMaxDuration ?? s.maxDuration ?? 15_000,
+            s.activityMaxDuration ?? s.maxDuration ?? 15_000,
+          ),
+        ),
+      )
+    : 15_000;
+  /** Usable ceiling across the selection (most restrictive) */
   const maxInt = Math.min(deviceMaxInt, activityMaxInt);
   const maxDur = Math.min(deviceMaxDur, activityMaxDur);
-  const eStop = Boolean(active?.emergencyStop);
+  const eStop = selectedShockers.some((s) => s.emergencyStop);
   const controlsLocked = eStop;
 
   useEffect(() => {
@@ -314,6 +400,7 @@ export function OfficialController({
       vibDurationMs,
       warningLevel,
       tapMode,
+      multiShock,
       activeId: active?.id ?? activeId,
     });
   }, [
@@ -326,6 +413,7 @@ export function OfficialController({
     vibDurationMs,
     warningLevel,
     tapMode,
+    multiShock,
     active?.id,
     activeId,
   ]);
@@ -367,6 +455,45 @@ export function OfficialController({
     [],
   );
 
+  const resolveFireTargets = (opts?: {
+    target?: {
+      shockerId: number;
+      clientId?: number | string;
+      shareCode?: string;
+      targetDiscordUserId?: string;
+    };
+    hold?: boolean;
+  }): ShockerView[] => {
+    if (opts?.target) {
+      const existing = shockers.find((s) => s.id === opts.target!.shockerId);
+      if (existing) {
+        return [
+          {
+            ...existing,
+            clientId: opts.target.clientId ?? existing.clientId,
+            shareCode: opts.target.shareCode ?? existing.shareCode,
+            targetDiscordUserId:
+              opts.target.targetDiscordUserId ?? existing.targetDiscordUserId,
+          },
+        ];
+      }
+      if (!active) return [];
+      return [
+        {
+          ...active,
+          id: opts.target.shockerId,
+          clientId: opts.target.clientId ?? active.clientId,
+          shareCode: opts.target.shareCode ?? active.shareCode,
+          targetDiscordUserId:
+            opts.target.targetDiscordUserId ?? active.targetDiscordUserId,
+        },
+      ];
+    }
+    // Hold stays single-target; multishock uses one-shot fan-out
+    if (opts?.hold || !multiShock) return active ? [active] : [];
+    return selectedShockers.length ? selectedShockers : active ? [active] : [];
+  };
+
   const fire = (
     operation: OfficialOperateInput['operation'],
     intensity: number,
@@ -374,77 +501,92 @@ export function OfficialController({
     opts?: {
       hold?: boolean;
       skipWarning?: boolean;
-      target?: { shockerId: number; clientId?: number | string; shareCode?: string };
+      target?: {
+        shockerId: number;
+        clientId?: number | string;
+        shareCode?: string;
+        targetDiscordUserId?: string;
+      };
     },
   ) => {
-    if (!active && !opts?.target) return;
     if (operation === 'stop') return;
     if (controlsLocked && operation !== 'end') return;
-    const target = opts?.target;
-    const shockerId = target?.shockerId ?? active!.id;
-    const shareCode = target?.shareCode ?? active?.shareCode;
-    const clientId = target?.clientId ?? active?.clientId ?? hub.id;
-    const base = {
-      shockerId,
-      shareCode,
-      // Hub id is the broker client id when the shocker row omits ClientId
-      clientId,
-      canShock: active?.canShock ?? true,
-      canVibrate: active?.canVibrate ?? true,
-      canBeep: active?.canBeep ?? true,
-      canHold: active?.canHold ?? true,
-      maxIntensity: maxInt,
-      maxDuration: maxDur,
-      // Continuous hold comes from TAP / Use Mode (press-and-hold Operate)
-      hold: Boolean(opts?.hold),
-      warning: null as OfficialOperateInput['warning'],
+    const targets = resolveFireTargets(opts);
+    if (!targets.length) return;
+
+    const dispatch = (
+      shocker: ShockerView,
+      op: OfficialOperateInput['operation'],
+      inten: number,
+      dur: number,
+      warning: OfficialOperateInput['warning'] = null,
+    ) => {
+      const sMaxInt = Math.min(
+        maxInt,
+        shocker.activityMaxIntensity ?? shocker.maxIntensity ?? maxInt,
+      );
+      const sMaxDur = Math.min(
+        maxDur,
+        shocker.activityMaxDuration ?? shocker.maxDuration ?? maxDur,
+      );
+      onOperate({
+        shockerId: shocker.id,
+        shareCode: shocker.shareCode,
+        clientId: shocker.clientId ?? hub.id,
+        targetDiscordUserId: shocker.targetDiscordUserId,
+        canShock: shocker.canShock,
+        canVibrate: shocker.canVibrate,
+        canBeep: shocker.canBeep,
+        canHold: shocker.canHold,
+        maxIntensity: sMaxInt,
+        maxDuration: sMaxDur,
+        hold: Boolean(opts?.hold),
+        warning,
+        operation: op,
+        intensity: clamp(inten, 0, sMaxInt),
+        durationMs: clamp(dur, 16, sMaxDur),
+      });
     };
 
-    // Vibrate-before-shock for SMALL / MID / LONG
+    // Vibrate-before-shock for SMALL / MID / LONG (fan-out to all targets)
     if (
       operation === 'shock' &&
       !opts?.skipWarning &&
       !opts?.hold &&
-      warningLevel !== 'none' &&
-      (active?.canVibrate ?? true)
+      warningLevel !== 'none'
     ) {
       const preset = WARNING_PRESETS[warningLevel];
       const warnIntensity = clamp(preset.intensity, 1, maxInt);
       const warnDuration = clamp(preset.durationMs, 16, maxDur);
-      onOperate({
-        ...base,
-        operation: 'vibrate',
-        intensity: warnIntensity,
-        durationMs: warnDuration,
-        warning: {
+      for (const shocker of targets) {
+        if (shocker.emergencyStop || shocker.paused || !shocker.canVibrate) continue;
+        dispatch(shocker, 'vibrate', warnIntensity, warnDuration, {
           Active: true,
           Intensity: warnIntensity,
           DurationMs: warnDuration,
           Min: warnIntensity,
           Max: warnIntensity,
-        },
-      });
+        });
+      }
       if (warningTimerRef.current) clearTimeout(warningTimerRef.current);
       warningTimerRef.current = setTimeout(() => {
         warningTimerRef.current = null;
         if (controlsLocked) return;
-        onOperate({
-          ...base,
-          operation: 'shock',
-          intensity: clamp(intensity, 0, maxInt),
-          durationMs: clamp(durationMs, 16, maxDur),
-          warning: null,
-        });
+        for (const shocker of targets) {
+          if (shocker.emergencyStop || shocker.paused || !shocker.canShock) continue;
+          dispatch(shocker, 'shock', intensity, durationMs, null);
+        }
       }, warnDuration + 50);
       return;
     }
 
-    onOperate({
-      ...base,
-      operation,
-      intensity: clamp(intensity, 0, maxInt),
-      durationMs: clamp(durationMs, 16, maxDur),
-    });
+    for (const shocker of targets) {
+      if (operation !== 'end' && (shocker.emergencyStop || shocker.paused)) continue;
+      if (operation === 'shock' && !shocker.canShock) continue;
+      if (operation === 'vibrate' && !shocker.canVibrate) continue;
+      if (operation === 'beep' && !shocker.canBeep) continue;
+      dispatch(shocker, operation, intensity, durationMs, null);
+    }
   };
 
   const endHold = () => {
@@ -461,7 +603,7 @@ export function OfficialController({
     intensity: number,
     ev: ReactPointerEvent<HTMLElement>,
   ) => {
-    if (!active || controlsLocked || holdingOpRef.current) return;
+    if (multiShock || !active || controlsLocked || holdingOpRef.current) return;
     if (operation === 'shock' && (!active.canShock || active.paused)) return;
     if (operation === 'vibrate' && (!active.canVibrate || active.paused)) return;
     if (operation === 'beep' && (!active.canBeep || active.paused)) return;
@@ -474,6 +616,7 @@ export function OfficialController({
       shockerId: active.id,
       clientId: active.clientId ?? hub.id,
       shareCode: active.shareCode,
+      targetDiscordUserId: active.targetDiscordUserId,
     };
     holdingOpRef.current = operation;
     setHoldingOp(operation);
@@ -516,6 +659,15 @@ export function OfficialController({
   }, [tapMode, active?.canHold, activeId]);
 
   useEffect(() => {
+    // Multishock and continuous TAP hold don't mix
+    if (multiShock && tapMode) {
+      if (holdingOpRef.current) endHold();
+      setTapMode(false);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [multiShock]);
+
+  useEffect(() => {
     if (!holdingOp) return;
     const onBlur = () => endHold();
     const onKey = (e: KeyboardEvent) => {
@@ -532,7 +684,11 @@ export function OfficialController({
   }, [holdingOp, activeId, maxDur]);
 
   return (
-    <div className="bg-dark q-layout q-layout--standard official-root">
+    <div
+      className={`bg-dark q-layout q-layout--standard official-root${
+        pip ? ' official-root--pip' : ''
+      }`}
+    >
       <header
         className="q-header q-layout__section--marginal custom-header fixed-top"
         style={{ borderBottom: '1px solid rgb(121, 198, 219)' }}
@@ -585,6 +741,7 @@ export function OfficialController({
           <div className="text-h4 flex q-pa-sm col-md-8 col-xs-12 full-height full-width">
             <div className="full-width">
               <div className="column">
+                {pip ? <PipLastCommand command={lastCommand} /> : null}
                 <div className="row justify-between items-start">
                   <div className="column">
                     <span className="text-secondary">{hub.name}</span>
@@ -723,27 +880,92 @@ export function OfficialController({
                   </div>
                 ) : null}
 
-                {shockers.length > 1 ? (
-                  <div className="row q-gutter-sm q-mt-sm">
-                    {shockers.map((s) => (
+                {friendsOpen || shockers.length > 1 ? (
+                  <div className="column q-gutter-xs q-mt-sm">
+                    <div className="row items-center q-gutter-sm">
                       <button
-                        key={s.id}
                         type="button"
                         className={`q-btn q-btn-item non-selectable no-outline q-btn--${
-                          s.id === active?.id ? 'standard bg-secondary text-dark' : 'outline text-secondary'
+                          multiShock ? 'standard bg-secondary text-dark' : 'outline text-secondary'
                         } q-btn--rectangle q-btn--actionable q-btn--dense`}
-                        onClick={() => setActiveId(s.id)}
+                        onClick={() => {
+                          setMultiShock((v) => {
+                            const next = !v;
+                            if (next) {
+                              if (holdingOpRef.current) endHold();
+                              setTapMode(false);
+                              setSelectedIds(active ? [active.id] : []);
+                            }
+                            return next;
+                          });
+                        }}
+                        title="Select several people / shockers and operate them together"
                       >
                         <span className="q-btn__wrapper col row q-anchor--skip">
-                          <span className="q-btn__content text-center col items-center q-anchor--skip justify-center row">
-                            <span className="block">
-                              {s.name}
-                              {s.emergencyStop ? ' · E-STOP' : ''}
-                            </span>
+                          <span className="q-btn__content text-center col items-center q-anchor--skip justify-center row no-wrap">
+                            <i className="q-icon on-left mdi mdi-checkbox-multiple-marked-outline" aria-hidden />
+                            <span className="block">Multi</span>
                           </span>
                         </span>
                       </button>
-                    ))}
+                      {multiShock ? (
+                        <span className="text-caption text-grey-5">
+                          {selectedShockers.length} shocker
+                          {selectedShockers.length === 1 ? '' : 's'} · lowest max applies
+                        </span>
+                      ) : null}
+                    </div>
+                    {shockers.length > 0 ? (
+                      <div className="row q-gutter-sm">
+                        {shockers.map((s) => {
+                          const selected = multiShock
+                            ? selectedIds.includes(s.id)
+                            : s.id === active?.id;
+                          const chipKey = s.targetDiscordUserId
+                            ? `${s.targetDiscordUserId}:${s.id}`
+                            : String(s.id);
+                          return (
+                            <button
+                              key={chipKey}
+                              type="button"
+                              className={`q-btn q-btn-item non-selectable no-outline q-btn--${
+                                selected
+                                  ? 'standard bg-secondary text-dark'
+                                  : 'outline text-secondary'
+                              } q-btn--rectangle q-btn--actionable q-btn--dense`}
+                              onClick={() => {
+                                if (!multiShock) {
+                                  setActiveId(s.id);
+                                  setSelectedIds([s.id]);
+                                  return;
+                                }
+                                setSelectedIds((prev) => {
+                                  const has = prev.includes(s.id);
+                                  if (has) {
+                                    const next = prev.filter((id) => id !== s.id);
+                                    if (!next.length) return prev;
+                                    if (activeId === s.id) setActiveId(next[0]!);
+                                    return next;
+                                  }
+                                  setActiveId(s.id);
+                                  return [...prev, s.id];
+                                });
+                              }}
+                            >
+                              <span className="q-btn__wrapper col row q-anchor--skip">
+                                <span className="q-btn__content text-center col items-center q-anchor--skip justify-center row">
+                                  <span className="block">
+                                    {multiShock && s.hubName && !s.owned ? `${s.hubName}: ` : ''}
+                                    {s.name}
+                                    {s.emergencyStop ? ' · E-STOP' : ''}
+                                  </span>
+                                </span>
+                              </span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    ) : null}
                   </div>
                 ) : null}
 
@@ -966,8 +1188,9 @@ export function OfficialController({
                                     chip="Use Mode"
                                     outline
                                     active={tapMode}
-                                    disabled={!active.canHold}
+                                    disabled={!active.canHold || multiShock}
                                     onClick={() => {
+                                      if (multiShock) return;
                                       if (holdingOpRef.current) endHold();
                                       setTapMode((v) => !v);
                                     }}
@@ -1159,96 +1382,142 @@ export function OfficialController({
         </main>
       </div>
 
-      {/* Mode switcher + hub/friends panels */}
-      <div className="fixed-bottom-left q-pa-md" style={{ zIndex: 2000 }}>
-        <div className="official-mode-switch">
+      {/* Mode switcher + hub/friends panels (collapses on compact / phone) */}
+      <div
+        className={`fixed-bottom-left q-pa-md official-mode-dock${
+          compactDock ? ' official-mode-dock--compact' : ''
+        }${modeDockOpen ? ' is-open' : ''}`}
+        style={{ zIndex: 2000 }}
+      >
+        {compactDock ? (
           <button
             type="button"
-            className={`q-btn q-btn-item non-selectable no-outline official-mode-btn q-btn--${
-              !friendsOpen ? 'standard bg-secondary text-dark' : 'outline text-secondary'
-            } q-btn--rectangle q-btn--rounded q-btn--actionable q-btn--wrap`}
-            onClick={() => {
-              if (friendsOpen) onOpenOwnShockers?.();
-              else setHubsOpen((v) => !v);
-            }}
+            className={`q-btn q-btn-item non-selectable no-outline official-mode-fab q-btn--${
+              modeDockOpen ? 'standard bg-secondary text-dark' : 'outline text-secondary'
+            } q-btn--round q-btn--actionable`}
+            aria-label={modeDockOpen ? 'Hide mode menu' : 'Show mode menu'}
+            aria-expanded={modeDockOpen}
+            onClick={() => setModeDockOpen((v) => !v)}
           >
             <span className="q-btn__wrapper col row q-anchor--skip">
-              <span className="q-btn__content text-center col items-center q-anchor--skip justify-start row no-wrap">
-                <i className="q-icon on-left mdi mdi-access-point" style={{ fontSize: 16 }} aria-hidden />
-                <div style={{ textAlign: 'left' }}>
-                  <div className="mode-title">My Shockers</div>
-                  <div className="mode-sub">Your hubs &amp; devices</div>
-                </div>
+              <span className="q-btn__content text-center col items-center q-anchor--skip justify-center row">
+                <i
+                  className={`q-icon mdi ${modeDockOpen ? 'mdi-close' : 'mdi-menu'}`}
+                  aria-hidden
+                />
               </span>
             </span>
           </button>
+        ) : null}
 
-          <button
-            type="button"
-            className={`q-btn q-btn-item non-selectable no-outline official-mode-btn q-btn--${
-              friendsOpen ? 'standard bg-secondary text-dark' : 'outline text-secondary'
-            } q-btn--rectangle q-btn--rounded q-btn--actionable q-btn--wrap`}
-            onClick={onOpenFriends}
-          >
-            <span className="q-btn__wrapper col row q-anchor--skip">
-              <span className="q-btn__content text-center col items-center q-anchor--skip justify-start row no-wrap">
-                <i className="q-icon on-left mdi mdi-account-group" style={{ fontSize: 16 }} aria-hidden />
-                <div style={{ textAlign: 'left' }}>
-                  <div className="mode-title">Discord Shockers</div>
-                  <div className="mode-sub">Friends in this activity</div>
-                </div>
-              </span>
-            </span>
-          </button>
+        {modeDockOpen || !compactDock ? (
+          <div className="official-mode-switch">
+            {showOwnMode ? (
+              <button
+                type="button"
+                className={`q-btn q-btn-item non-selectable no-outline official-mode-btn q-btn--${
+                  !friendsOpen ? 'standard bg-secondary text-dark' : 'outline text-secondary'
+                } q-btn--rectangle q-btn--rounded q-btn--actionable q-btn--wrap`}
+                onClick={() => {
+                  if (friendsOpen) onOpenOwnShockers?.();
+                  else setHubsOpen((v) => !v);
+                }}
+              >
+                <span className="q-btn__wrapper col row q-anchor--skip">
+                  <span className="q-btn__content text-center col items-center q-anchor--skip justify-start row no-wrap">
+                    <i
+                      className="q-icon on-left mdi mdi-access-point"
+                      style={{ fontSize: 16 }}
+                      aria-hidden
+                    />
+                    <div style={{ textAlign: 'left' }}>
+                      <div className="mode-title">My Shockers</div>
+                      <div className="mode-sub">Your hubs &amp; devices</div>
+                    </div>
+                  </span>
+                </span>
+              </button>
+            ) : null}
 
-          {friendsOpen ? friendsPanel : null}
-
-          {!friendsOpen && hubsOpen ? (
-            <div
-              className="column flex q-pa-xs bg-dark"
-              style={{ borderRadius: 14, border: '1px solid rgba(121,198,219,.35)' }}
+            <button
+              type="button"
+              className={`q-btn q-btn-item non-selectable no-outline official-mode-btn q-btn--${
+                friendsOpen ? 'standard bg-secondary text-dark' : 'outline text-secondary'
+              } q-btn--rectangle q-btn--rounded q-btn--actionable q-btn--wrap`}
+              onClick={onOpenFriends}
             >
-              <div className="text-caption text-secondary q-px-xs q-pb-xs">Your hubs</div>
-              {(hubs.length ? hubs : [hub]).map((h) => {
-                const selected = selectedHubId ? selectedHubId === h.id : h.id === hub.id;
-                return (
-                  <button
-                    key={h.id}
-                    type="button"
-                    className={`q-btn q-btn-item non-selectable no-outline full-width q-my-xs q-btn--${
-                      selected ? 'standard bg-secondary text-dark' : 'outline text-secondary'
-                    } q-btn--rectangle q-btn--rounded q-btn--actionable q-btn--wrap`}
-                    onClick={() => onSelectHub?.(h.id)}
-                  >
-                    <span className="q-btn__wrapper col row q-anchor--skip">
-                      <span className="q-btn__content text-center col items-center q-anchor--skip justify-between row no-wrap">
-                        <span className="block ellipsis">{h.name}</span>
-                        <span
-                          className={`q-icon mdi mdi-circle ${h.online ? 'text-positive' : 'text-grey-6'}`}
-                          style={{ fontSize: 8 }}
-                          aria-hidden
-                        />
-                      </span>
-                    </span>
-                  </button>
-                );
-              })}
-            </div>
-          ) : null}
-
-          <button
-            type="button"
-            className="q-btn q-btn-item non-selectable no-outline text-secondary q-btn--outline q-btn--rectangle q-btn--rounded q-btn--actionable q-btn--wrap"
-            onClick={onOpenClaim}
-          >
-            <span className="q-btn__wrapper col row q-anchor--skip">
-              <span className="q-btn__content text-center col items-center q-anchor--skip justify-start row no-wrap">
-                <i className="q-icon on-left mdi mdi-plus" aria-hidden />
-                <span className="block">Claim / availability</span>
+              <span className="q-btn__wrapper col row q-anchor--skip">
+                <span className="q-btn__content text-center col items-center q-anchor--skip justify-start row no-wrap">
+                  <i
+                    className="q-icon on-left mdi mdi-account-group"
+                    style={{ fontSize: 16 }}
+                    aria-hidden
+                  />
+                  <div style={{ textAlign: 'left' }}>
+                    <div className="mode-title">Discord Shockers</div>
+                    <div className="mode-sub">Friends in this activity</div>
+                  </div>
+                </span>
               </span>
-            </span>
-          </button>
-        </div>
+            </button>
+
+            {friendsOpen
+              ? typeof friendsPanel === 'function'
+                ? friendsPanel({ multiShock })
+                : friendsPanel
+              : null}
+
+            {showOwnMode && !friendsOpen && hubsOpen ? (
+              <div
+                className="column flex q-pa-xs bg-dark"
+                style={{ borderRadius: 14, border: '1px solid rgba(121,198,219,.35)' }}
+              >
+                <div className="text-caption text-secondary q-px-xs q-pb-xs">Your hubs</div>
+                {(hubs.length ? hubs : [hub]).map((h) => {
+                  const selected = selectedHubId ? selectedHubId === h.id : h.id === hub.id;
+                  return (
+                    <button
+                      key={h.id}
+                      type="button"
+                      className={`q-btn q-btn-item non-selectable no-outline full-width q-my-xs q-btn--${
+                        selected ? 'standard bg-secondary text-dark' : 'outline text-secondary'
+                      } q-btn--rectangle q-btn--rounded q-btn--actionable q-btn--wrap`}
+                      onClick={() => onSelectHub?.(h.id)}
+                    >
+                      <span className="q-btn__wrapper col row q-anchor--skip">
+                        <span className="q-btn__content text-center col items-center q-anchor--skip justify-between row no-wrap">
+                          <span className="block ellipsis">{h.name}</span>
+                          <span
+                            className={`q-icon mdi mdi-circle ${
+                              h.online ? 'text-positive' : 'text-grey-6'
+                            }`}
+                            style={{ fontSize: 8 }}
+                            aria-hidden
+                          />
+                        </span>
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            ) : null}
+
+            {showClaim ? (
+              <button
+                type="button"
+                className="q-btn q-btn-item non-selectable no-outline text-secondary q-btn--outline q-btn--rectangle q-btn--rounded q-btn--actionable q-btn--wrap"
+                onClick={onOpenClaim}
+              >
+                <span className="q-btn__wrapper col row q-anchor--skip">
+                  <span className="q-btn__content text-center col items-center q-anchor--skip justify-start row no-wrap">
+                    <i className="q-icon on-left mdi mdi-plus" aria-hidden />
+                    <span className="block">Claim / availability</span>
+                  </span>
+                </span>
+              </button>
+            ) : null}
+          </div>
+        ) : null}
       </div>
     </div>
   );

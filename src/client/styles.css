@@ -171,11 +171,93 @@ body,
   min-height: 48px;
 }
 
+.official-mode-dock {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  pointer-events: none;
+}
+
+.official-mode-dock > * {
+  pointer-events: auto;
+}
+
+.official-mode-fab {
+  min-width: 44px !important;
+  min-height: 44px !important;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.45);
+}
+
+.official-mode-dock--compact .official-mode-switch {
+  max-height: min(52vh, 420px);
+  overflow: auto;
+  padding: 8px;
+  border-radius: 14px;
+  background: rgba(18, 18, 18, 0.94);
+  border: 1px solid rgba(121, 198, 219, 0.35);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.5);
+}
+
 .official-mode-switch {
   display: flex;
   flex-direction: column;
   gap: 6px;
   max-width: 168px;
+}
+
+.pip-last-command {
+  width: 100%;
+  box-sizing: border-box;
+  margin: 6px 0 10px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(121, 198, 219, 0.45);
+  background: rgba(18, 28, 32, 0.95);
+}
+
+.pip-last-command--ok {
+  border-color: rgba(121, 198, 219, 0.65);
+}
+
+.pip-last-command--bad {
+  border-color: rgba(244, 67, 54, 0.65);
+  background: rgba(40, 12, 12, 0.92);
+}
+
+.pip-last-command--empty {
+  border-style: dashed;
+  opacity: 0.9;
+}
+
+.pip-last-command__label {
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #79c6db;
+  margin-bottom: 2px;
+}
+
+.pip-last-command--bad .pip-last-command__label {
+  color: #ef9a9a;
+}
+
+.pip-last-command__body {
+  font-family: Oxanium, geo, sans-serif;
+  font-size: 20px;
+  font-weight: 600;
+  line-height: 1.15;
+  color: #f2f6f8;
+}
+
+.pip-last-command__meta {
+  margin-top: 2px;
+  font-size: 12px;
+  line-height: 1.2;
+}
+
+.official-root.official-root--pip .official-mode-dock {
+  display: none;
 }
 
 .official-mode-btn {
