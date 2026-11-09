@@ -76,6 +76,21 @@ function formatDurationSec(ms: number) {
   return Number.isInteger(s) ? String(s) : s.toFixed(1);
 }
 
+/** Official remote duration chips (seconds). */
+const DURATION_PRESETS_SEC = [0.1, 0.3, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10] as const;
+
+function rollIntensity(min: number, max: number) {
+  const lo = Math.min(min, max);
+  const hi = Math.max(min, max);
+  if (hi <= lo) return lo;
+  return lo + Math.floor(Math.random() * (hi - lo + 1));
+}
+
+function intensityLabel(random: boolean, value: number, min: number, max: number) {
+  if (!random) return String(value);
+  return `${Math.min(min, max)}-${Math.max(min, max)}`;
+}
+
 /** Exact Quasar DOM structure + classes from pishock.com/#/control */
 export function OfficialController({
   hub,
@@ -118,8 +133,15 @@ export function OfficialController({
 
   const [shockIntensity, setShockIntensity] = useState(0);
   const [shockDurationMs, setShockDurationMs] = useState(300);
+  const [shockRandom, setShockRandom] = useState(false);
+  const [shockMin, setShockMin] = useState(1);
+  const [shockMax, setShockMax] = useState(25);
   const [vibIntensity, setVibIntensity] = useState(69);
   const [vibDurationMs, setVibDurationMs] = useState(1000);
+  const [vibRandom, setVibRandom] = useState(false);
+  const [vibMin, setVibMin] = useState(1);
+  const [vibMax, setVibMax] = useState(69);
+  const [durationMenu, setDurationMenu] = useState<'shock' | 'vibrate' | null>(null);
   const [warningOn, setWarningOn] = useState(false);
   /** Use Mode: press-and-hold Operate/Beep until release (official Remote-style). */
   const [tapMode, setTapMode] = useState(false);
@@ -152,9 +174,34 @@ export function OfficialController({
   useEffect(() => {
     setShockIntensity((v) => clamp(v, 0, maxInt));
     setVibIntensity((v) => clamp(v, 0, maxInt));
+    setShockMin((v) => clamp(v, 0, maxInt));
+    setShockMax((v) => clamp(v, 0, maxInt));
+    setVibMin((v) => clamp(v, 0, maxInt));
+    setVibMax((v) => clamp(v, 0, maxInt));
     setShockDurationMs((v) => clamp(v, 16, maxDur));
     setVibDurationMs((v) => clamp(v, 16, maxDur));
   }, [maxInt, maxDur, activeId]);
+
+  useEffect(() => {
+    if (!durationMenu) return;
+    const onDoc = (e: MouseEvent) => {
+      const t = e.target as HTMLElement | null;
+      if (t?.closest?.('.official-duration-wrap')) return;
+      setDurationMenu(null);
+    };
+    document.addEventListener('mousedown', onDoc);
+    return () => document.removeEventListener('mousedown', onDoc);
+  }, [durationMenu]);
+
+  const resolveShockIntensity = () =>
+    shockRandom
+      ? Math.max(1, rollIntensity(shockMin, Math.min(shockMax, maxInt)))
+      : Math.max(1, shockIntensity || 1);
+
+  const resolveVibIntensity = () =>
+    vibRandom
+      ? Math.max(1, rollIntensity(vibMin, Math.min(vibMax, maxInt)))
+      : Math.max(1, vibIntensity || 1);
 
   useEffect(() => {
     if (eStop) {
@@ -519,7 +566,12 @@ export function OfficialController({
                                         <div className="flex column q-gutter-sm">
                                           <MetricStack
                                             icon="mdi-flash"
-                                            value={String(shockIntensity)}
+                                            value={intensityLabel(
+                                              shockRandom,
+                                              shockIntensity,
+                                              shockMin,
+                                              shockMax,
+                                            )}
                                             label={tapMode ? 'Hold' : 'Operate'}
                                             filled
                                             active={holdingOp === 'shock'}
@@ -535,29 +587,38 @@ export function OfficialController({
                                                 : () =>
                                                     fire(
                                                       'shock',
-                                                      shockIntensity || 1,
+                                                      resolveShockIntensity(),
                                                       shockDurationMs,
                                                     )
                                             }
                                             onPointerDown={
                                               tapMode
                                                 ? (ev) =>
-                                                    beginHold('shock', shockIntensity || 1, ev)
+                                                    beginHold(
+                                                      'shock',
+                                                      resolveShockIntensity(),
+                                                      ev,
+                                                    )
                                                 : undefined
                                             }
                                             onPointerUp={tapMode ? () => endHold() : undefined}
                                             onPointerCancel={tapMode ? () => endHold() : undefined}
                                           />
-                                          <MetricStack
-                                            icon="mdi-clock"
-                                            value={formatDurationSec(shockDurationMs)}
-                                            label="Duration"
+                                          <DurationMetric
+                                            valueMs={shockDurationMs}
+                                            maxMs={maxDur}
+                                            open={durationMenu === 'shock'}
                                             disabled={tapMode}
-                                            onClick={() =>
-                                              setShockDurationMs((d) =>
-                                                d >= maxDur ? 300 : Math.min(maxDur, d + 100),
+                                            side="right"
+                                            onToggle={() =>
+                                              setDurationMenu((m) =>
+                                                m === 'shock' ? null : 'shock',
                                               )
                                             }
+                                            onSelect={(ms) => {
+                                              setShockDurationMs(ms);
+                                              setDurationMenu(null);
+                                            }}
                                           />
                                         </div>
                                         <div className="q-mt-sm q-mb-xs flex column">
@@ -588,9 +649,32 @@ export function OfficialController({
                                       </div>
                                       <VerticalQuasarSlider
                                         value={shockIntensity}
+                                        minValue={shockMin}
+                                        maxValue={shockMax}
+                                        random={shockRandom}
                                         deviceMax={deviceMaxInt}
                                         activityMax={maxInt}
                                         onChange={setShockIntensity}
+                                        onChangeMin={setShockMin}
+                                        onChangeMax={setShockMax}
+                                        onToggleRandom={() => {
+                                          setShockRandom((on) => {
+                                            if (!on) {
+                                              const base = Math.max(1, shockIntensity || 1);
+                                              setShockMin(clamp(Math.max(1, base - 10), 0, maxInt));
+                                              setShockMax(clamp(base, 0, maxInt));
+                                            } else {
+                                              setShockIntensity(
+                                                clamp(
+                                                  Math.round((shockMin + shockMax) / 2),
+                                                  0,
+                                                  maxInt,
+                                                ),
+                                              );
+                                            }
+                                            return !on;
+                                          });
+                                        }}
                                         disabled={controlsLocked || !active.canShock}
                                       />
                                     </div>
@@ -684,16 +768,44 @@ export function OfficialController({
                                     <div className="q-card__section q-card__section--horiz row no-wrap">
                                       <VerticalQuasarSlider
                                         value={vibIntensity}
+                                        minValue={vibMin}
+                                        maxValue={vibMax}
+                                        random={vibRandom}
                                         deviceMax={deviceMaxInt}
                                         activityMax={maxInt}
                                         onChange={setVibIntensity}
+                                        onChangeMin={setVibMin}
+                                        onChangeMax={setVibMax}
+                                        onToggleRandom={() => {
+                                          setVibRandom((on) => {
+                                            if (!on) {
+                                              const base = Math.max(1, vibIntensity || 1);
+                                              setVibMin(clamp(Math.max(1, base - 10), 0, maxInt));
+                                              setVibMax(clamp(base, 0, maxInt));
+                                            } else {
+                                              setVibIntensity(
+                                                clamp(
+                                                  Math.round((vibMin + vibMax) / 2),
+                                                  0,
+                                                  maxInt,
+                                                ),
+                                              );
+                                            }
+                                            return !on;
+                                          });
+                                        }}
                                         disabled={controlsLocked || !active.canVibrate}
                                       />
                                       <div className="column justify-between items-center q-mr-xs">
                                         <div className="flex column q-gutter-sm">
                                           <MetricStack
                                             icon="mdi-vibrate"
-                                            value={String(vibIntensity)}
+                                            value={intensityLabel(
+                                              vibRandom,
+                                              vibIntensity,
+                                              vibMin,
+                                              vibMax,
+                                            )}
                                             label={tapMode ? 'Hold' : 'Operate'}
                                             filled
                                             active={holdingOp === 'vibrate'}
@@ -709,7 +821,7 @@ export function OfficialController({
                                                 : () =>
                                                     fire(
                                                       'vibrate',
-                                                      vibIntensity || 1,
+                                                      resolveVibIntensity(),
                                                       vibDurationMs,
                                                       { hold },
                                                     )
@@ -717,22 +829,31 @@ export function OfficialController({
                                             onPointerDown={
                                               tapMode
                                                 ? (ev) =>
-                                                    beginHold('vibrate', vibIntensity || 1, ev)
+                                                    beginHold(
+                                                      'vibrate',
+                                                      resolveVibIntensity(),
+                                                      ev,
+                                                    )
                                                 : undefined
                                             }
                                             onPointerUp={tapMode ? () => endHold() : undefined}
                                             onPointerCancel={tapMode ? () => endHold() : undefined}
                                           />
-                                          <MetricStack
-                                            icon="mdi-clock"
-                                            value={formatDurationSec(vibDurationMs)}
-                                            label="Duration"
+                                          <DurationMetric
+                                            valueMs={vibDurationMs}
+                                            maxMs={maxDur}
+                                            open={durationMenu === 'vibrate'}
                                             disabled={tapMode}
-                                            onClick={() =>
-                                              setVibDurationMs((d) =>
-                                                d >= maxDur ? 1000 : Math.min(maxDur, d + 1000),
+                                            side="left"
+                                            onToggle={() =>
+                                              setDurationMenu((m) =>
+                                                m === 'vibrate' ? null : 'vibrate',
                                               )
                                             }
+                                            onSelect={(ms) => {
+                                              setVibDurationMs(ms);
+                                              setDurationMenu(null);
+                                            }}
                                           />
                                         </div>
                                       </div>
@@ -850,6 +971,62 @@ export function OfficialController({
           </button>
         </div>
       </div>
+    </div>
+  );
+}
+
+function DurationMetric({
+  valueMs,
+  maxMs,
+  open,
+  disabled,
+  side,
+  onToggle,
+  onSelect,
+}: {
+  valueMs: number;
+  maxMs: number;
+  open: boolean;
+  disabled?: boolean;
+  side: 'left' | 'right';
+  onToggle: () => void;
+  onSelect: (ms: number) => void;
+}) {
+  const presets = DURATION_PRESETS_SEC.filter((sec) => Math.round(sec * 1000) <= maxMs);
+  return (
+    <div className="official-duration-wrap">
+      <MetricStack
+        icon="mdi-clock"
+        value={formatDurationSec(valueMs)}
+        label="Duration"
+        disabled={disabled}
+        onClick={onToggle}
+      />
+      {open && !disabled ? (
+        <div
+          className={`official-duration-menu official-duration-menu--${side}`}
+          role="listbox"
+          aria-label="Duration presets"
+        >
+          {presets.map((sec) => {
+            const ms = Math.round(sec * 1000);
+            const label = sec < 1 ? `.${String(sec).split('.')[1]}` : String(sec);
+            const selected = valueMs === ms;
+            return (
+              <button
+                key={sec}
+                type="button"
+                role="option"
+                aria-selected={selected}
+                className={`official-duration-chip${selected ? ' is-selected' : ''}`}
+                onClick={() => onSelect(ms)}
+              >
+                {label}
+              </button>
+            );
+          })}
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -1032,62 +1209,160 @@ function CenterControl({
 
 function VerticalQuasarSlider({
   value,
+  minValue = 0,
+  maxValue = 0,
+  random = false,
   deviceMax,
   activityMax,
   onChange,
+  onChangeMin,
+  onChangeMax,
+  onToggleRandom,
   disabled,
 }: {
   value: number;
+  minValue?: number;
+  maxValue?: number;
+  random?: boolean;
   /** PiShock hard ceiling — red zone above this (scale 0–100) */
   deviceMax: number;
   /** Discord Activity Limit — thumb cannot go above this */
   activityMax: number;
   onChange: (n: number) => void;
+  onChangeMin?: (n: number) => void;
+  onChangeMax?: (n: number) => void;
+  onToggleRandom?: () => void;
   disabled?: boolean;
 }) {
+  const trackRef = useRef<HTMLDivElement | null>(null);
+  const dragRef = useRef<'value' | 'min' | 'max' | null>(null);
   const scaleMax = 100;
   const device = clamp(deviceMax, 1, scaleMax);
   const activity = clamp(activityMax, 1, device);
   const usable = clamp(value, 0, activity);
+  const lo = clamp(Math.min(minValue, maxValue), 0, activity);
+  const hi = clamp(Math.max(minValue, maxValue), 0, activity);
   const pct = (usable / scaleMax) * 100;
-  const redFrom = device; // percent of track from bottom that is still PiShock-allowed
+  const loPct = (lo / scaleMax) * 100;
+  const hiPct = (hi / scaleMax) * 100;
+  const redFrom = device;
   const redHeight = Math.max(0, 100 - redFrom);
-  const activityCapBottom = activity; // bottom% of activity ceiling marker
+  const activityCapBottom = activity;
 
-  const setFromRatio = (ratio: number) => {
+  const applyFromClientY = (clientY: number, mode: 'value' | 'min' | 'max') => {
+    const el = trackRef.current;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    if (rect.height <= 0) return;
+    const ratio = clamp(1 - (clientY - rect.top) / rect.height, 0, 1);
     const raw = Math.round(ratio * scaleMax);
-    // Refuse PiShock red zone; also clamp to Activity Limit
     if (raw > device) return;
-    onChange(clamp(raw, 0, activity));
+    const next = clamp(raw, 0, activity);
+    if (mode === 'value') {
+      onChange(next);
+      return;
+    }
+    if (mode === 'min') {
+      onChangeMin?.(clamp(next, 0, hi));
+      return;
+    }
+    onChangeMax?.(clamp(next, lo, activity));
+  };
+
+  const pickHandle = (clientY: number): 'value' | 'min' | 'max' => {
+    if (!random) return 'value';
+    const el = trackRef.current;
+    if (!el) return 'max';
+    const rect = el.getBoundingClientRect();
+    const ratio = clamp(1 - (clientY - rect.top) / rect.height, 0, 1);
+    const at = ratio * scaleMax;
+    return Math.abs(at - lo) <= Math.abs(at - hi) ? 'min' : 'max';
+  };
+
+  const onPointerDown = (e: ReactPointerEvent<HTMLDivElement>) => {
+    if (disabled) return;
+    e.preventDefault();
+    const mode = pickHandle(e.clientY);
+    dragRef.current = mode;
+    try {
+      e.currentTarget.setPointerCapture(e.pointerId);
+    } catch {
+      // ignore
+    }
+    applyFromClientY(e.clientY, mode);
+  };
+
+  const onPointerMove = (e: ReactPointerEvent<HTMLDivElement>) => {
+    if (!dragRef.current) return;
+    applyFromClientY(e.clientY, dragRef.current);
+  };
+
+  const endDrag = (e: ReactPointerEvent<HTMLDivElement>) => {
+    if (!dragRef.current) return;
+    dragRef.current = null;
+    try {
+      e.currentTarget.releasePointerCapture(e.pointerId);
+    } catch {
+      // ignore
+    }
+  };
+
+  const nudge = (delta: number) => {
+    if (disabled) return;
+    if (!random) {
+      onChange(clamp(usable + delta, 0, activity));
+      return;
+    }
+    if (delta > 0) onChangeMax?.(clamp(hi + delta, lo, activity));
+    else onChangeMin?.(clamp(lo + delta, 0, hi));
   };
 
   return (
     <div
-      className="q-card__section q-card__section--vert"
+      className="q-card__section q-card__section--vert official-slider-col"
       style={{ padding: '0px 5px', marginLeft: 5, position: 'relative' }}
     >
-      <div className="flex column items-center q-gutter-sm justify-between">
+      <div className="flex column items-center q-gutter-xs justify-between">
+        <button
+          type="button"
+          className="official-slider-step"
+          disabled={disabled}
+          aria-label="Increase intensity"
+          onClick={() => nudge(1)}
+        >
+          <i className="q-icon mdi mdi-chevron-up" aria-hidden />
+        </button>
         <div
           role="slider"
           aria-valuemin={0}
           aria-valuemax={activity}
           aria-orientation="vertical"
-          aria-valuenow={usable}
+          aria-valuenow={random ? hi : usable}
+          aria-valuetext={random ? `${lo}-${hi}` : String(usable)}
           className="q-slider q-slider--v q-slider--inactive inline no-wrap row q-slider--enabled q-slider--editable q-slider--label q-slider--dark q-slider--dense q-slider--dense--v"
         >
           <div
-            tabIndex={0}
-            className="q-slider__track-container q-slider__track-container--v"
-            onClick={(e) => {
+            ref={trackRef}
+            tabIndex={disabled ? -1 : 0}
+            className="q-slider__track-container q-slider__track-container--v official-slider-hit"
+            style={{ touchAction: 'none', cursor: disabled ? 'not-allowed' : 'ns-resize' }}
+            onPointerDown={onPointerDown}
+            onPointerMove={onPointerMove}
+            onPointerUp={endDrag}
+            onPointerCancel={endDrag}
+            onKeyDown={(e) => {
               if (disabled) return;
-              const rect = e.currentTarget.getBoundingClientRect();
-              const ratio = 1 - (e.clientY - rect.top) / rect.height;
-              setFromRatio(ratio);
+              if (e.key === 'ArrowUp' || e.key === 'ArrowRight') {
+                e.preventDefault();
+                nudge(1);
+              } else if (e.key === 'ArrowDown' || e.key === 'ArrowLeft') {
+                e.preventDefault();
+                nudge(-1);
+              }
             }}
           >
             <div className="q-slider__track relative-position no-outline" style={{ width: 5 }}>
               <div className="q-slider__inner absolute" style={{ bottom: '0%', height: '100%' }} />
-              {/* Zone between Activity Limit and PiShock max (allowed by PiShock, blocked by Activity) */}
               {activity < device ? (
                 <div
                   className="absolute"
@@ -1102,7 +1377,6 @@ function VerticalQuasarSlider({
                   }}
                 />
               ) : null}
-              {/* PiShock red zone — cannot move into */}
               {redHeight > 0 ? (
                 <div
                   className="absolute"
@@ -1117,42 +1391,75 @@ function VerticalQuasarSlider({
                   }}
                 />
               ) : null}
-              <div
-                className="q-slider__selection absolute text-secondary"
-                style={{ bottom: '0%', height: `${pct}%` }}
-              />
+              {random ? (
+                <div
+                  className="q-slider__selection absolute text-secondary"
+                  style={{ bottom: `${loPct}%`, height: `${Math.max(0, hiPct - loPct)}%` }}
+                />
+              ) : (
+                <div
+                  className="q-slider__selection absolute text-secondary"
+                  style={{ bottom: '0%', height: `${pct}%` }}
+                />
+              )}
               <div
                 className="q-slider__markers q-slider__markers--v absolute overflow-hidden"
                 style={{ bottom: '0%', height: '100%', backgroundSize: '2px 10%' }}
               />
-              <div
-                className="q-slider__thumb q-slider__thumb--v q-slider__thumb--v-rtl absolute non-selectable text-secondary"
-                style={{ width: 20, height: 20, bottom: `${pct}%` }}
-              >
-                <svg viewBox="0 0 20 20" aria-hidden className="q-slider__thumb-shape absolute-full">
-                  <path d="M 4, 10 a 6,6 0 1,0 12,0 a 6,6 0 1,0 -12,0" />
-                </svg>
-                <div className="q-slider__focus-ring fit" />
-              </div>
+              {random ? (
+                <>
+                  <div
+                    className="q-slider__thumb q-slider__thumb--v q-slider__thumb--v-rtl absolute non-selectable text-secondary"
+                    style={{ width: 20, height: 20, bottom: `${loPct}%` }}
+                  >
+                    <svg viewBox="0 0 20 20" aria-hidden className="q-slider__thumb-shape absolute-full">
+                      <path d="M 4, 10 a 6,6 0 1,0 12,0 a 6,6 0 1,0 -12,0" />
+                    </svg>
+                  </div>
+                  <div
+                    className="q-slider__thumb q-slider__thumb--v q-slider__thumb--v-rtl absolute non-selectable text-secondary"
+                    style={{ width: 20, height: 20, bottom: `${hiPct}%` }}
+                  >
+                    <svg viewBox="0 0 20 20" aria-hidden className="q-slider__thumb-shape absolute-full">
+                      <path d="M 4, 10 a 6,6 0 1,0 12,0 a 6,6 0 1,0 -12,0" />
+                    </svg>
+                  </div>
+                </>
+              ) : (
+                <div
+                  className="q-slider__thumb q-slider__thumb--v q-slider__thumb--v-rtl absolute non-selectable text-secondary"
+                  style={{ width: 20, height: 20, bottom: `${pct}%` }}
+                >
+                  <svg viewBox="0 0 20 20" aria-hidden className="q-slider__thumb-shape absolute-full">
+                    <path d="M 4, 10 a 6,6 0 1,0 12,0 a 6,6 0 1,0 -12,0" />
+                  </svg>
+                  <div className="q-slider__focus-ring fit" />
+                </div>
+              )}
             </div>
           </div>
         </div>
-        <i className="q-icon mdi mdi-speedometer" style={{ fontSize: 24 }} aria-hidden />
+        <button
+          type="button"
+          className="official-slider-step"
+          disabled={disabled}
+          aria-label="Decrease intensity"
+          onClick={() => nudge(-1)}
+        >
+          <i className="q-icon mdi mdi-chevron-down" aria-hidden />
+        </button>
+        <button
+          type="button"
+          className={`official-random-toggle${random ? ' is-active' : ''}`}
+          disabled={disabled || !onToggleRandom}
+          aria-pressed={random}
+          aria-label="Random intensity"
+          title="Random intensity"
+          onClick={() => onToggleRandom?.()}
+        >
+          <i className="q-icon mdi mdi-dice-multiple" aria-hidden />
+        </button>
       </div>
-      <input
-        type="range"
-        className="official-native-vslider"
-        min={0}
-        max={scaleMax}
-        value={usable}
-        disabled={disabled}
-        onChange={(e) => {
-          const raw = Number(e.target.value);
-          if (raw > device) return;
-          onChange(clamp(raw, 0, activity));
-        }}
-        aria-label="intensity"
-      />
     </div>
   );
 }

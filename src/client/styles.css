@@ -398,18 +398,105 @@ body,
   margin-top: 6px;
 }
 
-/* Invisible native range over Quasar vertical track for pointer dragging */
-.official-native-vslider {
-  position: absolute;
-  inset: 0 0 28px 0;
-  width: 100%;
-  height: calc(100% - 28px);
-  margin: 0;
-  opacity: 0.001;
+/* Intensity track: wide hit target for reliable drag (replaces native vertical range) */
+.official-slider-hit {
+  min-width: 28px;
+  padding: 0 10px !important;
+  box-sizing: content-box;
+}
+
+.official-slider-step,
+.official-random-toggle {
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: #79c6db;
   cursor: pointer;
-  writing-mode: vertical-lr;
-  direction: rtl;
-  accent-color: #79c6db;
+  padding: 0;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.official-slider-step:disabled,
+.official-random-toggle:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.official-slider-step .q-icon {
+  font-size: 22px;
+}
+
+.official-random-toggle {
+  margin-top: 2px;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: 1px solid #79c6db;
+}
+
+.official-random-toggle .q-icon {
+  font-size: 16px;
+}
+
+.official-random-toggle.is-active {
+  background: #79c6db;
+  color: #121212;
+}
+
+.official-duration-wrap {
+  position: relative;
+}
+
+.official-duration-menu {
+  position: absolute;
+  top: 0;
+  z-index: 40;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  padding: 10px;
+  border-radius: 8px;
+  background: #121212;
+  border: 1px solid #2a2a2a;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.55);
+  min-width: 88px;
+}
+
+.official-duration-menu--left {
+  right: calc(100% + 8px);
+}
+
+.official-duration-menu--right {
+  left: calc(100% + 8px);
+}
+
+.official-duration-chip {
+  appearance: none;
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  border: none;
+  background: #79c6db;
+  color: #121212;
+  font-weight: 700;
+  font-size: 13px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+}
+
+.official-duration-chip.is-selected {
+  outline: 2px solid #fff;
+  outline-offset: 1px;
+}
+
+.official-duration-chip:hover {
+  filter: brightness(1.08);
 }
 
 /* Consent / login panels (pre-controller) */
