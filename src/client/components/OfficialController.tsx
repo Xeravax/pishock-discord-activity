@@ -1,0 +1,1158 @@
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type PointerEvent as ReactPointerEvent,
+  type ReactNode,
+} from 'react';
+import type { ShockerView } from './ShockerCard';
+import { AnnouncementBanner } from './AnnouncementBanner';
+
+export type OfficialOperateInput = {
+  shockerId: number;
+  shareCode?: string;
+  clientId?: number | string;
+  operation: 'shock' | 'vibrate' | 'beep' | 'hold' | 'warning' | 'stop' | 'end';
+  intensity: number;
+  durationMs: number;
+  canShock: boolean;
+  canVibrate: boolean;
+  canBeep: boolean;
+  canHold: boolean;
+  maxIntensity: number;
+  maxDuration: number;
+  warning?: { Active: boolean; Min: number; Max: number } | null;
+  hold?: boolean;
+};
+
+type HubInfo = {
+  id: string;
+  name: string;
+  lastSeen?: string;
+  online?: boolean;
+};
+
+type Props = {
+  hub: HubInfo;
+  shockers: ShockerView[];
+  busy?: boolean;
+  pip?: boolean;
+  hubs?: HubInfo[];
+  friendsOpen?: boolean;
+  friendsPanel?: ReactNode;
+  safetyBanner?: ReactNode;
+  /** Shown above controls (e.g. blocked / e-stop notices) */
+  accessBanner?: ReactNode;
+  /** Empty-state copy when there are no shockers to show */
+  emptyMessage?: string;
+  /** Show header CTA when the user has not linked PiShock yet */
+  showLinkAccount?: boolean;
+  onOperate: (input: OfficialOperateInput) => void;
+  /** Owner-only kill-switch latch (press in / press out) */
+  onEmergencyStop?: (input: { shockerId: number; clientId?: number | string; engaged: boolean }) => void;
+  onSelectHub?: (hubId: string) => void;
+  onOpenFriends?: () => void;
+  /** Switch back to the user's own hubs/shockers */
+  onOpenOwnShockers?: () => void;
+  onOpenClaim?: () => void;
+  onOpenMenu?: () => void;
+  onOpenLinkAccount?: () => void;
+  onShareHub?: () => void;
+  onShareShocker?: (shocker: ShockerView) => void;
+  onPair?: (shocker: ShockerView) => void;
+  /** Manual hub/shocker reachability check (top-left !) */
+  onPingHub?: () => void;
+  pinging?: boolean;
+  selectedHubId?: string | null;
+};
+
+function clamp(n: number, min: number, max: number) {
+  return Math.max(min, Math.min(max, n));
+}
+
+function formatDurationSec(ms: number) {
+  const s = ms / 1000;
+  return Number.isInteger(s) ? String(s) : s.toFixed(1);
+}
+
+/** Exact Quasar DOM structure + classes from pishock.com/#/control */
+export function OfficialController({
+  hub,
+  shockers,
+  busy,
+  hubs = [],
+  friendsOpen = false,
+  friendsPanel,
+  safetyBanner,
+  accessBanner,
+  emptyMessage = 'No shockers',
+  showLinkAccount = false,
+  onOperate,
+  onEmergencyStop,
+  onSelectHub,
+  onOpenFriends,
+  onOpenOwnShockers,
+  onOpenClaim,
+  onOpenMenu,
+  onOpenLinkAccount,
+  onShareHub,
+  onShareShocker,
+  onPair,
+  onPingHub,
+  pinging = false,
+  selectedHubId = null,
+}: Props) {
+  const [activeId, setActiveId] = useState(shockers[0]?.id ?? 0);
+  const [hubMenuOpen, setHubMenuOpen] = useState(false);
+  const active = useMemo(
+    () => shockers.find((s) => s.id === activeId) ?? shockers[0],
+    [shockers, activeId],
+  );
+
+  useEffect(() => {
+    if (!shockers.some((s) => s.id === activeId)) {
+      setActiveId(shockers[0]?.id ?? 0);
+    }
+  }, [shockers, activeId]);
+
+  const [shockIntensity, setShockIntensity] = useState(0);
+  const [shockDurationMs, setShockDurationMs] = useState(300);
+  const [vibIntensity, setVibIntensity] = useState(69);
+  const [vibDurationMs, setVibDurationMs] = useState(1000);
+  const [warningOn, setWarningOn] = useState(false);
+  /** Use Mode: press-and-hold Operate/Beep until release (official Remote-style). */
+  const [tapMode, setTapMode] = useState(false);
+  const [hold, setHold] = useState(false);
+  const [hubsOpen, setHubsOpen] = useState(false);
+  const [holdingOp, setHoldingOp] = useState<'shock' | 'vibrate' | 'beep' | null>(null);
+  const holdingOpRef = useRef<'shock' | 'vibrate' | 'beep' | null>(null);
+  const holdTargetRef = useRef<{
+    shockerId: number;
+    clientId?: number | string;
+    shareCode?: string;
+  } | null>(null);
+
+  const deviceMaxInt = active?.deviceMaxIntensity ?? active?.maxIntensity ?? 100;
+  const deviceMaxDur = active?.deviceMaxDuration ?? active?.maxDuration ?? 15_000;
+  const activityMaxInt = Math.min(
+    deviceMaxInt,
+    active?.activityMaxIntensity ?? active?.maxIntensity ?? deviceMaxInt,
+  );
+  const activityMaxDur = Math.min(
+    deviceMaxDur,
+    active?.activityMaxDuration ?? active?.maxDuration ?? deviceMaxDur,
+  );
+  /** Usable ceiling for this activity */
+  const maxInt = Math.min(deviceMaxInt, activityMaxInt);
+  const maxDur = Math.min(deviceMaxDur, activityMaxDur);
+  const eStop = Boolean(active?.emergencyStop);
+  const controlsLocked = eStop;
+
+  useEffect(() => {
+    setShockIntensity((v) => clamp(v, 0, maxInt));
+    setVibIntensity((v) => clamp(v, 0, maxInt));
+    setShockDurationMs((v) => clamp(v, 16, maxDur));
+    setVibDurationMs((v) => clamp(v, 16, maxDur));
+  }, [maxInt, maxDur, activeId]);
+
+  useEffect(() => {
+    if (eStop) {
+      setHold(false);
+      setWarningOn(false);
+      // Owner STOP already cuts the broker op; just clear local press state
+      holdingOpRef.current = null;
+      holdTargetRef.current = null;
+      setHoldingOp(null);
+    }
+  }, [eStop]);
+
+  const fire = (
+    operation: OfficialOperateInput['operation'],
+    intensity: number,
+    durationMs: number,
+    opts?: {
+      hold?: boolean;
+      warning?: boolean;
+      target?: { shockerId: number; clientId?: number | string; shareCode?: string };
+    },
+  ) => {
+    if (!active && !opts?.target) return;
+    if (operation === 'stop') return;
+    if (controlsLocked && operation !== 'end') return;
+    const target = opts?.target;
+    const shockerId = target?.shockerId ?? active!.id;
+    const shareCode = target?.shareCode ?? active?.shareCode;
+    const clientId = target?.clientId ?? active?.clientId ?? hub.id;
+    onOperate({
+      shockerId,
+      shareCode,
+      // Hub id is the broker client id when the shocker row omits ClientId
+      clientId,
+      operation,
+      intensity: clamp(intensity, 0, maxInt),
+      durationMs: clamp(durationMs, 16, maxDur),
+      canShock: active?.canShock ?? true,
+      canVibrate: active?.canVibrate ?? true,
+      canBeep: active?.canBeep ?? true,
+      canHold: active?.canHold ?? true,
+      maxIntensity: maxInt,
+      maxDuration: maxDur,
+      hold: opts?.hold ?? hold,
+      warning:
+        opts?.warning || warningOn
+          ? { Active: true, Min: 1, Max: Math.max(1, Math.round(maxInt * 0.3)) }
+          : null,
+    });
+  };
+
+  const endHold = () => {
+    if (!holdingOpRef.current) return;
+    const target = holdTargetRef.current;
+    holdingOpRef.current = null;
+    holdTargetRef.current = null;
+    setHoldingOp(null);
+    fire('end', 0, 16, { target: target ?? undefined });
+  };
+
+  const beginHold = (
+    operation: 'shock' | 'vibrate' | 'beep',
+    intensity: number,
+    ev: ReactPointerEvent<HTMLElement>,
+  ) => {
+    if (!active || controlsLocked || holdingOpRef.current) return;
+    if (operation === 'shock' && (!active.canShock || active.paused)) return;
+    if (operation === 'vibrate' && (!active.canVibrate || active.paused)) return;
+    if (operation === 'beep' && (!active.canBeep || active.paused)) return;
+    try {
+      (ev.currentTarget as HTMLElement).setPointerCapture(ev.pointerId);
+    } catch {
+      // ignore — still listen for pointerup on the element
+    }
+    holdTargetRef.current = {
+      shockerId: active.id,
+      clientId: active.clientId ?? hub.id,
+      shareCode: active.shareCode,
+    };
+    holdingOpRef.current = operation;
+    setHoldingOp(operation);
+    // Hold for activity max; release sends broker end (m:"e")
+    fire(operation, Math.max(1, intensity), maxDur, { hold: true });
+  };
+
+  useEffect(() => {
+    // Press-and-hold needs broker hold permission
+    if (tapMode && active && !active.canHold) {
+      if (holdingOpRef.current) endHold();
+      setTapMode(false);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tapMode, active?.canHold, activeId]);
+
+  useEffect(() => {
+    if (!holdingOp) return;
+    const onBlur = () => endHold();
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') endHold();
+    };
+    window.addEventListener('blur', onBlur);
+    window.addEventListener('keydown', onKey);
+    return () => {
+      window.removeEventListener('blur', onBlur);
+      window.removeEventListener('keydown', onKey);
+    };
+    // endHold closes over latest fire/active
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [holdingOp, activeId, maxDur]);
+
+  return (
+    <div className="bg-dark q-layout q-layout--standard official-root">
+      <header
+        className="q-header q-layout__section--marginal custom-header fixed-top"
+        style={{ borderBottom: '1px solid rgb(121, 198, 219)' }}
+      >
+        <div
+          role="toolbar"
+          className="q-toolbar row no-wrap items-center bg-secondary no-padding row justify-between official-header-toolbar"
+        >
+          <div style={{ width: 88 }} aria-hidden />
+          <div className="official-header-brand">
+            <div className="text-dark text-h3 q-toolbar__title" style={{ margin: 0 }}>
+              <div style={{ fontFamily: 'geo, Oxanium, sans-serif' }}>
+                <span className="text-grey-3">PiShock</span>
+              </div>
+            </div>
+          </div>
+          <div className="flex row no-wrap items-center">
+            {showLinkAccount ? (
+              <button
+                type="button"
+                className="q-btn q-btn-item non-selectable no-outline q-ml-sm q-btn--standard q-btn--rectangle bg-dark text-secondary q-btn--actionable q-focusable q-hoverable q-btn--wrap q-btn--dense"
+                onClick={onOpenLinkAccount}
+              >
+                <span className="q-btn__wrapper col row q-anchor--skip">
+                  <span className="q-btn__content text-center col items-center q-anchor--skip justify-center row no-wrap">
+                    <i className="q-icon on-left mdi mdi-link-variant" aria-hidden />
+                    <span className="block">Link</span>
+                  </span>
+                </span>
+              </button>
+            ) : null}
+            <button
+              type="button"
+              className="q-btn q-btn-item non-selectable no-outline q-mx-sm q-btn--outline q-btn--rectangle text-dark q-btn--actionable q-focusable q-hoverable q-btn--wrap"
+              onClick={onOpenMenu}
+            >
+              <span className="q-btn__wrapper col row q-anchor--skip">
+                <span className="q-btn__content text-center col items-center q-anchor--skip justify-center row">
+                  <span className="block">Menu</span>
+                </span>
+              </span>
+            </button>
+          </div>
+        </div>
+        {safetyBanner}
+      </header>
+
+      <div className="q-page-container">
+        <main className="q-page flex column items-center justify-start">
+          <div className="text-h4 flex q-pa-sm col-md-8 col-xs-12 full-height full-width">
+            <div className="full-width">
+              <div className="column">
+                <div className="row justify-between items-start">
+                  <div className="column">
+                    <span className="text-secondary">{hub.name}</span>
+                    <div className="flex row q-gutter-xs items-center">
+                      <button
+                        type="button"
+                        title="Ping hub"
+                        disabled={pinging || !onPingHub}
+                        className="q-btn q-btn-item non-selectable no-outline q-btn--outline q-btn--rectangle text-secondary q-btn--actionable q-focusable q-hoverable q-btn--wrap q-btn--dense"
+                        style={{ fontSize: 8 }}
+                        onClick={() => onPingHub?.()}
+                      >
+                        <span className="q-btn__wrapper col row q-anchor--skip">
+                          <span className="q-btn__content text-center col items-center q-anchor--skip justify-center row">
+                            <i
+                              className={`q-icon mdi ${pinging ? 'mdi-loading mdi-spin' : 'mdi-exclamation'}`}
+                              aria-hidden
+                            />
+                          </span>
+                        </span>
+                      </button>
+                      <span
+                        className={`text-overline ${
+                          hub.online ? 'text-positive' : hub.lastSeen ? 'text-grey-3' : 'text-grey-5'
+                        }`}
+                      >
+                        {pinging
+                          ? 'Pinging…'
+                          : hub.online
+                            ? hub.lastSeen || 'Seen a few seconds ago'
+                            : hub.lastSeen || 'Offline'}
+                      </span>
+                    </div>
+                  </div>
+                  <div className="relative-position">
+                    <button
+                      type="button"
+                      className="q-btn q-btn-item non-selectable no-outline q-btn--flat q-btn--rectangle text-secondary q-btn--actionable q-focusable q-hoverable q-btn--wrap q-btn--dense"
+                      onClick={() => onShareHub?.()}
+                      disabled={!onShareHub}
+                    >
+                      <span className="q-btn__wrapper col row q-anchor--skip">
+                        <span className="q-btn__content text-center col items-center q-anchor--skip justify-center row">
+                          <i className="q-icon on-left mdi mdi-share-variant" aria-hidden />
+                          <span className="block">Share</span>
+                        </span>
+                      </span>
+                    </button>
+                    <button
+                      type="button"
+                      className="q-btn q-btn-item non-selectable no-outline q-btn--flat q-btn--rectangle text-secondary q-btn--actionable q-focusable q-hoverable q-btn--wrap"
+                      onClick={() => setHubMenuOpen((v) => !v)}
+                      aria-label="Hub menu"
+                    >
+                      <span className="q-btn__wrapper col row q-anchor--skip">
+                        <span className="q-btn__content text-center col items-center q-anchor--skip justify-center row">
+                          <i className="q-icon mdi mdi-dots-vertical" aria-hidden />
+                        </span>
+                      </span>
+                    </button>
+                    {hubMenuOpen ? (
+                      <div
+                        className="q-menu q-position-engine scroll q-menu--dark"
+                        style={{
+                          position: 'absolute',
+                          right: 0,
+                          top: '100%',
+                          zIndex: 6000,
+                          minWidth: 180,
+                          background: '#1e1e1e',
+                          border: '1px solid rgba(121,198,219,.35)',
+                          borderRadius: 4,
+                        }}
+                      >
+                        <div className="q-list q-list--dark" style={{ padding: 4 }}>
+                          <button
+                            type="button"
+                            className="q-item q-item-type row no-wrap q-item--dark q-item--clickable full-width bg-transparent text-left"
+                            onClick={() => {
+                              setHubMenuOpen(false);
+                              onPingHub?.();
+                            }}
+                          >
+                            <div className="q-item__section column q-item__section--main justify-center">
+                              <div className="q-item__label text-grey-3">Ping hub</div>
+                            </div>
+                          </button>
+                          <button
+                            type="button"
+                            className="q-item q-item-type row no-wrap q-item--dark q-item--clickable full-width bg-transparent text-left"
+                            onClick={() => {
+                              setHubMenuOpen(false);
+                              onShareHub?.();
+                            }}
+                          >
+                            <div className="q-item__section column q-item__section--main justify-center">
+                              <div className="q-item__label text-grey-3">Hub shares</div>
+                            </div>
+                          </button>
+                          <button
+                            type="button"
+                            className="q-item q-item-type row no-wrap q-item--dark q-item--clickable full-width bg-transparent text-left"
+                            onClick={() => {
+                              setHubMenuOpen(false);
+                              onOpenMenu?.();
+                            }}
+                          >
+                            <div className="q-item__section column q-item__section--main justify-center">
+                              <div className="q-item__label text-grey-3">Activity menu</div>
+                            </div>
+                          </button>
+                        </div>
+                      </div>
+                    ) : null}
+                  </div>
+                </div>
+
+                {accessBanner}
+                {!accessBanner && eStop ? (
+                  <div className="access-banner access-banner--estop q-mt-sm q-pa-sm">
+                    <div className="text-negative text-subtitle2">Emergency stop armed</div>
+                    <div className="text-grey-4 text-body2">
+                      All commands are blocked on this shocker until you press STOP out.
+                    </div>
+                  </div>
+                ) : null}
+
+                {shockers.length > 1 ? (
+                  <div className="row q-gutter-sm q-mt-sm">
+                    {shockers.map((s) => (
+                      <button
+                        key={s.id}
+                        type="button"
+                        className={`q-btn q-btn-item non-selectable no-outline q-btn--${
+                          s.id === active?.id ? 'standard bg-secondary text-dark' : 'outline text-secondary'
+                        } q-btn--rectangle q-btn--actionable q-btn--dense`}
+                        onClick={() => setActiveId(s.id)}
+                      >
+                        <span className="q-btn__wrapper col row q-anchor--skip">
+                          <span className="q-btn__content text-center col items-center q-anchor--skip justify-center row">
+                            <span className="block">
+                              {s.name}
+                              {s.emergencyStop ? ' · E-STOP' : ''}
+                            </span>
+                          </span>
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                ) : null}
+
+                {active ? (
+                  <div className="q-my-sm q-gutter-sm full-width">
+                    <div className="full-width flex column">
+                      <div className="flex column q-ma-xl" style={{ scale: '1.25' }}>
+                        <div className="full-width flex row justify-center q-px-md">
+                          <div className="q-my-sm q-card q-card--dark q-dark q-card--flat no-shadow col-sm-9 col-xs-12">
+                            <div className="full-width no-padding q-card__section q-card__section--vert">
+                              <div className="flex row justify-between items-center no-wrap">
+                                <span className="cursor-pointer text-h6 q-ml-sm">{active.name}</span>
+                                <div className="flex row justify-center items-center">
+                                  <button
+                                    type="button"
+                                    className="q-btn q-btn-item non-selectable no-outline q-btn--flat q-btn--rectangle text-secondary q-btn--actionable q-focusable q-hoverable q-btn--wrap q-btn--dense"
+                                    onClick={() => onShareShocker?.(active)}
+                                  >
+                                    <span className="q-btn__wrapper col row q-anchor--skip">
+                                      <span className="q-btn__content text-center col items-center q-anchor--skip justify-center row">
+                                        <i className="q-icon on-left mdi mdi-share-variant" aria-hidden />
+                                        <span className="block">Share</span>
+                                      </span>
+                                    </span>
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="q-btn q-btn-item non-selectable no-outline q-btn--flat q-btn--rectangle text-secondary q-btn--actionable q-focusable q-hoverable q-btn--wrap q-btn--dense"
+                                    onClick={() => onPair?.(active)}
+                                  >
+                                    <span className="q-btn__wrapper col row q-anchor--skip">
+                                      <span className="q-btn__content text-center col items-center q-anchor--skip justify-center row">
+                                        <i className="q-icon on-left mdi mdi-human-greeting-proximity" aria-hidden />
+                                        <span className="block">Pair</span>
+                                      </span>
+                                    </span>
+                                  </button>
+                                </div>
+                              </div>
+
+                              <div className="flex row no-wrap justify-center q-mt-md">
+                                {/* SHOCK */}
+                                <div className="flex col-4 justify-end">
+                                  <div className="border-color-secondary q-card q-card--dark q-dark q-card--bordered">
+                                    <div className="q-item__label text-center bg-dark text-secondary q-mb-xs border-color-secondary q-item__label--overline text-overline">
+                                      SHOCK
+                                    </div>
+                                    <div className="q-card__section q-card__section--horiz row no-wrap">
+                                      <div className="column justify-between items-center q-ml-xs">
+                                        <div className="flex column q-gutter-sm">
+                                          <MetricStack
+                                            icon="mdi-flash"
+                                            value={String(shockIntensity)}
+                                            label={tapMode ? 'Hold' : 'Operate'}
+                                            filled
+                                            active={holdingOp === 'shock'}
+                                            disabled={
+                                              (busy && !holdingOp) ||
+                                              controlsLocked ||
+                                              !active.canShock ||
+                                              !!active.paused
+                                            }
+                                            onClick={
+                                              tapMode
+                                                ? undefined
+                                                : () =>
+                                                    fire(
+                                                      'shock',
+                                                      shockIntensity || 1,
+                                                      shockDurationMs,
+                                                    )
+                                            }
+                                            onPointerDown={
+                                              tapMode
+                                                ? (ev) =>
+                                                    beginHold('shock', shockIntensity || 1, ev)
+                                                : undefined
+                                            }
+                                            onPointerUp={tapMode ? () => endHold() : undefined}
+                                            onPointerCancel={tapMode ? () => endHold() : undefined}
+                                          />
+                                          <MetricStack
+                                            icon="mdi-clock"
+                                            value={formatDurationSec(shockDurationMs)}
+                                            label="Duration"
+                                            disabled={tapMode}
+                                            onClick={() =>
+                                              setShockDurationMs((d) =>
+                                                d >= maxDur ? 300 : Math.min(maxDur, d + 100),
+                                              )
+                                            }
+                                          />
+                                        </div>
+                                        <div className="q-mt-sm q-mb-xs flex column">
+                                          <button
+                                            type="button"
+                                            className="q-btn q-btn-item non-selectable no-outline q-btn--push q-btn--round text-accent q-btn--actionable q-focusable q-hoverable q-btn--wrap"
+                                            disabled={controlsLocked}
+                                            onClick={() => setWarningOn((v) => !v)}
+                                          >
+                                            <span className="q-btn__wrapper col row q-anchor--skip">
+                                              <span className="q-btn__content text-center col items-center q-anchor--skip justify-center column">
+                                                <i className="q-icon mdi mdi-car-brake-alert" aria-hidden />
+                                                <span className="block">{warningOn ? 'ON' : 'None'}</span>
+                                              </span>
+                                            </span>
+                                          </button>
+                                          <div
+                                            className="q-chip row inline no-wrap items-center text-center no-margin bg-secondary text-dark q-chip--colored q-chip--dense q-chip--square"
+                                            style={{ fontSize: 10 }}
+                                          >
+                                            <div className="q-chip__content col row no-wrap items-center q-anchor--skip">
+                                              <div className="full-width text-center text-caption">
+                                                <span>Warning</span>
+                                              </div>
+                                            </div>
+                                          </div>
+                                        </div>
+                                      </div>
+                                      <VerticalQuasarSlider
+                                        value={shockIntensity}
+                                        deviceMax={deviceMaxInt}
+                                        activityMax={maxInt}
+                                        onChange={setShockIntensity}
+                                        disabled={controlsLocked || !active.canShock}
+                                      />
+                                    </div>
+                                  </div>
+                                </div>
+
+                                {/* CENTER */}
+                                <div
+                                  className="flex col-auto items-center justify-around column q-mx-sm"
+                                  style={{ minWidth: 60 }}
+                                >
+                                  <CenterControl
+                                    icon="mdi-cursor-pointer"
+                                    caption="Tap"
+                                    chip="Use Mode"
+                                    outline
+                                    active={tapMode}
+                                    disabled={!active.canHold}
+                                    onClick={() => {
+                                      if (holdingOpRef.current) endHold();
+                                      setTapMode((v) => !v);
+                                    }}
+                                  />
+                                  {active?.owned ? (
+                                    <CenterControl
+                                      icon="mdi-alert-octagon"
+                                      chip={eStop ? 'ARMED' : 'STOP'}
+                                      danger
+                                      padding={16}
+                                      active={eStop}
+                                      disabled={busy || !onEmergencyStop}
+                                      onClick={() => {
+                                        if (!active || !onEmergencyStop) return;
+                                        setHold(false);
+                                        setWarningOn(false);
+                                        onEmergencyStop({
+                                          shockerId: active.id,
+                                          clientId: active.clientId ?? hub.id,
+                                          engaged: !eStop,
+                                        });
+                                      }}
+                                    />
+                                  ) : eStop ? (
+                                    <CenterControl
+                                      icon="mdi-alert-octagon"
+                                      chip="E-STOP"
+                                      danger
+                                      padding={16}
+                                      active
+                                      disabled
+                                    />
+                                  ) : null}
+                                  <CenterControl
+                                    icon="mdi-bell-alert"
+                                    chip="Beep"
+                                    padding={8}
+                                    active={holdingOp === 'beep'}
+                                    disabled={
+                                      (busy && !holdingOp) ||
+                                      controlsLocked ||
+                                      !active.canBeep ||
+                                      !!active.paused
+                                    }
+                                    onClick={
+                                      tapMode ? undefined : () => fire('beep', 1, 300)
+                                    }
+                                    onPointerDown={
+                                      tapMode
+                                        ? (ev) => beginHold('beep', 1, ev)
+                                        : undefined
+                                    }
+                                    onPointerUp={tapMode ? () => endHold() : undefined}
+                                    onPointerCancel={tapMode ? () => endHold() : undefined}
+                                  />
+                                  <CenterControl
+                                    icon="mdi-cogs"
+                                    chip="SO"
+                                    flat
+                                    active={hold}
+                                    disabled={controlsLocked || !active.canHold}
+                                    onClick={() => setHold((v) => !v)}
+                                  />
+                                </div>
+
+                                {/* VIBRATE */}
+                                <div className="flex col-4 justify-start">
+                                  <div className="border-color-secondary q-card q-card--dark q-dark q-card--bordered">
+                                    <div className="q-item__label text-center bg-dark text-secondary q-mb-xs q-item__label--overline text-overline">
+                                      VIBRATE
+                                    </div>
+                                    <div className="q-card__section q-card__section--horiz row no-wrap">
+                                      <VerticalQuasarSlider
+                                        value={vibIntensity}
+                                        deviceMax={deviceMaxInt}
+                                        activityMax={maxInt}
+                                        onChange={setVibIntensity}
+                                        disabled={controlsLocked || !active.canVibrate}
+                                      />
+                                      <div className="column justify-between items-center q-mr-xs">
+                                        <div className="flex column q-gutter-sm">
+                                          <MetricStack
+                                            icon="mdi-vibrate"
+                                            value={String(vibIntensity)}
+                                            label={tapMode ? 'Hold' : 'Operate'}
+                                            filled
+                                            active={holdingOp === 'vibrate'}
+                                            disabled={
+                                              (busy && !holdingOp) ||
+                                              controlsLocked ||
+                                              !active.canVibrate ||
+                                              !!active.paused
+                                            }
+                                            onClick={
+                                              tapMode
+                                                ? undefined
+                                                : () =>
+                                                    fire(
+                                                      'vibrate',
+                                                      vibIntensity || 1,
+                                                      vibDurationMs,
+                                                      { hold },
+                                                    )
+                                            }
+                                            onPointerDown={
+                                              tapMode
+                                                ? (ev) =>
+                                                    beginHold('vibrate', vibIntensity || 1, ev)
+                                                : undefined
+                                            }
+                                            onPointerUp={tapMode ? () => endHold() : undefined}
+                                            onPointerCancel={tapMode ? () => endHold() : undefined}
+                                          />
+                                          <MetricStack
+                                            icon="mdi-clock"
+                                            value={formatDurationSec(vibDurationMs)}
+                                            label="Duration"
+                                            disabled={tapMode}
+                                            onClick={() =>
+                                              setVibDurationMs((d) =>
+                                                d >= maxDur ? 1000 : Math.min(maxDur, d + 1000),
+                                              )
+                                            }
+                                          />
+                                        </div>
+                                      </div>
+                                    </div>
+                                  </div>
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="text-grey-3 q-pa-xl text-center" style={{ maxWidth: 420, margin: '0 auto' }}>
+                    {emptyMessage}
+                  </div>
+                )}
+
+                <AnnouncementBanner />
+              </div>
+            </div>
+          </div>
+        </main>
+      </div>
+
+      {/* Mode switcher + hub/friends panels */}
+      <div className="fixed-bottom-left q-pa-md" style={{ zIndex: 2000 }}>
+        <div className="official-mode-switch">
+          <button
+            type="button"
+            className={`q-btn q-btn-item non-selectable no-outline official-mode-btn q-btn--${
+              !friendsOpen ? 'standard bg-secondary text-dark' : 'outline text-secondary'
+            } q-btn--rectangle q-btn--rounded q-btn--actionable q-btn--wrap`}
+            onClick={() => {
+              if (friendsOpen) onOpenOwnShockers?.();
+              else setHubsOpen((v) => !v);
+            }}
+          >
+            <span className="q-btn__wrapper col row q-anchor--skip">
+              <span className="q-btn__content text-center col items-center q-anchor--skip justify-start row no-wrap">
+                <i className="q-icon on-left mdi mdi-access-point" style={{ fontSize: 16 }} aria-hidden />
+                <div style={{ textAlign: 'left' }}>
+                  <div className="mode-title">My Shockers</div>
+                  <div className="mode-sub">Your hubs &amp; devices</div>
+                </div>
+              </span>
+            </span>
+          </button>
+
+          <button
+            type="button"
+            className={`q-btn q-btn-item non-selectable no-outline official-mode-btn q-btn--${
+              friendsOpen ? 'standard bg-secondary text-dark' : 'outline text-secondary'
+            } q-btn--rectangle q-btn--rounded q-btn--actionable q-btn--wrap`}
+            onClick={onOpenFriends}
+          >
+            <span className="q-btn__wrapper col row q-anchor--skip">
+              <span className="q-btn__content text-center col items-center q-anchor--skip justify-start row no-wrap">
+                <i className="q-icon on-left mdi mdi-account-group" style={{ fontSize: 16 }} aria-hidden />
+                <div style={{ textAlign: 'left' }}>
+                  <div className="mode-title">Discord Shockers</div>
+                  <div className="mode-sub">Friends in this activity</div>
+                </div>
+              </span>
+            </span>
+          </button>
+
+          {friendsOpen ? friendsPanel : null}
+
+          {!friendsOpen && hubsOpen ? (
+            <div
+              className="column flex q-pa-xs bg-dark"
+              style={{ borderRadius: 14, border: '1px solid rgba(121,198,219,.35)' }}
+            >
+              <div className="text-caption text-secondary q-px-xs q-pb-xs">Your hubs</div>
+              {(hubs.length ? hubs : [hub]).map((h) => {
+                const selected = selectedHubId ? selectedHubId === h.id : h.id === hub.id;
+                return (
+                  <button
+                    key={h.id}
+                    type="button"
+                    className={`q-btn q-btn-item non-selectable no-outline full-width q-my-xs q-btn--${
+                      selected ? 'standard bg-secondary text-dark' : 'outline text-secondary'
+                    } q-btn--rectangle q-btn--rounded q-btn--actionable q-btn--wrap`}
+                    onClick={() => onSelectHub?.(h.id)}
+                  >
+                    <span className="q-btn__wrapper col row q-anchor--skip">
+                      <span className="q-btn__content text-center col items-center q-anchor--skip justify-between row no-wrap">
+                        <span className="block ellipsis">{h.name}</span>
+                        <span
+                          className={`q-icon mdi mdi-circle ${h.online ? 'text-positive' : 'text-grey-6'}`}
+                          style={{ fontSize: 8 }}
+                          aria-hidden
+                        />
+                      </span>
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          ) : null}
+
+          <button
+            type="button"
+            className="q-btn q-btn-item non-selectable no-outline text-secondary q-btn--outline q-btn--rectangle q-btn--rounded q-btn--actionable q-btn--wrap"
+            onClick={onOpenClaim}
+          >
+            <span className="q-btn__wrapper col row q-anchor--skip">
+              <span className="q-btn__content text-center col items-center q-anchor--skip justify-start row no-wrap">
+                <i className="q-icon on-left mdi mdi-plus" aria-hidden />
+                <span className="block">Claim / availability</span>
+              </span>
+            </span>
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function MetricStack({
+  icon,
+  value,
+  label,
+  filled,
+  active,
+  disabled,
+  onClick,
+  onPointerDown,
+  onPointerUp,
+  onPointerCancel,
+}: {
+  icon: string;
+  value: string;
+  label: string;
+  filled?: boolean;
+  active?: boolean;
+  disabled?: boolean;
+  onClick?: () => void;
+  onPointerDown?: (ev: ReactPointerEvent<HTMLElement>) => void;
+  onPointerUp?: () => void;
+  onPointerCancel?: () => void;
+}) {
+  return (
+    <div className="flex column" style={{ borderRadius: 3 }}>
+      <button
+        type="button"
+        disabled={disabled}
+        onClick={onClick}
+        onPointerDown={onPointerDown}
+        onPointerUp={onPointerUp}
+        onPointerCancel={onPointerCancel}
+        onContextMenu={(e) => {
+          if (onPointerDown) e.preventDefault();
+        }}
+        className={`q-btn q-btn-item non-selectable no-outline q-btn--${
+          filled ? 'standard bg-secondary text-dark' : 'outline text-secondary'
+        } q-btn--rectangle q-btn--actionable q-focusable q-hoverable q-btn--wrap`}
+        style={{
+          borderBottomLeftRadius: 0,
+          borderBottomRightRadius: 0,
+          boxShadow: active ? 'inset 0 0 0 2px #fff' : undefined,
+          touchAction: onPointerDown ? 'none' : undefined,
+          userSelect: onPointerDown ? 'none' : undefined,
+        }}
+      >
+        <span className="q-btn__wrapper col row q-anchor--skip">
+          <span className="q-btn__content text-center col items-center q-anchor--skip justify-center column">
+            <i className={`q-icon mdi ${icon}`} aria-hidden />
+            <span className="block">{value}</span>
+          </span>
+        </span>
+      </button>
+      <div
+        className={`q-chip row inline no-wrap items-center text-center no-margin ${
+          filled ? 'bg-dark text-secondary' : 'bg-secondary text-dark'
+        } border-color-secondary q-chip--dense q-chip--square`}
+        style={{
+          fontSize: 10,
+          borderTopLeftRadius: 0,
+          borderTopRightRadius: 0,
+          border: '1px solid',
+        }}
+      >
+        <div className="q-chip__content col row no-wrap items-center q-anchor--skip">
+          <div className="full-width text-center text-caption">
+            <span>{label}</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function CenterControl({
+  icon,
+  caption,
+  chip,
+  outline,
+  flat,
+  danger,
+  padding,
+  active,
+  disabled,
+  onClick,
+  onPointerDown,
+  onPointerUp,
+  onPointerCancel,
+}: {
+  icon: string;
+  caption?: string;
+  chip: string;
+  outline?: boolean;
+  flat?: boolean;
+  danger?: boolean;
+  padding?: number;
+  active?: boolean;
+  disabled?: boolean;
+  onClick?: () => void;
+  onPointerDown?: (ev: ReactPointerEvent<HTMLElement>) => void;
+  onPointerUp?: () => void;
+  onPointerCancel?: () => void;
+}) {
+  const btnClass = outline
+    ? 'q-btn--outline text-secondary'
+    : flat
+      ? 'q-btn--flat text-secondary'
+      : danger
+        ? 'q-btn--standard bg-secondary text-negative'
+        : 'q-btn--standard bg-secondary text-dark';
+
+  return (
+    <div className="flex column">
+      <button
+        type="button"
+        disabled={disabled}
+        onClick={onClick}
+        onPointerDown={onPointerDown}
+        onPointerUp={onPointerUp}
+        onPointerCancel={onPointerCancel}
+        onContextMenu={(e) => {
+          if (onPointerDown) e.preventDefault();
+        }}
+        className={`q-btn q-btn-item non-selectable no-outline ${btnClass} q-btn--rectangle q-btn--actionable q-focusable q-hoverable q-btn--wrap ${
+          outline || flat ? 'q-btn--dense' : ''
+        } ${active && !danger ? 'bg-secondary text-dark' : ''} ${
+          active && danger ? 'bg-negative text-white' : ''
+        }`}
+        style={{
+          borderBottomLeftRadius: 0,
+          borderBottomRightRadius: 0,
+          fontSize: flat ? 10 : undefined,
+          boxShadow: active ? 'inset 0 0 0 2px #fff' : undefined,
+          touchAction: onPointerDown ? 'none' : undefined,
+          userSelect: onPointerDown ? 'none' : undefined,
+        }}
+      >
+        <span
+          className="q-btn__wrapper col row q-anchor--skip"
+          style={padding ? { padding, minWidth: 0, minHeight: 0 } : undefined}
+        >
+          <span
+            className={`q-btn__content text-center col items-center q-anchor--skip justify-center ${
+              caption ? 'column' : 'row'
+            }`}
+          >
+            <i className={`q-icon mdi ${icon}`} aria-hidden />
+            {caption ? <div className="text-caption" style={{ fontSize: 9 }}>{caption}</div> : null}
+          </span>
+        </span>
+      </button>
+      <div
+        className={`q-chip row inline no-wrap items-center text-center no-margin ${
+          active && danger
+            ? 'bg-negative text-white'
+            : outline
+              ? 'bg-secondary text-dark'
+              : 'bg-dark text-secondary'
+        } border-color-secondary q-chip--dense ${flat ? '' : 'q-chip--square'}`}
+        style={{
+          fontSize: 10,
+          borderTopLeftRadius: 0,
+          borderTopRightRadius: 0,
+          border: '1px solid',
+        }}
+      >
+        <div className="q-chip__content col row no-wrap items-center q-anchor--skip">
+          <div className="full-width text-center text-caption">
+            <span>{chip}</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function VerticalQuasarSlider({
+  value,
+  deviceMax,
+  activityMax,
+  onChange,
+  disabled,
+}: {
+  value: number;
+  /** PiShock hard ceiling — red zone above this (scale 0–100) */
+  deviceMax: number;
+  /** Discord Activity Limit — thumb cannot go above this */
+  activityMax: number;
+  onChange: (n: number) => void;
+  disabled?: boolean;
+}) {
+  const scaleMax = 100;
+  const device = clamp(deviceMax, 1, scaleMax);
+  const activity = clamp(activityMax, 1, device);
+  const usable = clamp(value, 0, activity);
+  const pct = (usable / scaleMax) * 100;
+  const redFrom = device; // percent of track from bottom that is still PiShock-allowed
+  const redHeight = Math.max(0, 100 - redFrom);
+  const activityCapBottom = activity; // bottom% of activity ceiling marker
+
+  const setFromRatio = (ratio: number) => {
+    const raw = Math.round(ratio * scaleMax);
+    // Refuse PiShock red zone; also clamp to Activity Limit
+    if (raw > device) return;
+    onChange(clamp(raw, 0, activity));
+  };
+
+  return (
+    <div
+      className="q-card__section q-card__section--vert"
+      style={{ padding: '0px 5px', marginLeft: 5, position: 'relative' }}
+    >
+      <div className="flex column items-center q-gutter-sm justify-between">
+        <div
+          role="slider"
+          aria-valuemin={0}
+          aria-valuemax={activity}
+          aria-orientation="vertical"
+          aria-valuenow={usable}
+          className="q-slider q-slider--v q-slider--inactive inline no-wrap row q-slider--enabled q-slider--editable q-slider--label q-slider--dark q-slider--dense q-slider--dense--v"
+        >
+          <div
+            tabIndex={0}
+            className="q-slider__track-container q-slider__track-container--v"
+            onClick={(e) => {
+              if (disabled) return;
+              const rect = e.currentTarget.getBoundingClientRect();
+              const ratio = 1 - (e.clientY - rect.top) / rect.height;
+              setFromRatio(ratio);
+            }}
+          >
+            <div className="q-slider__track relative-position no-outline" style={{ width: 5 }}>
+              <div className="q-slider__inner absolute" style={{ bottom: '0%', height: '100%' }} />
+              {/* Zone between Activity Limit and PiShock max (allowed by PiShock, blocked by Activity) */}
+              {activity < device ? (
+                <div
+                  className="absolute"
+                  title="Above Activity Limit"
+                  style={{
+                    left: 0,
+                    right: 0,
+                    bottom: `${activityCapBottom}%`,
+                    height: `${device - activity}%`,
+                    background: 'rgba(244, 214, 0, 0.35)',
+                    pointerEvents: 'none',
+                  }}
+                />
+              ) : null}
+              {/* PiShock red zone — cannot move into */}
+              {redHeight > 0 ? (
+                <div
+                  className="absolute"
+                  title="Above PiShock device limit"
+                  style={{
+                    left: 0,
+                    right: 0,
+                    bottom: `${redFrom}%`,
+                    height: `${redHeight}%`,
+                    background: 'rgba(229, 57, 53, 0.55)',
+                    pointerEvents: 'none',
+                  }}
+                />
+              ) : null}
+              <div
+                className="q-slider__selection absolute text-secondary"
+                style={{ bottom: '0%', height: `${pct}%` }}
+              />
+              <div
+                className="q-slider__markers q-slider__markers--v absolute overflow-hidden"
+                style={{ bottom: '0%', height: '100%', backgroundSize: '2px 10%' }}
+              />
+              <div
+                className="q-slider__thumb q-slider__thumb--v q-slider__thumb--v-rtl absolute non-selectable text-secondary"
+                style={{ width: 20, height: 20, bottom: `${pct}%` }}
+              >
+                <svg viewBox="0 0 20 20" aria-hidden className="q-slider__thumb-shape absolute-full">
+                  <path d="M 4, 10 a 6,6 0 1,0 12,0 a 6,6 0 1,0 -12,0" />
+                </svg>
+                <div className="q-slider__focus-ring fit" />
+              </div>
+            </div>
+          </div>
+        </div>
+        <i className="q-icon mdi mdi-speedometer" style={{ fontSize: 24 }} aria-hidden />
+      </div>
+      <input
+        type="range"
+        className="official-native-vslider"
+        min={0}
+        max={scaleMax}
+        value={usable}
+        disabled={disabled}
+        onChange={(e) => {
+          const raw = Number(e.target.value);
+          if (raw > device) return;
+          onChange(clamp(raw, 0, activity));
+        }}
+        aria-label="intensity"
+      />
+    </div>
+  );
+}
