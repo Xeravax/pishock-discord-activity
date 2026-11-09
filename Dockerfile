@@ -10,14 +10,15 @@ RUN npx prisma generate
 COPY . .
 ARG VITE_DISCORD_CLIENT_ID=
 ENV VITE_DISCORD_CLIENT_ID=$VITE_DISCORD_CLIENT_ID
-# Provide placeholder env so `tsc`/vite can build without runtime secrets
-ENV DATABASE_URL="postgresql://pishock:pishock@db:5432/pishock?schema=public"
-ENV DISCORD_CLIENT_ID="build"
-ENV DISCORD_CLIENT_SECRET="build"
-ENV TOKEN_KEY="0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-ENV PUBLIC_URL="http://localhost:3000"
-ENV PORT="3000"
-RUN npm run build
+# Build-only placeholders (inline, not ENV) so the image layers never retain secret-named vars.
+# Real runtime values come from compose/.env at container start.
+RUN DATABASE_URL="postgresql://pishock:pishock@db:5432/pishock?schema=public" \
+    DISCORD_CLIENT_ID="build" \
+    DISCORD_CLIENT_SECRET="build" \
+    TOKEN_KEY="0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" \
+    PUBLIC_URL="http://localhost:3000" \
+    PORT="3000" \
+    npm run build
 
 FROM node:22-alpine AS runtime
 WORKDIR /app
