@@ -17,7 +17,8 @@ import { OfficialController } from './components/OfficialController';
 import type { ShockerView } from './components/ShockerCard';
 import { SharesPanel } from './components/SharesPanel';
 import { CommandLog } from './components/CommandLog';
-import type { PipLastCommandInfo } from './components/PipLastCommand';
+import { PipIncomingShock, type IncomingShockHit } from './components/PipIncomingShock';
+import { participantAvatarUrl } from './participants';
 import { AvailabilitySettings } from './components/AvailabilitySettings';
 import {
   ActivityLimitsSettings,
@@ -102,7 +103,7 @@ export function App() {
   const [selectedHubId, setSelectedHubId] = useState<string | null>(null);
   const [pinging, setPinging] = useState(false);
   const [pairDialog, setPairDialog] = useState<ShockerView | null>(null);
-  const [lastCommand, setLastCommand] = useState<PipLastCommandInfo | null>(null);
+  const [lastIncoming, setLastIncoming] = useState<IncomingShockHit | null>(null);
 
   const token = auth?.accessToken ?? null;
   const participantsRef = useRef(participants);
@@ -342,6 +343,31 @@ export function App() {
         applyEmergencyStop(event);
         return;
       }
+      if (event.type === 'incoming_command') {
+        if (selfIdRef.current && event.targetDiscordUserId === selfIdRef.current) {
+          const fromRoster = participantsRef.current.find(
+            (p) => p.id === event.executorDiscordUserId,
+          );
+          setLastIncoming({
+            executorDiscordUserId: event.executorDiscordUserId,
+            displayName:
+              fromRoster?.displayName ||
+              event.executorGlobalName ||
+              event.executorUsername ||
+              'Someone',
+            avatarUrl:
+              fromRoster?.avatarUrl ||
+              participantAvatarUrl(event.executorDiscordUserId, event.executorAvatar),
+            action: event.action,
+            intensity: event.intensity,
+            durationMs: event.durationMs,
+            at: event.at,
+            success: event.success,
+          });
+          void refreshLogs(token).catch(() => undefined);
+        }
+        return;
+      }
       if (event.type === 'activity_share_changed' || event.type === 'participants_invalidate') {
         participantStatusCache = { key: '', fetchedAt: 0, map: {} };
         void refreshParticipantStatus(token, participantsRef.current, true).catch(() => undefined);
@@ -356,7 +382,7 @@ export function App() {
 
     const handle = connectRealtime(token, handleEvent);
     return () => handle.close();
-  }, [token, bootReady, me?.consent, refreshMe, refreshParticipantStatus]);
+  }, [token, bootReady, me?.consent, refreshMe, refreshParticipantStatus, refreshLogs]);
 
   const refreshOnlineStatus = useCallback(
     async (accessToken: string, clientIds: string[], waitMs = 2500) => {
@@ -534,51 +560,59 @@ export function App() {
 
   const shockers = friendsMode ? friendShockers : ownShockers;
 
-  const pipLastCommand = useMemo((): PipLastCommandInfo | null => {
-    if (lastCommand) return lastCommand;
-    const relevant = logs.filter((row) => {
-      const action = String(row.action ?? '').toLowerCase();
-      if (action === 'end' || action === 'stop') return false;
-      const target = (row.targetDiscordUserId as string | null | undefined) ?? null;
-      if (friendsMode) {
-        if (!selectedTargetIds.length) return Boolean(target);
-        return target != null && selectedTargetIds.includes(target);
+  // Hydrate / refresh PIP “last hit on you” from activity logs
+  useEffect(() => {
+    if (!me?.user?.id) return;
+    const selfId = me.user.id;
+    const row = logs.find((entry) => {
+      const target = (entry.targetDiscordUserId as string | null | undefined) ?? null;
+      if (target !== selfId) return false;
+      const action = String(entry.action ?? '').toLowerCase();
+      if (
+        action === 'end' ||
+        action === 'stop' ||
+        action === 'participant_end' ||
+        action.endsWith('_end')
+      ) {
+        return false;
       }
-      return !target || target === me?.user?.id;
+      return true;
     });
-    const row = relevant[0];
-    if (!row) return null;
-    const target = (row.targetDiscordUserId as string | null | undefined) ?? null;
-    const shockerId = row.shockerId as number | null | undefined;
-    return {
+    if (!row) return;
+    const at = new Date(String(row.createdAt)).getTime() || 0;
+    if (lastIncoming && lastIncoming.at >= at) return;
+    const executorId = String(row.executorDiscordUserId ?? '');
+    if (!executorId) return;
+    const fromRoster = participants.find((p) => p.id === executorId);
+    const status = participantStatus[executorId];
+    setLastIncoming({
+      executorDiscordUserId: executorId,
+      displayName:
+        fromRoster?.displayName ||
+        status?.globalName ||
+        status?.username ||
+        'Someone',
+      avatarUrl:
+        fromRoster?.avatarUrl ||
+        participantAvatarUrl(executorId, status?.avatar ?? null),
       action: String(row.action),
       intensity: (row.intensity as number | null | undefined) ?? null,
       durationMs: (row.durationMs as number | null | undefined) ?? null,
-      targetName: target
-        ? participants.find((p) => p.id === target)?.displayName ??
-          participantStatus[target]?.globalName ??
-          participantStatus[target]?.username ??
-          'Discord Shocker'
-        : friendsMode
-          ? 'Discord Shockers'
-          : 'My Shockers',
-      shockerName:
-        (shockerId != null
-          ? shockers.find((s) => s.id === shockerId)?.name
-          : null) ?? (shockerId != null ? `Shocker ${shockerId}` : null),
-      at: new Date(String(row.createdAt)).getTime() || Date.now(),
+      at: at || Date.now(),
       success: Boolean(row.success),
+    });
+  }, [logs, me?.user?.id, lastIncoming, participants, participantStatus]);
+
+  // While PIP is open, refresh logs so hits still show if WS was missed
+  useEffect(() => {
+    if (!pip || !token || !me?.consent) return;
+    const tick = () => {
+      void refreshLogs(token).catch(() => undefined);
     };
-  }, [
-    lastCommand,
-    logs,
-    friendsMode,
-    selectedTargetIds,
-    participants,
-    participantStatus,
-    shockers,
-    me?.user?.id,
-  ]);
+    tick();
+    const id = window.setInterval(tick, 4000);
+    return () => window.clearInterval(id);
+  }, [pip, token, me?.consent, refreshLogs]);
 
   const friendBlocked = Boolean(
     friendsMode &&
@@ -761,47 +795,16 @@ export function App() {
 
   const operate = async (input: Record<string, unknown>) => {
     if (!token) return;
-    const action = String(input.operation ?? 'operate');
-    // Skip ephemeral hold-end noise in the PIP last-command strip
-    const trackCommand = action !== 'end' && action !== 'stop';
-    const targetId =
-      typeof input.targetDiscordUserId === 'string'
-        ? input.targetDiscordUserId
-        : selectedTargetId && friendsMode
-          ? selectedTargetId
-          : null;
-    const shockerId =
-      typeof input.shockerId === 'number'
-        ? input.shockerId
-        : Number(input.shockerId);
-    const targetName = targetId
-      ? participants.find((p) => p.id === targetId)?.displayName ??
-        participantStatus[targetId]?.globalName ??
-        participantStatus[targetId]?.username ??
-        'Discord Shocker'
-      : friendsMode
-        ? 'Discord Shockers'
-        : 'My Shockers';
-    const shockerName =
-      shockers.find((s) => s.id === shockerId)?.name ??
-      (Number.isFinite(shockerId) ? `Shocker ${shockerId}` : null);
-
-    if (trackCommand) {
-      setLastCommand({
-        action,
-        intensity: typeof input.intensity === 'number' ? input.intensity : null,
-        durationMs: typeof input.durationMs === 'number' ? input.durationMs : null,
-        targetName,
-        shockerName,
-        at: Date.now(),
-        success: true,
-      });
-    }
-
     operateInflightRef.current += 1;
     setBusy(true);
     setActionError(null);
     try {
+      const targetId =
+        typeof input.targetDiscordUserId === 'string'
+          ? input.targetDiscordUserId
+          : selectedTargetId && friendsMode
+            ? selectedTargetId
+            : null;
       if (targetId) {
         const instanceId = getActivityInstanceId();
         await apiFetch(`/participants/${targetId}/operate`, token, {
@@ -812,18 +815,12 @@ export function App() {
         requirePiShockLink(
           'Link PiShock to control your own shockers or website shares. Discord Shockers work without linking.',
         );
-        if (trackCommand) {
-          setLastCommand((prev) => (prev ? { ...prev, success: false } : prev));
-        }
         return;
       } else {
         await apiFetch('/operate', token, { method: 'POST', body: JSON.stringify(input) });
       }
       await refreshLogs(token).catch(() => undefined);
     } catch (err) {
-      if (trackCommand) {
-        setLastCommand((prev) => (prev ? { ...prev, success: false } : prev));
-      }
       if (err instanceof ApiError && err.code === 'PISHOCK_RELOGIN') {
         await handleReloginNeeded();
         requirePiShockLink('PiShock session expired — link again to control your own devices.');
@@ -1092,6 +1089,14 @@ export function App() {
       setOverlay(next);
     };
 
+    if (pip) {
+      return (
+        <div className="official-activity-root pip-shell">
+          <PipIncomingShock hit={lastIncoming} />
+        </div>
+      );
+    }
+
     return (
       <div className="official-activity-root">
         {actionError ? (
@@ -1121,7 +1126,6 @@ export function App() {
           friendsOpen={friendsMode}
           selectedHubId={selectedHubId}
           pinging={pinging}
-          lastCommand={pipLastCommand}
           showLinkAccount={!me.pishockLinked}
           showOwnMode={me.pishockLinked}
           showClaim={me.pishockLinked}

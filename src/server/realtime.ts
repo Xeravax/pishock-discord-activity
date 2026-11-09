@@ -22,6 +22,21 @@ export type RealtimeEvent =
       at: number;
     }
   | {
+      /** Someone just operated on this user's shared shockers — for PIP last-hit UI */
+      type: 'incoming_command';
+      targetDiscordUserId: string;
+      executorDiscordUserId: string;
+      executorUsername: string | null;
+      executorGlobalName: string | null;
+      executorAvatar: string | null;
+      action: string;
+      shockerId: number;
+      intensity: number;
+      durationMs: number;
+      success: boolean;
+      at: number;
+    }
+  | {
       type: 'hello_ok';
       discordUserId: string;
       at: number;

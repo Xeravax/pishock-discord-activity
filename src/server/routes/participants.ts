@@ -20,6 +20,7 @@ import {
   logCommand,
 } from '../session.js';
 import { prisma } from '../db.js';
+import { broadcastRealtime } from '../realtime.js';
 
 function executorLabel(user: { id: string; username?: string | null; global_name?: string | null }) {
   const name = user.global_name || user.username || 'unknown';
@@ -29,6 +30,9 @@ function executorLabel(user: { id: string; username?: string | null; global_name
 async function auditParticipantCommand(input: {
   executorDiscordUserId: string;
   targetDiscordUserId: string;
+  executorUsername?: string | null;
+  executorGlobalName?: string | null;
+  executorAvatar?: string | null;
   action: string;
   shockerId: number;
   shareCode?: string | null;
@@ -53,6 +57,32 @@ async function auditParticipantCommand(input: {
     logCommand({ discordUserId: input.executorDiscordUserId, ...payload }),
     logCommand({ discordUserId: input.targetDiscordUserId, ...payload }),
   ]);
+
+  const action = input.action.toLowerCase();
+  if (
+    input.success &&
+    action !== 'participant_end' &&
+    action !== 'end' &&
+    action !== 'stop'
+  ) {
+    broadcastRealtime(
+      {
+        type: 'incoming_command',
+        targetDiscordUserId: input.targetDiscordUserId,
+        executorDiscordUserId: input.executorDiscordUserId,
+        executorUsername: input.executorUsername ?? null,
+        executorGlobalName: input.executorGlobalName ?? null,
+        executorAvatar: input.executorAvatar ?? null,
+        action: input.action,
+        shockerId: input.shockerId,
+        intensity: input.intensity,
+        durationMs: input.durationMs,
+        success: input.success,
+        at: Date.now(),
+      },
+      { discordUserId: input.targetDiscordUserId },
+    );
+  }
 }
 
 export const participantRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app, opts) => {
@@ -254,6 +284,9 @@ export const participantRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app
       });
       await auditParticipantCommand({
         executorDiscordUserId: req.discordUser.id,
+        executorUsername: req.discordUser.username,
+        executorGlobalName: req.discordUser.global_name ?? null,
+        executorAvatar: req.discordUser.avatar ?? null,
         targetDiscordUserId,
         action: 'participant_end',
         shockerId,
@@ -332,6 +365,9 @@ export const participantRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app
         if (published) {
           await auditParticipantCommand({
             executorDiscordUserId: req.discordUser.id,
+            executorUsername: req.discordUser.username,
+            executorGlobalName: req.discordUser.global_name ?? null,
+            executorAvatar: req.discordUser.avatar ?? null,
             targetDiscordUserId,
             action: `participant_${operation}`,
             shockerId,
@@ -363,6 +399,9 @@ export const participantRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app
         );
         await auditParticipantCommand({
           executorDiscordUserId: req.discordUser.id,
+          executorUsername: req.discordUser.username,
+          executorGlobalName: req.discordUser.global_name ?? null,
+          executorAvatar: req.discordUser.avatar ?? null,
           targetDiscordUserId,
           action: `participant_${operation}`,
           shockerId,
@@ -393,6 +432,9 @@ export const participantRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app
 
       await auditParticipantCommand({
         executorDiscordUserId: req.discordUser.id,
+        executorUsername: req.discordUser.username,
+        executorGlobalName: req.discordUser.global_name ?? null,
+        executorAvatar: req.discordUser.avatar ?? null,
         targetDiscordUserId,
         action: `participant_${operation}`,
         shockerId,
@@ -414,6 +456,9 @@ export const participantRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app
     } catch (err) {
       await auditParticipantCommand({
         executorDiscordUserId: req.discordUser.id,
+        executorUsername: req.discordUser.username,
+        executorGlobalName: req.discordUser.global_name ?? null,
+        executorAvatar: req.discordUser.avatar ?? null,
         targetDiscordUserId,
         action: `participant_${operation}`,
         shockerId,

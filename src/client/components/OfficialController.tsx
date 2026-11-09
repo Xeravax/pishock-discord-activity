@@ -8,7 +8,6 @@ import {
 } from 'react';
 import type { ShockerView } from './ShockerCard';
 import { AnnouncementBanner } from './AnnouncementBanner';
-import { PipLastCommand, type PipLastCommandInfo } from './PipLastCommand';
 
 export type OfficialOperateInput = {
   shockerId: number;
@@ -81,8 +80,6 @@ type Props = {
   onPingHub?: () => void;
   pinging?: boolean;
   selectedHubId?: string | null;
-  /** Most recent operate — shown prominently in Discord PIP */
-  lastCommand?: PipLastCommandInfo | null;
 };
 
 function clamp(n: number, min: number, max: number) {
@@ -254,7 +251,6 @@ export function OfficialController({
   onPingHub,
   pinging = false,
   selectedHubId = null,
-  lastCommand = null,
 }: Props) {
   const initialPrefs = useMemo(() => loadControlPrefs(), []);
   const [activeId, setActiveId] = useState(
@@ -684,11 +680,7 @@ export function OfficialController({
   }, [holdingOp, activeId, maxDur]);
 
   return (
-    <div
-      className={`bg-dark q-layout q-layout--standard official-root${
-        pip ? ' official-root--pip' : ''
-      }`}
-    >
+    <div className="bg-dark q-layout q-layout--standard official-root">
       <header
         className="q-header q-layout__section--marginal custom-header fixed-top"
         style={{ borderBottom: '1px solid rgb(121, 198, 219)' }}
@@ -741,7 +733,6 @@ export function OfficialController({
           <div className="text-h4 flex q-pa-sm col-md-8 col-xs-12 full-height full-width">
             <div className="full-width">
               <div className="column">
-                {pip ? <PipLastCommand command={lastCommand} /> : null}
                 <div className="row justify-between items-start">
                   <div className="column">
                     <span className="text-secondary">{hub.name}</span>

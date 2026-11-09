@@ -21,6 +21,20 @@ export type RealtimeEvent =
       at: number;
     }
   | {
+      type: 'incoming_command';
+      targetDiscordUserId: string;
+      executorDiscordUserId: string;
+      executorUsername: string | null;
+      executorGlobalName: string | null;
+      executorAvatar: string | null;
+      action: string;
+      shockerId: number;
+      intensity: number;
+      durationMs: number;
+      success: boolean;
+      at: number;
+    }
+  | {
       type: 'hello_ok';
       discordUserId: string;
       at: number;

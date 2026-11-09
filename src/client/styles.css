@@ -206,58 +206,90 @@ body,
   max-width: 168px;
 }
 
-.pip-last-command {
-  width: 100%;
+.pip-shell {
+  min-height: 100vh;
+  min-height: 100dvh;
+  display: flex;
+  align-items: stretch;
+  justify-content: stretch;
+  background: #121212;
+}
+
+.pip-incoming {
+  flex: 1;
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 8px 10px;
   box-sizing: border-box;
-  margin: 6px 0 10px;
-  padding: 10px 12px;
-  border-radius: 12px;
-  border: 1px solid rgba(121, 198, 219, 0.45);
-  background: rgba(18, 28, 32, 0.95);
+  background: #121212;
+  color: #e8e8e8;
+  overflow: hidden;
 }
 
-.pip-last-command--ok {
-  border-color: rgba(121, 198, 219, 0.65);
+.pip-incoming--failed {
+  background: #2a1212;
 }
 
-.pip-last-command--bad {
-  border-color: rgba(244, 67, 54, 0.65);
-  background: rgba(40, 12, 12, 0.92);
+.pip-incoming__avatar {
+  width: min(42%, 88px);
+  height: min(42%, 88px);
+  max-width: 88px;
+  max-height: 88px;
+  aspect-ratio: 1;
+  border-radius: 50%;
+  object-fit: cover;
+  border: 2px solid #79c6db;
+  flex-shrink: 0;
+  background: #1e1e1e;
 }
 
-.pip-last-command--empty {
-  border-style: dashed;
-  opacity: 0.9;
+.pip-incoming__copy {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 1px;
 }
 
-.pip-last-command__label {
-  font-size: 10px;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  color: #79c6db;
-  margin-bottom: 2px;
-}
-
-.pip-last-command--bad .pip-last-command__label {
-  color: #ef9a9a;
-}
-
-.pip-last-command__body {
-  font-family: Oxanium, geo, sans-serif;
-  font-size: 20px;
+.pip-incoming__name {
+  font-size: clamp(11px, 4.2vw, 15px);
   font-weight: 600;
-  line-height: 1.15;
+  color: #cfd8dc;
+  max-width: 18ch;
+}
+
+.pip-incoming__action {
+  font-family: Oxanium, geo, sans-serif;
+  font-size: clamp(16px, 6vw, 22px);
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: #79c6db;
+  line-height: 1.05;
+}
+
+.pip-incoming__stats {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+  font-family: Oxanium, geo, sans-serif;
+  font-size: clamp(14px, 5.5vw, 20px);
+  font-weight: 600;
   color: #f2f6f8;
+  line-height: 1.1;
 }
 
-.pip-last-command__meta {
-  margin-top: 2px;
-  font-size: 12px;
-  line-height: 1.2;
+.pip-incoming__dot {
+  opacity: 0.55;
 }
 
-.official-root.official-root--pip .official-mode-dock {
-  display: none;
+.pip-incoming__empty {
+  font-size: clamp(12px, 4vw, 16px);
+  color: #9aa0a6;
+  text-align: center;
+  padding: 8px;
 }
 
 .official-mode-btn {

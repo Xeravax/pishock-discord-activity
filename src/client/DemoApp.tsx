@@ -9,6 +9,7 @@ import { OfficialController } from './components/OfficialController';
 import { SharesPanel } from './components/SharesPanel';
 import { CommandLog } from './components/CommandLog';
 import { FriendsParticipantList } from './components/FriendsParticipantList';
+import { PipIncomingShock } from './components/PipIncomingShock';
 import { PsDialog } from './components/PsDialog';
 import type { ShockerView } from './components/ShockerCard';
 import { participantAvatarUrl, type DiscordParticipant, type ParticipantStatus } from './participants';
@@ -288,7 +289,24 @@ export function DemoApp() {
         </div>
       ) : null}
 
-      {screen === 'shares' || screen === 'logs' || screen === 'control' || screen === 'pip' ? (
+      {screen === 'pip' ? (
+        <div className="official-activity-root pip-shell" style={{ height: 180, width: 320, margin: 16 }}>
+          <PipIncomingShock
+            hit={{
+              executorDiscordUserId: '111',
+              displayName: 'RogerfireFox',
+              avatarUrl: participantAvatarUrl('111'),
+              action: 'participant_shock',
+              intensity: 42,
+              durationMs: 1000,
+              at: Date.now() - 4000,
+              success: true,
+            }}
+          />
+        </div>
+      ) : null}
+
+      {screen === 'shares' || screen === 'logs' || screen === 'control' ? (
         <div className="official-activity-root">
           <OfficialController
             hub={{
@@ -300,11 +318,10 @@ export function DemoApp() {
               lastSeen: friendsOpen ? 'Activity share' : 'Seen a few seconds ago',
             }}
             shockers={shockers}
-            pip={screen === 'pip'}
             friendsOpen={friendsOpen}
             showOwnMode={demoLinked}
             showClaim={demoLinked}
-            safetyBanner={screen !== 'pip' ? <SafetyNoticeBar /> : null}
+            safetyBanner={<SafetyNoticeBar />}
             friendsPanel={({ multiShock }) => (
               <FriendsParticipantList
                 participants={DEMO_PARTICIPANTS}
