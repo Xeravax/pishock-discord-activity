@@ -430,6 +430,163 @@ html.pip-mode #root > * {
   color: #f4d600;
 }
 
+.access-banner--share-bypass {
+  border-color: rgba(121, 198, 219, 0.4);
+  background: rgba(18, 36, 42, 0.92);
+}
+
+.official-friends-unlinked {
+  padding: 6px 8px;
+  border-radius: 10px;
+  border: 1px solid rgba(121, 198, 219, 0.28);
+  background: rgba(18, 28, 32, 0.9);
+}
+
+.official-logs-fab {
+  position: fixed;
+  right: 14px;
+  bottom: 14px;
+  z-index: 2500;
+  width: 52px;
+  height: 36px;
+  border: none;
+  border-radius: 8px;
+  background: #79c6db;
+  color: #121212;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45);
+  pointer-events: auto;
+}
+
+.official-logs-fab .q-icon {
+  font-size: 22px;
+  line-height: 1;
+}
+
+.official-logs-fab__badge {
+  position: absolute;
+  top: -7px;
+  right: -7px;
+  min-width: 20px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 9px;
+  background: #e53935;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 18px;
+  text-align: center;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.4);
+}
+
+.official-logs-card {
+  width: min(420px, 94vw);
+  max-height: 88vh;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid rgba(121, 198, 219, 0.35);
+  pointer-events: auto;
+  overflow: hidden;
+}
+
+.official-logs-banner {
+  background: #f4d600;
+  color: #121212;
+  font-weight: 700;
+  font-size: 13px;
+  padding: 8px 10px;
+}
+
+.official-logs-list {
+  overflow: auto;
+  padding: 8px 10px 14px;
+}
+
+.official-log-row {
+  padding: 10px 2px 12px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.official-log-row__top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.official-log-row__bottom {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.official-log-row__meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+
+.official-log-pill {
+  display: inline-flex;
+  align-items: center;
+  max-width: 55%;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.2;
+}
+
+.official-log-pill--from {
+  background: #79c6db;
+  color: #121212;
+}
+
+.official-log-pill--to {
+  background: #e8e8e8;
+  color: #121212;
+  max-width: 42%;
+}
+
+.official-log-pill--api {
+  background: #e8e8e8;
+  color: #121212;
+  font-size: 11px;
+  padding: 2px 8px;
+}
+
+.official-log-stat {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  color: #e8e8e8;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.official-log-stat .q-icon {
+  font-size: 14px;
+  opacity: 0.9;
+}
+
+.official-log-ago {
+  color: #cfd8dc;
+  font-size: 12px;
+  white-space: nowrap;
+  margin-left: auto;
+}
+
 .official-friend-avatar {
   width: 22px;
   height: 22px;

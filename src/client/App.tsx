@@ -17,6 +17,13 @@ import { OfficialController } from './components/OfficialController';
 import type { ShockerView } from './components/ShockerCard';
 import { SharesPanel } from './components/SharesPanel';
 import { CommandLog } from './components/CommandLog';
+import {
+  OfficialLogsFab,
+  OfficialLogsPanel,
+  normalizeActivityLogs,
+  normalizeDeviceLogs,
+  type OfficialLogEntry,
+} from './components/OfficialLogsPanel';
 import { PipIncomingShock, type IncomingShockHit } from './components/PipIncomingShock';
 import { participantAvatarUrl } from './participants';
 import { AvailabilitySettings } from './components/AvailabilitySettings';
@@ -84,6 +91,8 @@ export function App() {
   const [devices, setDevices] = useState<DevicesResponse | null>(null);
   const [online, setOnline] = useState<Record<string, boolean>>({});
   const [logs, setLogs] = useState<Array<Record<string, unknown>>>([]);
+  const [deviceLogsRaw, setDeviceLogsRaw] = useState<unknown>(null);
+  const [logsOpen, setLogsOpen] = useState(false);
   const [overlay, setOverlay] = useState<Overlay>(null);
   const [settingsFocusShockerId, setSettingsFocusShockerId] = useState<number | null>(null);
   const [loginUrl, setLoginUrl] = useState<string | null>(null);
@@ -104,6 +113,13 @@ export function App() {
   const [pinging, setPinging] = useState(false);
   const [pairDialog, setPairDialog] = useState<ShockerView | null>(null);
   const [lastIncoming, setLastIncoming] = useState<IncomingShockHit | null>(null);
+  /** Per-shocker Discord share caps (what guests are limited to) */
+  const [discordShareLimits, setDiscordShareLimits] = useState<
+    Record<
+      number,
+      { enabled: boolean; maxIntensity: number; maxDurationMs: number }
+    >
+  >({});
 
   const token = auth?.accessToken ?? null;
   const participantsRef = useRef(participants);
@@ -131,8 +147,12 @@ export function App() {
   }, []);
 
   const refreshLogs = useCallback(async (accessToken: string) => {
-    const data = await apiFetch<{ activity: Array<Record<string, unknown>> }>('/logs', accessToken);
+    const data = await apiFetch<{
+      activity: Array<Record<string, unknown>>;
+      deviceLogs?: unknown;
+    }>('/logs', accessToken);
     setLogs(data.activity ?? []);
+    if (data.deviceLogs != null) setDeviceLogsRaw(data.deviceLogs);
   }, []);
 
   const refreshParticipantStatus = useCallback(
@@ -453,10 +473,20 @@ export function App() {
     [me?.emergencyStopShockerIds],
   );
 
-  const ownedAndShared = useMemo(
-    () => normalizeShockers(devices, online, personalLimits, emergencyStopIds),
-    [devices, online, personalLimits, emergencyStopIds],
-  );
+  const ownedAndShared = useMemo(() => {
+    const rows = normalizeShockers(devices, online, personalLimits, emergencyStopIds);
+    return rows.map((s) => {
+      if (!s.owned) return s;
+      const share = discordShareLimits[s.id];
+      if (!share) return s;
+      return {
+        ...s,
+        discordShareEnabled: share.enabled,
+        discordShareMaxIntensity: share.maxIntensity,
+        discordShareMaxDuration: share.maxDurationMs,
+      };
+    });
+  }, [devices, online, personalLimits, emergencyStopIds, discordShareLimits]);
 
   const hubOptions = useMemo(() => {
     const hubs = devices?.hubs ?? [];
@@ -942,13 +972,28 @@ export function App() {
     [token, participants, refreshParticipantStatus],
   );
 
+  const applyDiscordShareLimits = useCallback((shares: ShareLimitRow[]) => {
+    const next: Record<number, { enabled: boolean; maxIntensity: number; maxDurationMs: number }> =
+      {};
+    for (const row of shares) {
+      next[row.shockerId] = {
+        enabled: row.enabled,
+        maxIntensity: row.maxIntensity,
+        maxDurationMs: row.maxDurationMs,
+      };
+    }
+    setDiscordShareLimits(next);
+  }, []);
+
   const loadSettings = useCallback(async () => {
     if (!token) throw new Error('Not authenticated');
-    return apiFetch<{ personal: PersonalLimits; shares: ShareLimitRow[] }>(
+    const data = await apiFetch<{ personal: PersonalLimits; shares: ShareLimitRow[] }>(
       '/activity/settings',
       token,
     );
-  }, [token]);
+    applyDiscordShareLimits(data.shares);
+    return data;
+  }, [token, applyDiscordShareLimits]);
 
   const saveSettings = useCallback(
     async (payload: { personal: PersonalLimits; shares: ShareLimitRow[] }) => {
@@ -959,13 +1004,19 @@ export function App() {
         { method: 'PUT', body: JSON.stringify(payload) },
       );
       setMe((prev) => (prev ? { ...prev, personal: result.personal } : prev));
+      applyDiscordShareLimits(result.shares);
       participantStatusCache = { key: '', fetchedAt: 0, map: {} };
       if (participants.length) {
         await refreshParticipantStatus(token, participants, true);
       }
     },
-    [token, participants, refreshParticipantStatus],
+    [token, participants, refreshParticipantStatus, applyDiscordShareLimits],
   );
+
+  useEffect(() => {
+    if (!token || !me?.pishockLinked || !me.consent) return;
+    void loadSettings().catch(() => undefined);
+  }, [token, me?.pishockLinked, me?.consent, loadSettings]);
 
   const primaryHub = (() => {
     if (friendsMode) {
@@ -1080,6 +1131,26 @@ export function App() {
     }));
 
     const ownedShockers = ownedAndShared.filter((s) => s.owned);
+
+    const nameByDiscordId: Record<string, string> = {};
+    for (const p of participants) {
+      nameByDiscordId[p.id] = p.displayName;
+    }
+    if (me.user?.id) {
+      nameByDiscordId[me.user.id] = me.user.global_name || me.user.username || me.user.id;
+    }
+    const deviceEntries = normalizeDeviceLogs(deviceLogsRaw);
+    const activityEntries = normalizeActivityLogs(logs, nameByDiscordId);
+    // Prefer official website/device logs when present; otherwise show activity audit
+    const officialLogEntries: OfficialLogEntry[] = deviceEntries.length
+      ? deviceEntries
+      : activityEntries;
+
+    const openOfficialLogs = () => {
+      setLogsOpen(true);
+      if (token) void refreshLogs(token).catch(() => undefined);
+    };
+
     const openLinkedOverlay = (next: Overlay) => {
       if (
         !me.pishockLinked &&
@@ -1141,7 +1212,9 @@ export function App() {
               : friendsMode && selectedTargetIds.length > 0
                 ? 'No shockers shared by the selected participants.'
                 : friendsMode
-                  ? 'Select Discord Shockers to control.'
+                  ? me.pishockLinked
+                    ? 'Select Discord Shockers to control.'
+                    : 'Not linked to PiShock — open Discord Shockers and pick someone who shared devices.'
                   : 'No shockers'
           }
           accessBanner={
@@ -1171,6 +1244,8 @@ export function App() {
               selectedTargetId={selectedTargetId}
               selectedTargetIds={selectedTargetIds}
               multiSelect={multiShock}
+              pishockLinked={me.pishockLinked}
+              onLinkAccount={openLinkFlow}
               onSelect={(id) => {
                 if (!id) {
                   setSelectedTargetIds([]);
@@ -1365,7 +1440,7 @@ export function App() {
                 ['availability', 'Available in Discord', 'mdi-account-check'],
                 ['settings', 'Activity Limits', 'mdi-tune'],
                 ['shares', 'Shares & links', 'mdi-share-variant'],
-                ['logs', 'Command log', 'mdi-history'],
+                ['logs', 'Logs', 'mdi-message-text-clock'],
               ] as const
             )
               .filter(([id]) => me.pishockLinked || id === 'logs')
@@ -1375,6 +1450,11 @@ export function App() {
                 type="button"
                 className="q-item q-item-type row no-wrap q-item--dark q-item--clickable q-link cursor-pointer full-width bg-transparent text-left"
                 onClick={() => {
+                  if (id === 'logs') {
+                    setOverlay(null);
+                    openOfficialLogs();
+                    return;
+                  }
                   if (id === 'settings') setSettingsFocusShockerId(null);
                   openLinkedOverlay(id);
                 }}
@@ -1596,6 +1676,13 @@ export function App() {
         <PsDialog open={overlay === 'logs'} title="Command log" onClose={() => setOverlay(null)} wide>
           <CommandLog rows={logRows} />
         </PsDialog>
+
+        <OfficialLogsFab count={officialLogEntries.length} onClick={openOfficialLogs} />
+        <OfficialLogsPanel
+          open={logsOpen}
+          entries={officialLogEntries}
+          onClose={() => setLogsOpen(false)}
+        />
       </div>
     );
   }

@@ -25,6 +25,13 @@ export type ShockerView = {
   /** Discord Activity Limit ceiling */
   activityMaxIntensity?: number;
   activityMaxDuration?: number;
+  /**
+   * Limits applied to Discord guests when this owned shocker is shared.
+   * Personal My Shockers control may exceed these (bypass).
+   */
+  discordShareEnabled?: boolean;
+  discordShareMaxIntensity?: number;
+  discordShareMaxDuration?: number;
   isV3?: boolean;
   online?: boolean;
   /** Owner kill-switch latched — blocks all commands until released */

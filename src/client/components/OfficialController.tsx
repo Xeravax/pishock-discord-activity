@@ -86,6 +86,43 @@ function clamp(n: number, min: number, max: number) {
   return Math.max(min, Math.min(max, n));
 }
 
+/** Stable palette for multishock people / shockers */
+const MULTI_COLORS = [
+  '#79c6db',
+  '#ce93d8',
+  '#81c784',
+  '#ffb74d',
+  '#f48fb1',
+  '#90caf9',
+  '#aed581',
+  '#ff8a65',
+] as const;
+
+function multiColorKey(s: ShockerView): string {
+  if (s.targetDiscordUserId) return `u:${s.targetDiscordUserId}`;
+  if (s.owned) return `own:${s.id}`;
+  return `s:${s.id}`;
+}
+
+function multiColorForKey(key: string, keys: string[]): string {
+  const idx = Math.max(0, keys.indexOf(key));
+  return MULTI_COLORS[idx % MULTI_COLORS.length]!;
+}
+
+function shockerUsableInt(s: ShockerView): number {
+  return Math.min(
+    s.deviceMaxIntensity ?? s.maxIntensity ?? 100,
+    s.activityMaxIntensity ?? s.maxIntensity ?? 100,
+  );
+}
+
+function shockerUsableDur(s: ShockerView): number {
+  return Math.min(
+    s.deviceMaxDuration ?? s.maxDuration ?? 15_000,
+    s.activityMaxDuration ?? s.maxDuration ?? 15_000,
+  );
+}
+
 function formatDurationSec(ms: number) {
   const s = ms / 1000;
   return Number.isInteger(s) ? String(s) : s.toFixed(1);
@@ -344,33 +381,57 @@ export function OfficialController({
     : active
       ? [active]
       : [];
+
+  const multiColorKeys = useMemo(() => {
+    const pool = selectedShockers.length ? selectedShockers : active ? [active] : [];
+    const keys: string[] = [];
+    for (const s of pool) {
+      const key = multiColorKey(s);
+      if (!keys.includes(key)) keys.push(key);
+    }
+    return keys;
+  }, [selectedShockers, active]);
+
+  const multiLimitMarkers = useMemo(() => {
+    const pool = selectedShockers.length ? selectedShockers : active ? [active] : [];
+    if (!multiShock || pool.length < 2) {
+      return [] as Array<{ key: string; color: string; intensity: number; label: string }>;
+    }
+    const keys: string[] = [];
+    for (const s of pool) {
+      const key = multiColorKey(s);
+      if (!keys.includes(key)) keys.push(key);
+    }
+    const seen = new Set<string>();
+    const markers: Array<{ key: string; color: string; intensity: number; label: string }> = [];
+    for (const s of pool) {
+      const key = multiColorKey(s);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      markers.push({
+        key,
+        color: multiColorForKey(key, keys),
+        intensity: shockerUsableInt(s),
+        label: s.hubName && !s.owned ? s.hubName : s.name,
+      });
+    }
+    return markers.sort((a, b) => a.intensity - b.intensity);
+  }, [multiShock, selectedShockers, active]);
+
+  // Slider / duration UI uses the *highest* caps so the bar can reach the topmost limit.
+  // Operate still clamps per shocker to that person's own limit.
   const deviceMaxInt = limitPool.length
-    ? Math.min(...limitPool.map((s) => s.deviceMaxIntensity ?? s.maxIntensity ?? 100))
+    ? Math.max(...limitPool.map((s) => s.deviceMaxIntensity ?? s.maxIntensity ?? 100))
     : 100;
   const deviceMaxDur = limitPool.length
-    ? Math.min(...limitPool.map((s) => s.deviceMaxDuration ?? s.maxDuration ?? 15_000))
+    ? Math.max(...limitPool.map((s) => s.deviceMaxDuration ?? s.maxDuration ?? 15_000))
     : 15_000;
   const activityMaxInt = limitPool.length
-    ? Math.min(
-        ...limitPool.map((s) =>
-          Math.min(
-            s.deviceMaxIntensity ?? s.maxIntensity ?? 100,
-            s.activityMaxIntensity ?? s.maxIntensity ?? 100,
-          ),
-        ),
-      )
+    ? Math.max(...limitPool.map((s) => shockerUsableInt(s)))
     : 100;
   const activityMaxDur = limitPool.length
-    ? Math.min(
-        ...limitPool.map((s) =>
-          Math.min(
-            s.deviceMaxDuration ?? s.maxDuration ?? 15_000,
-            s.activityMaxDuration ?? s.maxDuration ?? 15_000,
-          ),
-        ),
-      )
+    ? Math.max(...limitPool.map((s) => shockerUsableDur(s)))
     : 15_000;
-  /** Usable ceiling across the selection (most restrictive) */
   const maxInt = Math.min(deviceMaxInt, activityMaxInt);
   const maxDur = Math.min(deviceMaxDur, activityMaxDur);
   const eStop = selectedShockers.some((s) => s.emergencyStop);
@@ -517,14 +578,9 @@ export function OfficialController({
       dur: number,
       warning: OfficialOperateInput['warning'] = null,
     ) => {
-      const sMaxInt = Math.min(
-        maxInt,
-        shocker.activityMaxIntensity ?? shocker.maxIntensity ?? maxInt,
-      );
-      const sMaxDur = Math.min(
-        maxDur,
-        shocker.activityMaxDuration ?? shocker.maxDuration ?? maxDur,
-      );
+      // Per-person / per-shocker caps — never raise someone past their own limit
+      const sMaxInt = shockerUsableInt(shocker);
+      const sMaxDur = shockerUsableDur(shocker);
       onOperate({
         shockerId: shocker.id,
         shareCode: shocker.shareCode,
@@ -552,10 +608,14 @@ export function OfficialController({
       warningLevel !== 'none'
     ) {
       const preset = WARNING_PRESETS[warningLevel];
-      const warnIntensity = clamp(preset.intensity, 1, maxInt);
-      const warnDuration = clamp(preset.durationMs, 16, maxDur);
+      let warnWaitMs = preset.durationMs;
       for (const shocker of targets) {
         if (shocker.emergencyStop || shocker.paused || !shocker.canVibrate) continue;
+        const sMaxInt = shockerUsableInt(shocker);
+        const sMaxDur = shockerUsableDur(shocker);
+        const warnIntensity = clamp(preset.intensity, 1, sMaxInt);
+        const warnDuration = clamp(preset.durationMs, 16, sMaxDur);
+        warnWaitMs = Math.max(warnWaitMs, warnDuration);
         dispatch(shocker, 'vibrate', warnIntensity, warnDuration, {
           Active: true,
           Intensity: warnIntensity,
@@ -572,7 +632,7 @@ export function OfficialController({
           if (shocker.emergencyStop || shocker.paused || !shocker.canShock) continue;
           dispatch(shocker, 'shock', intensity, durationMs, null);
         }
-      }, warnDuration + 50);
+      }, warnWaitMs + 50);
       return;
     }
 
@@ -871,6 +931,25 @@ export function OfficialController({
                   </div>
                 ) : null}
 
+                {!friendsOpen &&
+                active?.owned &&
+                active.discordShareEnabled &&
+                active.discordShareMaxIntensity != null &&
+                active.discordShareMaxDuration != null ? (
+                  <div className="access-banner access-banner--share-bypass q-mt-sm q-pa-sm">
+                    <div className="text-secondary text-subtitle2">
+                      Discord share limit · {active.discordShareMaxIntensity}% ·{' '}
+                      {formatDurationSec(active.discordShareMaxDuration)}s
+                    </div>
+                    <div className="text-grey-4 text-body2">
+                      {maxInt > active.discordShareMaxIntensity ||
+                      maxDur > active.discordShareMaxDuration
+                        ? 'You set Activity Limits for this shared shocker, and your personal control panel can go higher — you are bypassing those shared limits here.'
+                        : 'Guests in Discord Shockers are capped to this Activity Limit on this shocker.'}
+                    </div>
+                  </div>
+                ) : null}
+
                 {friendsOpen || shockers.length > 1 ? (
                   <div className="column q-gutter-xs q-mt-sm">
                     <div className="row items-center q-gutter-sm">
@@ -901,11 +980,38 @@ export function OfficialController({
                       </button>
                       {multiShock ? (
                         <span className="text-caption text-grey-5">
-                          {selectedShockers.length} shocker
-                          {selectedShockers.length === 1 ? '' : 's'} · lowest max applies
+                          {selectedShockers.length} selected · each capped to their own limit
                         </span>
                       ) : null}
                     </div>
+                    {multiShock && multiLimitMarkers.length > 1 ? (
+                      <div className="row q-gutter-xs items-center" style={{ flexWrap: 'wrap' }}>
+                        {multiLimitMarkers.map((m) => (
+                          <span
+                            key={m.key}
+                            className="text-caption"
+                            style={{
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: 4,
+                              color: m.color,
+                            }}
+                          >
+                            <span
+                              aria-hidden
+                              style={{
+                                width: 8,
+                                height: 8,
+                                borderRadius: 999,
+                                background: m.color,
+                                flexShrink: 0,
+                              }}
+                            />
+                            {m.label} · {m.intensity}%
+                          </span>
+                        ))}
+                      </div>
+                    ) : null}
                     {shockers.length > 0 ? (
                       <div className="row q-gutter-sm">
                         {shockers.map((s) => {
@@ -915,15 +1021,32 @@ export function OfficialController({
                           const chipKey = s.targetDiscordUserId
                             ? `${s.targetDiscordUserId}:${s.id}`
                             : String(s.id);
+                          const colorKey = multiColorKey(s);
+                          const color = multiShock
+                            ? multiColorForKey(colorKey, multiColorKeys.length ? multiColorKeys : [colorKey])
+                            : undefined;
                           return (
                             <button
                               key={chipKey}
                               type="button"
                               className={`q-btn q-btn-item non-selectable no-outline q-btn--${
                                 selected
-                                  ? 'standard bg-secondary text-dark'
+                                  ? multiShock
+                                    ? 'outline'
+                                    : 'standard bg-secondary text-dark'
                                   : 'outline text-secondary'
                               } q-btn--rectangle q-btn--actionable q-btn--dense`}
+                              style={
+                                multiShock && selected && color
+                                  ? {
+                                      borderColor: color,
+                                      color,
+                                      boxShadow: `inset 3px 0 0 ${color}`,
+                                    }
+                                  : multiShock && color
+                                    ? { borderColor: `${color}66` }
+                                    : undefined
+                              }
                               onClick={() => {
                                 if (!multiShock) {
                                   setActiveId(s.id);
@@ -948,6 +1071,7 @@ export function OfficialController({
                                   <span className="block">
                                     {multiShock && s.hubName && !s.owned ? `${s.hubName}: ` : ''}
                                     {s.name}
+                                    {multiShock ? ` · ${shockerUsableInt(s)}%` : ''}
                                     {s.emergencyStop ? ' · E-STOP' : ''}
                                   </span>
                                 </span>
@@ -1108,6 +1232,7 @@ export function OfficialController({
                                           random={shockRandom}
                                           deviceMax={deviceMaxInt}
                                           activityMax={maxInt}
+                                          limitMarkers={multiLimitMarkers}
                                           onChange={setShockIntensity}
                                           onChangeMin={setShockMin}
                                           onChangeMax={setShockMax}
@@ -1289,6 +1414,7 @@ export function OfficialController({
                                           value={vibIntensity}
                                           deviceMax={deviceMaxInt}
                                           activityMax={maxInt}
+                                          limitMarkers={multiLimitMarkers}
                                           onChange={setVibIntensity}
                                           disabled={controlsLocked || !active.canVibrate}
                                         />
@@ -1807,6 +1933,7 @@ function VerticalQuasarSlider({
   random = false,
   deviceMax,
   activityMax,
+  limitMarkers = [],
   onChange,
   onChangeMin,
   onChangeMax,
@@ -1818,8 +1945,10 @@ function VerticalQuasarSlider({
   random?: boolean;
   /** PiShock hard ceiling — red zone above this (scale 0–100) */
   deviceMax: number;
-  /** Discord Activity Limit — thumb cannot go above this */
+  /** Highest usable Activity Limit among the selection — thumb may reach this */
   activityMax: number;
+  /** Multishock: per-person limit ticks (color-coded) */
+  limitMarkers?: Array<{ key: string; color: string; intensity: number; label: string }>;
   onChange: (n: number) => void;
   onChangeMin?: (n: number) => void;
   onChangeMax?: (n: number) => void;
@@ -1973,6 +2102,26 @@ function VerticalQuasarSlider({
                   }}
                 />
               ) : null}
+              {limitMarkers.map((m) => {
+                const at = clamp(m.intensity, 0, scaleMax);
+                return (
+                  <div
+                    key={m.key}
+                    className="absolute"
+                    title={`${m.label} limit ${m.intensity}%`}
+                    style={{
+                      left: -3,
+                      right: -3,
+                      bottom: `calc(${at}% - 1px)`,
+                      height: 2,
+                      background: m.color,
+                      boxShadow: `0 0 0 1px rgba(0,0,0,.35)`,
+                      pointerEvents: 'none',
+                      zIndex: 2,
+                    }}
+                  />
+                );
+              })}
               {random ? (
                 <div
                   className="q-slider__selection absolute text-secondary"
