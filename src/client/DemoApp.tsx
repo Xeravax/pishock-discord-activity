@@ -324,6 +324,10 @@ export function DemoApp() {
               flash('Availability dialog');
             }}
             onOpenMenu={() => setOverlay('menu')}
+            onOpenShockerSettings={(s) => {
+              setOverlay('settings');
+              flash(`Would open settings for ${s.name}`);
+            }}
             onSelectHub={() => flash('Hub selector')}
             onShareHub={() => flash('Would open hub share')}
             onShareShocker={(s) => {
@@ -374,12 +378,14 @@ export function DemoApp() {
           >
             <SharesPanel
               links={DEMO_LINKS}
+              shared={[]}
               shockers={DEMO_SHOCKERS.filter((s) => s.owned).map((s) => ({ id: s.id, name: s.name }))}
               busy={false}
               onCreate={() => flash('Would create link')}
               onPause={() => flash('Would pause link')}
               onDelete={() => flash('Would delete link')}
               onCreateShare={() => flash('Would create share code')}
+              onClaimShare={() => flash('Would redeem share code')}
             />
           </PsDialog>
 

@@ -22,7 +22,15 @@ export type OfficialOperateInput = {
   canHold: boolean;
   maxIntensity: number;
   maxDuration: number;
-  warning?: { Active: boolean; Min: number; Max: number } | null;
+  warning?: {
+    Active: boolean;
+    /** Warning vibe intensity (1–100) */
+    Intensity?: number;
+    /** Warning vibe duration in ms */
+    DurationMs?: number;
+    Min?: number;
+    Max?: number;
+  } | null;
   hold?: boolean;
 };
 
@@ -58,6 +66,8 @@ type Props = {
   onOpenClaim?: () => void;
   onOpenMenu?: () => void;
   onOpenLinkAccount?: () => void;
+  /** Cog / SO control — open Activity Limits focused on this shocker */
+  onOpenShockerSettings?: (shocker: ShockerView) => void;
   onShareHub?: () => void;
   onShareShocker?: (shocker: ShockerView) => void;
   onPair?: (shocker: ShockerView) => void;
@@ -91,6 +101,29 @@ function intensityLabel(random: boolean, value: number, min: number, max: number
   return `${Math.min(min, max)}-${Math.max(min, max)}`;
 }
 
+/** Warning cycles before a shock: vibrate, then shock. */
+type WarningLevel = 'none' | 'small' | 'mid' | 'long';
+
+const WARNING_ORDER: WarningLevel[] = ['none', 'small', 'mid', 'long'];
+
+const WARNING_PRESETS: Record<
+  Exclude<WarningLevel, 'none'>,
+  { intensity: number; durationMs: number; label: string }
+> = {
+  small: { intensity: 25, durationMs: 500, label: 'SMALL' },
+  mid: { intensity: 50, durationMs: 500, label: 'MID' },
+  long: { intensity: 50, durationMs: 1000, label: 'LONG' },
+};
+
+function nextWarningLevel(current: WarningLevel): WarningLevel {
+  const i = WARNING_ORDER.indexOf(current);
+  return WARNING_ORDER[(i + 1) % WARNING_ORDER.length]!;
+}
+
+function warningButtonLabel(level: WarningLevel): string {
+  return level === 'none' ? 'None' : WARNING_PRESETS[level].label;
+}
+
 function nudgeIntensity(input: {
   random: boolean;
   value: number;
@@ -110,6 +143,74 @@ function nudgeIntensity(input: {
   }
   if (input.delta > 0) input.setMax?.(clamp(hi + input.delta, lo, input.cap));
   else input.setMin?.(clamp(lo + input.delta, 0, hi));
+}
+
+const CONTROL_PREFS_KEY = 'pishock.official-controls.v1';
+
+type ControlPrefs = {
+  shockIntensity: number;
+  shockDurationMs: number;
+  shockRandom: boolean;
+  shockMin: number;
+  shockMax: number;
+  vibIntensity: number;
+  vibDurationMs: number;
+  warningLevel: WarningLevel;
+  tapMode: boolean;
+  activeId?: number;
+};
+
+const DEFAULT_CONTROL_PREFS: ControlPrefs = {
+  shockIntensity: 0,
+  shockDurationMs: 300,
+  shockRandom: false,
+  shockMin: 0,
+  shockMax: 100,
+  vibIntensity: 69,
+  vibDurationMs: 1000,
+  warningLevel: 'none',
+  tapMode: false,
+};
+
+function loadControlPrefs(): ControlPrefs {
+  try {
+    const raw = localStorage.getItem(CONTROL_PREFS_KEY);
+    if (!raw) return { ...DEFAULT_CONTROL_PREFS };
+    const parsed = JSON.parse(raw) as Partial<ControlPrefs>;
+    return {
+      ...DEFAULT_CONTROL_PREFS,
+      ...parsed,
+      shockIntensity: Number(parsed.shockIntensity ?? DEFAULT_CONTROL_PREFS.shockIntensity),
+      shockDurationMs: Number(parsed.shockDurationMs ?? DEFAULT_CONTROL_PREFS.shockDurationMs),
+      shockRandom: Boolean(parsed.shockRandom),
+      shockMin: Number(parsed.shockMin ?? 0),
+      shockMax: Number(parsed.shockMax ?? 100),
+      vibIntensity: Number(parsed.vibIntensity ?? DEFAULT_CONTROL_PREFS.vibIntensity),
+      vibDurationMs: Number(parsed.vibDurationMs ?? DEFAULT_CONTROL_PREFS.vibDurationMs),
+      warningLevel: (['none', 'small', 'mid', 'long'] as const).includes(
+        parsed.warningLevel as WarningLevel,
+      )
+        ? (parsed.warningLevel as WarningLevel)
+        : (parsed as { warningOn?: boolean }).warningOn
+          ? 'small'
+          : 'none',
+      tapMode: Boolean(parsed.tapMode),
+      activeId:
+        parsed.activeId == null || Number.isNaN(Number(parsed.activeId))
+          ? undefined
+          : Number(parsed.activeId),
+    };
+  } catch {
+    return { ...DEFAULT_CONTROL_PREFS };
+  }
+}
+
+function saveControlPrefs(prefs: ControlPrefs) {
+  try {
+    localStorage.setItem(CONTROL_PREFS_KEY, JSON.stringify(prefs));
+  } catch {
+    // private mode / quota
+  }
 }
 
 /** Exact Quasar DOM structure + classes from pishock.com/#/control */
@@ -132,6 +233,7 @@ export function OfficialController({
   onOpenClaim,
   onOpenMenu,
   onOpenLinkAccount,
+  onOpenShockerSettings,
   onShareHub,
   onShareShocker,
   onPair,
@@ -139,7 +241,10 @@ export function OfficialController({
   pinging = false,
   selectedHubId = null,
 }: Props) {
-  const [activeId, setActiveId] = useState(shockers[0]?.id ?? 0);
+  const initialPrefs = useMemo(() => loadControlPrefs(), []);
+  const [activeId, setActiveId] = useState(
+    () => initialPrefs.activeId ?? shockers[0]?.id ?? 0,
+  );
   const [hubMenuOpen, setHubMenuOpen] = useState(false);
   const active = useMemo(
     () => shockers.find((s) => s.id === activeId) ?? shockers[0],
@@ -152,18 +257,18 @@ export function OfficialController({
     }
   }, [shockers, activeId]);
 
-  const [shockIntensity, setShockIntensity] = useState(0);
-  const [shockDurationMs, setShockDurationMs] = useState(300);
-  const [shockRandom, setShockRandom] = useState(false);
-  const [shockMin, setShockMin] = useState(1);
-  const [shockMax, setShockMax] = useState(25);
-  const [vibIntensity, setVibIntensity] = useState(69);
-  const [vibDurationMs, setVibDurationMs] = useState(1000);
+  const [shockIntensity, setShockIntensity] = useState(initialPrefs.shockIntensity);
+  const [shockDurationMs, setShockDurationMs] = useState(initialPrefs.shockDurationMs);
+  const [shockRandom, setShockRandom] = useState(initialPrefs.shockRandom);
+  const [shockMin, setShockMin] = useState(initialPrefs.shockMin);
+  const [shockMax, setShockMax] = useState(initialPrefs.shockMax);
+  const [vibIntensity, setVibIntensity] = useState(initialPrefs.vibIntensity);
+  const [vibDurationMs, setVibDurationMs] = useState(initialPrefs.vibDurationMs);
   const [durationMenu, setDurationMenu] = useState<'shock' | 'vibrate' | null>(null);
-  const [warningOn, setWarningOn] = useState(false);
+  const [warningLevel, setWarningLevel] = useState<WarningLevel>(initialPrefs.warningLevel);
   /** Use Mode: press-and-hold Operate/Beep until release (official Remote-style). */
-  const [tapMode, setTapMode] = useState(false);
-  const [hold, setHold] = useState(false);
+  const [tapMode, setTapMode] = useState(initialPrefs.tapMode);
+  const warningTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [hubsOpen, setHubsOpen] = useState(false);
   const [holdingOp, setHoldingOp] = useState<'shock' | 'vibrate' | 'beep' | null>(null);
   const holdingOpRef = useRef<'shock' | 'vibrate' | 'beep' | null>(null);
@@ -199,6 +304,33 @@ export function OfficialController({
   }, [maxInt, maxDur, activeId]);
 
   useEffect(() => {
+    saveControlPrefs({
+      shockIntensity,
+      shockDurationMs,
+      shockRandom,
+      shockMin,
+      shockMax,
+      vibIntensity,
+      vibDurationMs,
+      warningLevel,
+      tapMode,
+      activeId: active?.id ?? activeId,
+    });
+  }, [
+    shockIntensity,
+    shockDurationMs,
+    shockRandom,
+    shockMin,
+    shockMax,
+    vibIntensity,
+    vibDurationMs,
+    warningLevel,
+    tapMode,
+    active?.id,
+    activeId,
+  ]);
+
+  useEffect(() => {
     if (!durationMenu) return;
     const onDoc = (e: MouseEvent) => {
       const t = e.target as HTMLElement | null;
@@ -216,8 +348,11 @@ export function OfficialController({
 
   useEffect(() => {
     if (eStop) {
-      setHold(false);
-      setWarningOn(false);
+      setWarningLevel('none');
+      if (warningTimerRef.current) {
+        clearTimeout(warningTimerRef.current);
+        warningTimerRef.current = null;
+      }
       // Owner STOP already cuts the broker op; just clear local press state
       holdingOpRef.current = null;
       holdTargetRef.current = null;
@@ -225,13 +360,20 @@ export function OfficialController({
     }
   }, [eStop]);
 
+  useEffect(
+    () => () => {
+      if (warningTimerRef.current) clearTimeout(warningTimerRef.current);
+    },
+    [],
+  );
+
   const fire = (
     operation: OfficialOperateInput['operation'],
     intensity: number,
     durationMs: number,
     opts?: {
       hold?: boolean;
-      warning?: boolean;
+      skipWarning?: boolean;
       target?: { shockerId: number; clientId?: number | string; shareCode?: string };
     },
   ) => {
@@ -242,25 +384,66 @@ export function OfficialController({
     const shockerId = target?.shockerId ?? active!.id;
     const shareCode = target?.shareCode ?? active?.shareCode;
     const clientId = target?.clientId ?? active?.clientId ?? hub.id;
-    onOperate({
+    const base = {
       shockerId,
       shareCode,
       // Hub id is the broker client id when the shocker row omits ClientId
       clientId,
-      operation,
-      intensity: clamp(intensity, 0, maxInt),
-      durationMs: clamp(durationMs, 16, maxDur),
       canShock: active?.canShock ?? true,
       canVibrate: active?.canVibrate ?? true,
       canBeep: active?.canBeep ?? true,
       canHold: active?.canHold ?? true,
       maxIntensity: maxInt,
       maxDuration: maxDur,
-      hold: opts?.hold ?? hold,
-      warning:
-        opts?.warning || warningOn
-          ? { Active: true, Min: 1, Max: Math.max(1, Math.round(maxInt * 0.3)) }
-          : null,
+      // Continuous hold comes from TAP / Use Mode (press-and-hold Operate)
+      hold: Boolean(opts?.hold),
+      warning: null as OfficialOperateInput['warning'],
+    };
+
+    // Vibrate-before-shock for SMALL / MID / LONG
+    if (
+      operation === 'shock' &&
+      !opts?.skipWarning &&
+      !opts?.hold &&
+      warningLevel !== 'none' &&
+      (active?.canVibrate ?? true)
+    ) {
+      const preset = WARNING_PRESETS[warningLevel];
+      const warnIntensity = clamp(preset.intensity, 1, maxInt);
+      const warnDuration = clamp(preset.durationMs, 16, maxDur);
+      onOperate({
+        ...base,
+        operation: 'vibrate',
+        intensity: warnIntensity,
+        durationMs: warnDuration,
+        warning: {
+          Active: true,
+          Intensity: warnIntensity,
+          DurationMs: warnDuration,
+          Min: warnIntensity,
+          Max: warnIntensity,
+        },
+      });
+      if (warningTimerRef.current) clearTimeout(warningTimerRef.current);
+      warningTimerRef.current = setTimeout(() => {
+        warningTimerRef.current = null;
+        if (controlsLocked) return;
+        onOperate({
+          ...base,
+          operation: 'shock',
+          intensity: clamp(intensity, 0, maxInt),
+          durationMs: clamp(durationMs, 16, maxDur),
+          warning: null,
+        });
+      }, warnDuration + 50);
+      return;
+    }
+
+    onOperate({
+      ...base,
+      operation,
+      intensity: clamp(intensity, 0, maxInt),
+      durationMs: clamp(durationMs, 16, maxDur),
     });
   };
 
@@ -294,8 +477,33 @@ export function OfficialController({
     };
     holdingOpRef.current = operation;
     setHoldingOp(operation);
-    // Hold for activity max; release sends broker end (m:"e")
-    fire(operation, Math.max(1, intensity), maxDur, { hold: true });
+
+    const startHold = () => {
+      if (holdingOpRef.current !== operation) return;
+      // Hold for activity max; release sends broker end (m:"e")
+      fire(operation, Math.max(1, intensity), maxDur, { hold: true, skipWarning: true });
+    };
+
+    // Warn vibrate, then start continuous shock hold
+    if (
+      operation === 'shock' &&
+      warningLevel !== 'none' &&
+      active.canVibrate
+    ) {
+      const preset = WARNING_PRESETS[warningLevel];
+      fire('vibrate', clamp(preset.intensity, 1, maxInt), clamp(preset.durationMs, 16, maxDur), {
+        skipWarning: true,
+        target: holdTargetRef.current,
+      });
+      if (warningTimerRef.current) clearTimeout(warningTimerRef.current);
+      warningTimerRef.current = setTimeout(() => {
+        warningTimerRef.current = null;
+        startHold();
+      }, preset.durationMs + 50);
+      return;
+    }
+
+    startHold();
   };
 
   useEffect(() => {
@@ -452,6 +660,17 @@ export function OfficialController({
                         }}
                       >
                         <div className="q-list q-list--dark" style={{ padding: 4 }}>
+                          <div className="q-item q-item-type row no-wrap q-item--dark full-width">
+                            <div className="q-item__section column q-item__section--main justify-center">
+                              <div className="q-item__label text-secondary">Hub ID</div>
+                              <div
+                                className="q-item__label q-item__label--caption text-grey-5"
+                                style={{ fontFamily: 'ui-monospace, monospace', userSelect: 'all' }}
+                              >
+                                {hub.id}
+                              </div>
+                            </div>
+                          </div>
                           <button
                             type="button"
                             className="q-item q-item-type row no-wrap q-item--dark q-item--clickable full-width bg-transparent text-left"
@@ -640,7 +859,10 @@ export function OfficialController({
                                               type="button"
                                               className="q-btn q-btn-item non-selectable no-outline q-btn--push q-btn--round text-accent q-btn--actionable q-focusable q-hoverable q-btn--wrap"
                                               disabled={controlsLocked}
-                                              onClick={() => setWarningOn((v) => !v)}
+                                              title="Vibrate before shock: None → SMALL → MID → LONG"
+                                              onClick={() =>
+                                                setWarningLevel((level) => nextWarningLevel(level))
+                                              }
                                             >
                                               <span className="q-btn__wrapper col row q-anchor--skip">
                                                 <span className="q-btn__content text-center col items-center q-anchor--skip justify-center column">
@@ -649,7 +871,7 @@ export function OfficialController({
                                                     aria-hidden
                                                   />
                                                   <span className="block">
-                                                    {warningOn ? 'ON' : 'None'}
+                                                    {warningButtonLabel(warningLevel)}
                                                   </span>
                                                 </span>
                                               </span>
@@ -714,11 +936,9 @@ export function OfficialController({
                                       onToggleRandom={() => {
                                         setShockRandom((on) => {
                                           if (!on) {
-                                            const base = Math.max(1, shockIntensity || 1);
-                                            setShockMin(
-                                              clamp(Math.max(1, base - 10), 0, maxInt),
-                                            );
-                                            setShockMax(clamp(base, 0, maxInt));
+                                            // Spread thumbs full range so they aren't stacked
+                                            setShockMin(0);
+                                            setShockMax(maxInt);
                                           } else {
                                             setShockIntensity(
                                               clamp(
@@ -762,8 +982,11 @@ export function OfficialController({
                                       disabled={busy || !onEmergencyStop}
                                       onClick={() => {
                                         if (!active || !onEmergencyStop) return;
-                                        setHold(false);
-                                        setWarningOn(false);
+                                        setWarningLevel('none');
+                                        if (warningTimerRef.current) {
+                                          clearTimeout(warningTimerRef.current);
+                                          warningTimerRef.current = null;
+                                        }
                                         onEmergencyStop({
                                           shockerId: active.id,
                                           clientId: active.clientId ?? hub.id,
@@ -807,9 +1030,10 @@ export function OfficialController({
                                     icon="mdi-cogs"
                                     chip="SO"
                                     flat
-                                    active={hold}
-                                    disabled={controlsLocked || !active.canHold}
-                                    onClick={() => setHold((v) => !v)}
+                                    disabled={!onOpenShockerSettings || !active}
+                                    onClick={() => {
+                                      if (active) onOpenShockerSettings?.(active);
+                                    }}
                                   />
                                 </div>
 
@@ -876,7 +1100,6 @@ export function OfficialController({
                                                         'vibrate',
                                                         Math.max(1, vibIntensity || 1),
                                                         vibDurationMs,
-                                                        { hold },
                                                       )
                                               }
                                               onPointerDown={

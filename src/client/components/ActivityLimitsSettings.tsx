@@ -26,6 +26,8 @@ export type ShareLimitRow = {
 type Props = {
   ownedShockers: ShockerView[];
   busy?: boolean;
+  /** Highlight / scroll to this shocker when opening from the SO cog */
+  focusShockerId?: number | null;
   onLoad: () => Promise<{
     personal: PersonalLimits;
     shares: ShareLimitRow[];
@@ -45,7 +47,13 @@ const fieldStyle: CSSProperties = {
   marginLeft: 6,
 };
 
-export function ActivityLimitsSettings({ ownedShockers, busy, onLoad, onSave }: Props) {
+export function ActivityLimitsSettings({
+  ownedShockers,
+  busy,
+  focusShockerId = null,
+  onLoad,
+  onSave,
+}: Props) {
   const [personal, setPersonal] = useState<PersonalLimits>({
     activityMaxIntensity: 100,
     activityMaxDurationMs: 15_000,
@@ -75,6 +83,12 @@ export function ActivityLimitsSettings({ ownedShockers, busy, onLoad, onSave }: 
       cancelled = true;
     };
   }, [onLoad]);
+
+  useEffect(() => {
+    if (!loaded || focusShockerId == null) return;
+    const el = document.getElementById(`activity-limit-shocker-${focusShockerId}`);
+    el?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }, [loaded, focusShockerId]);
 
   const save = async () => {
     setSaving(true);
@@ -182,11 +196,18 @@ export function ActivityLimitsSettings({ ownedShockers, busy, onLoad, onSave }: 
               const row = shares.find((x) => x.shockerId === s.id);
               const deviceMaxI = Math.min(100, s.deviceMaxIntensity ?? s.maxIntensity ?? 100);
               const deviceMaxD = Math.min(15_000, s.deviceMaxDuration ?? s.maxDuration ?? 15_000);
+              const focused = focusShockerId === s.id;
               return (
                 <div
                   key={s.id}
+                  id={`activity-limit-shocker-${s.id}`}
                   className="q-item q-item-type column q-pa-sm"
-                  style={{ border: '1px solid hsla(0,0%,100%,.12)' }}
+                  style={{
+                    border: focused
+                      ? '1px solid #79c6db'
+                      : '1px solid hsla(0,0%,100%,.12)',
+                    boxShadow: focused ? '0 0 0 1px rgba(121,198,219,.35)' : undefined,
+                  }}
                 >
                   <label className="row items-center no-wrap cursor-pointer">
                     <input

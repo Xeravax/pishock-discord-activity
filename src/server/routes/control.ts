@@ -4,6 +4,7 @@ import type { AppEnv } from '../env.js';
 import {
   PiShockApiError,
   clientOperate,
+  claimShareCodes,
   createLink,
   createShare,
   deleteLink,
@@ -422,6 +423,41 @@ export const controlRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app) =>
       }
       return { ok: true, data: result.data };
     } catch (err) {
+      return handlePiShockError(err, req.discordUser.id, reply);
+    }
+  });
+
+  /** Redeem someone else's share code into this PiShock account. */
+  app.put('/api/shares', async (req, reply) => {
+    const blocked = requireSession(req, reply);
+    if (blocked) return blocked;
+    const body = req.body as { code?: string; ShareCode?: string; Shares?: string[] };
+    const codes = Array.isArray(body.Shares)
+      ? body.Shares
+      : [body.code ?? body.ShareCode ?? '']
+          .map((c) => String(c).trim())
+          .filter(Boolean);
+    if (codes.length === 0) {
+      return reply.code(400).send({ error: 'Missing share code' });
+    }
+    try {
+      const result = await claimShareCodes(req.pishockCreds!, codes);
+      if (result.status === 404 || result.status === 405) {
+        return reply.code(result.status).send({ error: 'Claim share unavailable' });
+      }
+      return { ok: true, data: result.data };
+    } catch (err) {
+      if (err instanceof PiShockApiError) {
+        if (err.status === 410) {
+          return reply.code(410).send({ error: 'Share code already claimed' });
+        }
+        if (err.status === 412) {
+          return reply.code(412).send({ error: 'Invalid or empty share code' });
+        }
+        if (err.status === 416) {
+          return reply.code(416).send({ error: 'Too many share codes' });
+        }
+      }
       return handlePiShockError(err, req.discordUser.id, reply);
     }
   });

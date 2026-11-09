@@ -54,6 +54,7 @@ type DevicesResponse = {
 };
 
 type Overlay = null | 'menu' | 'availability' | 'settings' | 'shares' | 'logs' | 'link';
+
 type LegalView = null | 'terms' | 'privacy';
 
 type PendingLinkConfirm = {
@@ -82,6 +83,7 @@ export function App() {
   const [online, setOnline] = useState<Record<string, boolean>>({});
   const [logs, setLogs] = useState<Array<Record<string, unknown>>>([]);
   const [overlay, setOverlay] = useState<Overlay>(null);
+  const [settingsFocusShockerId, setSettingsFocusShockerId] = useState<number | null>(null);
   const [loginUrl, setLoginUrl] = useState<string | null>(null);
   const [linking, setLinking] = useState(false);
   const [linkError, setLinkError] = useState<string | null>(null);
@@ -981,6 +983,7 @@ export function App() {
         );
         return;
       }
+      if (next !== 'settings') setSettingsFocusShockerId(null);
       setOverlay(next);
     };
 
@@ -1075,6 +1078,16 @@ export function App() {
           onOpenClaim={() => openLinkedOverlay('availability')}
           onOpenMenu={() => setOverlay('menu')}
           onOpenLinkAccount={openLinkFlow}
+          onOpenShockerSettings={(s) => {
+            if (!me.pishockLinked || !s.owned) {
+              requirePiShockLink(
+                'Link PiShock to edit Activity Limits and device settings for your shockers.',
+              );
+              return;
+            }
+            setSettingsFocusShockerId(s.id);
+            openLinkedOverlay('settings');
+          }}
           onShareHub={() => {
             if (!me.pishockLinked) {
               requirePiShockLink('Link PiShock to manage hub shares and links.');
@@ -1180,7 +1193,10 @@ export function App() {
                 key={id}
                 type="button"
                 className="q-item q-item-type row no-wrap q-item--dark q-item--clickable q-link cursor-pointer full-width bg-transparent text-left"
-                onClick={() => openLinkedOverlay(id)}
+                onClick={() => {
+                  if (id === 'settings') setSettingsFocusShockerId(null);
+                  openLinkedOverlay(id);
+                }}
               >
                 <div className="q-item__section column q-item__section--avatar q-item__section--side justify-center">
                   <i className={`q-icon mdi ${icon} text-secondary`} aria-hidden />
@@ -1288,16 +1304,21 @@ export function App() {
         <PsDialog
           open={overlay === 'settings'}
           title="Activity Limits"
-          onClose={() => setOverlay(null)}
+          onClose={() => {
+            setOverlay(null);
+            setSettingsFocusShockerId(null);
+          }}
           wide
         >
           <ActivityLimitsSettings
             ownedShockers={ownedShockers}
             busy={busy}
+            focusShockerId={settingsFocusShockerId}
             onLoad={loadSettings}
             onSave={async (payload) => {
               await saveSettings(payload);
               setOverlay(null);
+              setSettingsFocusShockerId(null);
             }}
           />
         </PsDialog>
@@ -1305,6 +1326,11 @@ export function App() {
         <PsDialog open={overlay === 'shares'} title="Shares & links" onClose={() => setOverlay(null)} wide>
           <SharesPanel
             links={(devices?.links as Array<Record<string, unknown>>) ?? []}
+            shared={
+              Array.isArray(devices?.shared)
+                ? (devices?.shared as Array<Record<string, unknown>>)
+                : []
+            }
             shockers={ownedShockers.map((s) => ({ id: s.id, name: s.name }))}
             busy={busy}
             onCreate={async (payload) => {
@@ -1352,7 +1378,29 @@ export function App() {
               try {
                 await apiFetch('/shares', token, {
                   method: 'POST',
-                  body: JSON.stringify({ ShockerId: shockerId }),
+                  body: JSON.stringify({
+                    ShockerId: shockerId,
+                    MaxIntensity: 100,
+                    MaxDuration: 15,
+                    CanShock: true,
+                    CanVibrate: true,
+                    CanBeep: true,
+                  }),
+                });
+                await refreshDevices(token);
+              } catch (err) {
+                setActionError(err instanceof Error ? err.message : String(err));
+              } finally {
+                setBusy(false);
+              }
+            }}
+            onClaimShare={async (code) => {
+              if (!token) return;
+              setBusy(true);
+              try {
+                await apiFetch('/shares', token, {
+                  method: 'PUT',
+                  body: JSON.stringify({ code }),
                 });
                 await refreshDevices(token);
               } catch (err) {

@@ -97,6 +97,12 @@ export async function createShare(creds: PiShockCreds, payload: Record<string, u
   return request(creds, 'POST', `${PISHOCK_API}/Share`, payload);
 }
 
+/** Claim / redeem share code(s) into the signed-in account (website Friends → Shared Code). */
+export async function claimShareCodes(creds: PiShockCreds, codes: string[]) {
+  const Shares = codes.map((c) => c.trim()).filter(Boolean);
+  return request(creds, 'PUT', `${PISHOCK_API}/Share`, { Shares });
+}
+
 export async function pauseShare(creds: PiShockCreds, shareId: number, pauseState: boolean | null) {
   return request(creds, 'PATCH', `${PISHOCK_API}/Share/Pause`, {
     ShareId: shareId,
