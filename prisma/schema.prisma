@@ -1,0 +1,100 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model DiscordUser {
+  id             String          @id
+  username       String?
+  globalName     String?
+  avatar         String?
+  consentAt      DateTime?
+  /// Personal Discord Activity operate caps (own devices). Separate from PiShock device max.
+  activityMaxIntensity  Int @default(100)
+  activityMaxDurationMs Int @default(15000)
+  /// Owner kill-switch: shocker ids with emergency stop latched in. Blocks all commands until released.
+  emergencyStopShockerIds Int[] @default([])
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+  pishockSession PiShockSession?
+  commandLogs    CommandLog[]
+  activityShares ActivityShare[]
+  activityBans   ActivityBan[]   @relation("BanOwner")
+  bannedBy       ActivityBan[]   @relation("BannedUser")
+}
+
+model PiShockSession {
+  id             String     @id @default(cuid())
+  discordUserId  String     @unique
+  discordUser    DiscordUser @relation(fields: [discordUserId], references: [id], onDelete: Cascade)
+  pishockUserId  Int
+  /// AES-256-GCM ciphertext of the PiShock session token (never returned to the browser)
+  encryptedToken String
+  tokenIv        String
+  tokenAuthTag   String
+  createdAt      DateTime   @default(now())
+  updatedAt      DateTime   @updatedAt
+}
+
+model ActivityShare {
+  id            String      @id @default(cuid())
+  discordUserId String
+  discordUser   DiscordUser @relation(fields: [discordUserId], references: [id], onDelete: Cascade)
+  shockerId     Int
+  shockerName   String
+  hubClientId   String?
+  /// PiShock share code used when the executor has their own session (OperateByShare)
+  shareCode     String?
+  /// Hard ceiling from the PiShock device/share (UI red zone above this)
+  deviceMaxIntensity  Int @default(100)
+  deviceMaxDurationMs Int @default(15000)
+  enabled       Boolean     @default(true)
+  paused        Boolean     @default(false)
+  /// Discord Activity Limit — must be ≤ device max; separate from PiShock website limits
+  maxIntensity  Int         @default(100)
+  maxDurationMs Int         @default(15000)
+  canShock      Boolean     @default(true)
+  canVibrate    Boolean     @default(true)
+  canBeep       Boolean     @default(true)
+  canHold       Boolean     @default(true)
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+
+  @@unique([discordUserId, shockerId])
+  @@index([discordUserId, enabled, paused])
+}
+
+model ActivityBan {
+  id                 String      @id @default(cuid())
+  ownerDiscordUserId String
+  owner              DiscordUser @relation("BanOwner", fields: [ownerDiscordUserId], references: [id], onDelete: Cascade)
+  bannedDiscordUserId String
+  banned             DiscordUser @relation("BannedUser", fields: [bannedDiscordUserId], references: [id], onDelete: Cascade)
+  createdAt          DateTime    @default(now())
+
+  @@unique([ownerDiscordUserId, bannedDiscordUserId])
+  @@index([ownerDiscordUserId])
+}
+
+model CommandLog {
+  id                   String      @id @default(cuid())
+  discordUserId        String
+  discordUser          DiscordUser @relation(fields: [discordUserId], references: [id], onDelete: Cascade)
+  executorDiscordUserId String?
+  targetDiscordUserId  String?
+  action               String
+  shockerId            Int?
+  shareCode            String?
+  intensity            Int?
+  durationMs           Int?
+  success              Boolean
+  detail               String?
+  createdAt            DateTime    @default(now())
+
+  @@index([discordUserId, createdAt])
+  @@index([targetDiscordUserId, createdAt])
+}

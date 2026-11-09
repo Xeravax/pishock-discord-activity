@@ -1,0 +1,438 @@
+import type { FastifyPluginAsync } from 'fastify';
+import { ShockerOp } from '../../shared/constants.js';
+import type { AppEnv } from '../env.js';
+import { InstanceAuthError, verifyActivityInstance } from '../discord-instance.js';
+import { ProxyAuthError, validateDiscordProxyHeaders } from '../discord-proxy-auth.js';
+import {
+  agentNameForExecutor,
+  operateById,
+  operateByShare,
+  PiShockApiError,
+} from '../pishock/client.js';
+import { publishOperate } from '../pishock/broker.js';
+import {
+  getConsent,
+  getEmergencyStopShockerIds,
+  isEmergencyStopped,
+  isExecutorBanned,
+  listEnabledActivityShares,
+  loadPiShockCreds,
+  logCommand,
+} from '../session.js';
+import { prisma } from '../db.js';
+
+function executorLabel(user: { id: string; username?: string | null; global_name?: string | null }) {
+  const name = user.global_name || user.username || 'unknown';
+  return `${name} (${user.id})`;
+}
+
+async function auditParticipantCommand(input: {
+  executorDiscordUserId: string;
+  targetDiscordUserId: string;
+  action: string;
+  shockerId: number;
+  shareCode?: string | null;
+  intensity: number;
+  durationMs: number;
+  success: boolean;
+  detail: string;
+}) {
+  const payload = {
+    executorDiscordUserId: input.executorDiscordUserId,
+    targetDiscordUserId: input.targetDiscordUserId,
+    action: input.action,
+    shockerId: input.shockerId,
+    shareCode: input.shareCode ?? undefined,
+    intensity: input.intensity,
+    durationMs: input.durationMs,
+    success: input.success,
+    detail: input.detail,
+  };
+  // One row for the executor, one for the target — both appear in /api/logs.
+  await Promise.all([
+    logCommand({ discordUserId: input.executorDiscordUserId, ...payload }),
+    logCommand({ discordUserId: input.targetDiscordUserId, ...payload }),
+  ]);
+}
+
+export const participantRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app, opts) => {
+  app.addHook('preHandler', async (req, reply) => {
+    const path = (req.url.split('?')[0] ?? req.url);
+    if (!path.startsWith('/api/participants')) return;
+    try {
+      validateDiscordProxyHeaders(opts.env, req);
+    } catch (err) {
+      if (err instanceof ProxyAuthError) {
+        return reply.code(err.status).send({ error: err.message, code: 'PROXY_AUTH' });
+      }
+      throw err;
+    }
+  });
+
+  app.post('/api/participants/status', async (req, reply) => {
+    if (!req.hasConsent) {
+      return reply.code(403).send({ error: 'Consent required', code: 'CONSENT_REQUIRED' });
+    }
+
+    const body = req.body as { discordUserIds?: string[]; instanceId?: string };
+    const instanceId = body.instanceId ? String(body.instanceId) : '';
+    try {
+      await verifyActivityInstance(opts.env, instanceId, {
+        requireUserId: req.discordUser.id,
+        allowMissingBot: process.env.NODE_ENV !== 'production' && !opts.env.discordBotToken,
+      });
+    } catch (err) {
+      if (err instanceof InstanceAuthError) {
+        return reply.code(err.status).send({ error: err.message, code: 'INSTANCE_AUTH' });
+      }
+      throw err;
+    }
+
+    const ids = [...new Set((body.discordUserIds ?? []).map(String).filter(Boolean))].slice(0, 50);
+    const participants = [];
+    for (const id of ids) {
+      const [user, shares, bannedYou, hasSession, hasConsent] = await Promise.all([
+        prisma.discordUser.findUnique({ where: { id } }),
+        listEnabledActivityShares(id),
+        isExecutorBanned(id, req.discordUser.id),
+        loadPiShockCreds(opts.env, id).then(Boolean),
+        getConsent(id),
+      ]);
+      const eStops = new Set(await getEmergencyStopShockerIds(id));
+      const active = shares.filter(
+        (s: { enabled: boolean; paused: boolean }) => s.enabled && !s.paused,
+      );
+      const operable = active.filter((s: { shockerId: number }) => !eStops.has(s.shockerId));
+      const allEStopped = active.length > 0 && operable.length === 0;
+      // Banned executors cannot view or use the owner's shockers
+      const visibleShockers = bannedYou
+        ? []
+        : active.map(
+            (s: {
+              shockerId: number;
+              shockerName: string;
+              hubClientId: string | null;
+              deviceMaxIntensity: number;
+              deviceMaxDurationMs: number;
+              maxIntensity: number;
+              maxDurationMs: number;
+              canShock: boolean;
+              canVibrate: boolean;
+              canBeep: boolean;
+              canHold: boolean;
+              paused: boolean;
+            }) => {
+              const stopped = eStops.has(s.shockerId);
+              return {
+                shockerId: s.shockerId,
+                shockerName: s.shockerName,
+                hubClientId: s.hubClientId,
+                deviceMaxIntensity: s.deviceMaxIntensity,
+                deviceMaxDurationMs: s.deviceMaxDurationMs,
+                maxIntensity: s.maxIntensity,
+                maxDurationMs: s.maxDurationMs,
+                canShock: !stopped && s.canShock,
+                canVibrate: !stopped && s.canVibrate,
+                canBeep: !stopped && s.canBeep,
+                canHold: !stopped && s.canHold,
+                paused: s.paused,
+                emergencyStop: stopped,
+              };
+            },
+          );
+      participants.push({
+        discordUserId: id,
+        username: user?.username ?? null,
+        globalName: user?.globalName ?? null,
+        avatar: user?.avatar ?? null,
+        linked: hasSession,
+        consent: hasConsent,
+        available: hasSession && hasConsent && operable.length > 0 && !bannedYou,
+        paused:
+          shares.length > 0 &&
+          shares.every((s: { paused: boolean; enabled: boolean }) => s.paused || !s.enabled),
+        emergencyStop: !bannedYou && allEStopped,
+        bannedYou,
+        shockers: visibleShockers,
+      });
+    }
+    return { participants };
+  });
+
+  app.post('/api/participants/:targetDiscordUserId/operate', async (req, reply) => {
+    if (!req.hasConsent) {
+      return reply.code(403).send({ error: 'Consent required', code: 'CONSENT_REQUIRED' });
+    }
+    // Executor does not need a PiShock account — commands run with the target's stored session.
+
+    const targetDiscordUserId = String(
+      (req.params as { targetDiscordUserId: string }).targetDiscordUserId,
+    );
+    const body = req.body as {
+      instanceId?: string;
+      shockerId?: number;
+      operation?: 'shock' | 'vibrate' | 'beep' | 'hold' | 'warning' | 'stop' | 'end';
+      intensity?: number;
+      durationMs?: number;
+      hold?: boolean;
+      warning?: boolean;
+      clientId?: string | number;
+    };
+
+    const instanceId = body.instanceId ? String(body.instanceId) : '';
+    try {
+      await verifyActivityInstance(opts.env, instanceId, {
+        requireUserId: req.discordUser.id,
+        allowMissingBot: process.env.NODE_ENV !== 'production' && !opts.env.discordBotToken,
+      });
+    } catch (err) {
+      if (err instanceof InstanceAuthError) {
+        return reply.code(err.status).send({ error: err.message, code: 'INSTANCE_AUTH' });
+      }
+      throw err;
+    }
+
+    if (await isExecutorBanned(targetDiscordUserId, req.discordUser.id)) {
+      return reply.code(403).send({
+        error: 'This user has blocked you from controlling their device',
+        code: 'BANNED',
+      });
+    }
+
+    const targetConsent = await getConsent(targetDiscordUserId);
+    if (!targetConsent) {
+      return reply.code(403).send({ error: 'Target has not consented', code: 'TARGET_CONSENT' });
+    }
+
+    const targetCreds = await loadPiShockCreds(opts.env, targetDiscordUserId);
+    if (!targetCreds) {
+      return reply.code(404).send({ error: 'Target has no linked PiShock session', code: 'TARGET_UNLINKED' });
+    }
+
+    const shares = (await listEnabledActivityShares(targetDiscordUserId)).filter(
+      (s: { enabled: boolean; paused: boolean }) => s.enabled && !s.paused,
+    );
+    if (shares.length === 0) {
+      return reply.code(404).send({ error: 'Target is not available in this activity', code: 'TARGET_UNAVAILABLE' });
+    }
+
+    const shockerId = Number(body.shockerId ?? shares[0]!.shockerId);
+    const share = shares.find((s: { shockerId: number }) => s.shockerId === shockerId);
+    if (!share) {
+      return reply.code(404).send({ error: 'Shocker is not shared in this activity' });
+    }
+
+    const operation = body.operation;
+    if (!operation) {
+      return reply.code(400).send({ error: 'Missing operation' });
+    }
+    if (operation === 'stop') {
+      return reply
+        .code(403)
+        .send({ error: 'Emergency stop is only available to the device owner' });
+    }
+
+    // Release a press-and-hold (Tap/Remote) without owner emergency-stop latch
+    if (operation === 'end') {
+      const clientId = body.clientId ?? share.hubClientId ?? undefined;
+      if (clientId == null) {
+        return reply.code(400).send({ error: 'end requires clientId' });
+      }
+      const shareCode = share.shareCode ? String(share.shareCode) : null;
+      const executorCreds = req.pishockCreds;
+      const useSharePath = Boolean(shareCode && executorCreds);
+      const agent = agentNameForExecutor(executorLabel(req.discordUser));
+      const published = await publishOperate(useSharePath ? executorCreds! : targetCreds, {
+        clientId,
+        shockerId,
+        operation: 'e',
+        intensity: 0,
+        durationMs: 0,
+        end: true,
+        shareCode: useSharePath ? shareCode! : undefined,
+        agentName: agent,
+      });
+      await auditParticipantCommand({
+        executorDiscordUserId: req.discordUser.id,
+        targetDiscordUserId,
+        action: 'participant_end',
+        shockerId,
+        shareCode,
+        intensity: 0,
+        durationMs: 0,
+        success: published,
+        detail: JSON.stringify({
+          via: 'broker',
+          path: useSharePath ? 'executor_share' : 'target_session',
+          agent,
+          instanceId,
+        }),
+      });
+      if (!published) {
+        return reply.code(502).send({ error: 'Failed to end hold via broker' });
+      }
+      return { ok: true, via: 'broker', ended: true };
+    }
+
+    if (await isEmergencyStopped(targetDiscordUserId, shockerId)) {
+      return reply.code(423).send({
+        error: 'Owner has emergency stop engaged',
+        code: 'EMERGENCY_STOP',
+      });
+    }
+
+    let intensity = Math.max(0, Math.min(100, Number(body.intensity ?? 1)));
+    let durationMs = Math.max(16, Math.min(15_000, Number(body.durationMs ?? 300)));
+    intensity = Math.min(intensity, share.maxIntensity);
+    durationMs = Math.min(durationMs, share.maxDurationMs);
+    const hold = Boolean(body.hold) || operation === 'hold';
+    const warning = Boolean(body.warning) || operation === 'warning';
+
+    if ((operation === 'shock' || operation === 'hold') && !share.canShock) {
+      return reply.code(405).send({ error: 'Shock not allowed' });
+    }
+    if ((operation === 'vibrate' || operation === 'warning') && !share.canVibrate) {
+      return reply.code(405).send({ error: 'Vibrate not allowed' });
+    }
+    if (operation === 'beep' && !share.canBeep) {
+      return reply.code(405).send({ error: 'Beep not allowed' });
+    }
+    if (hold && !share.canHold) {
+      return reply.code(405).send({ error: 'Hold not allowed' });
+    }
+
+    const op =
+      operation === 'shock' || operation === 'hold'
+        ? ShockerOp.Shock
+        : operation === 'vibrate' || operation === 'warning'
+          ? ShockerOp.Vibrate
+          : ShockerOp.Beep;
+
+    const clientId = body.clientId ?? share.hubClientId ?? undefined;
+    const shareCode = share.shareCode ? String(share.shareCode) : null;
+    const agent = agentNameForExecutor(executorLabel(req.discordUser));
+    const executorCreds = req.pishockCreds;
+    /** Prefer OperateByShare with executor session when both share code + executor login exist */
+    const useSharePath = Boolean(shareCode && executorCreds);
+
+    try {
+      if ((hold || warning) && clientId != null) {
+        const published = await publishOperate(useSharePath ? executorCreds! : targetCreds, {
+          clientId,
+          shockerId,
+          operation: op,
+          intensity: Math.max(1, intensity),
+          durationMs,
+          hold,
+          warning,
+          end: false,
+          shareCode: useSharePath ? shareCode! : undefined,
+          agentName: agent,
+        });
+        if (published) {
+          await auditParticipantCommand({
+            executorDiscordUserId: req.discordUser.id,
+            targetDiscordUserId,
+            action: `participant_${operation}`,
+            shockerId,
+            shareCode,
+            intensity,
+            durationMs,
+            success: true,
+            detail: JSON.stringify({
+              via: 'broker',
+              path: useSharePath ? 'executor_share' : 'target_session',
+              agent,
+              executor: req.discordUser.id,
+              target: targetDiscordUserId,
+              instanceId,
+            }),
+          });
+          return { ok: true, via: 'broker', path: useSharePath ? 'executor_share' : 'target_session' };
+        }
+      }
+
+      if (useSharePath) {
+        await operateByShare(
+          executorCreds!,
+          shareCode!,
+          op,
+          Math.max(1, intensity),
+          durationMs,
+          agent,
+        );
+        await auditParticipantCommand({
+          executorDiscordUserId: req.discordUser.id,
+          targetDiscordUserId,
+          action: `participant_${operation}`,
+          shockerId,
+          shareCode,
+          intensity,
+          durationMs,
+          success: true,
+          detail: JSON.stringify({
+            via: 'operateByShare',
+            path: 'executor_share',
+            agent,
+            executor: req.discordUser.id,
+            target: targetDiscordUserId,
+            instanceId,
+          }),
+        });
+        return { ok: true, via: 'operateByShare', path: 'executor_share' };
+      }
+
+      await operateById(
+        targetCreds,
+        shockerId,
+        op,
+        Math.max(1, intensity),
+        durationMs,
+        agent,
+      );
+
+      await auditParticipantCommand({
+        executorDiscordUserId: req.discordUser.id,
+        targetDiscordUserId,
+        action: `participant_${operation}`,
+        shockerId,
+        shareCode,
+        intensity,
+        durationMs,
+        success: true,
+        detail: JSON.stringify({
+          via: 'operateById',
+          path: 'target_session',
+          agent,
+          executor: req.discordUser.id,
+          target: targetDiscordUserId,
+          instanceId,
+          note: 'Executor has no PiShock session; used target credentials with attributed AgentName',
+        }),
+      });
+      return { ok: true, via: 'operateById', path: 'target_session' };
+    } catch (err) {
+      await auditParticipantCommand({
+        executorDiscordUserId: req.discordUser.id,
+        targetDiscordUserId,
+        action: `participant_${operation}`,
+        shockerId,
+        shareCode,
+        intensity,
+        durationMs,
+        success: false,
+        detail: JSON.stringify({
+          error: err instanceof Error ? err.message : String(err),
+          agent,
+          executor: req.discordUser.id,
+          target: targetDiscordUserId,
+          instanceId,
+        }),
+      });
+      if (err instanceof PiShockApiError) {
+        return reply.code(err.status).send({ error: err.message, body: err.body });
+      }
+      throw err;
+    }
+  });
+};
