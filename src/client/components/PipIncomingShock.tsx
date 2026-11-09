@@ -26,14 +26,10 @@ function formatDuration(ms: number): string {
   return Number.isInteger(s) ? `${s}s` : `${s.toFixed(1)}s`;
 }
 
-/** Ultra-compact PIP view: who last hit you + intensity/duration */
+/** PIP-only surface: avatar + last action intensity/duration. No chrome. */
 export function PipIncomingShock({ hit }: Props) {
   if (!hit) {
-    return (
-      <div className="pip-incoming" role="status">
-        <div className="pip-incoming__empty">Waiting for shocks…</div>
-      </div>
-    );
+    return <div className="pip-incoming" aria-hidden />;
   }
 
   return (

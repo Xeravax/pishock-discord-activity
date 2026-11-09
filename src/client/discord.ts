@@ -85,15 +85,36 @@ export async function bootstrapDiscord(
     // optional
   }
 
+  const applyLayout = (layoutMode: number) => {
+    onLayout(layoutMode === Common.LayoutModeTypeObject.PIP);
+  };
+
+  // Prefer compat helper (covers old ACTIVITY_PIP_MODE_UPDATE + new layout events)
   try {
     const sdkAny = discordSdk as DiscordSDK & {
       subscribeToLayoutModeUpdatesCompat?: (cb: (update: { layout_mode: number }) => void) => void;
     };
-    sdkAny.subscribeToLayoutModeUpdatesCompat?.((update) => {
-      onLayout(update.layout_mode === Common.LayoutModeTypeObject.PIP);
+    if (typeof sdkAny.subscribeToLayoutModeUpdatesCompat === 'function') {
+      sdkAny.subscribeToLayoutModeUpdatesCompat((update) => applyLayout(update.layout_mode));
+    }
+  } catch {
+    // optional
+  }
+
+  // Also subscribe to the modern layout event directly
+  try {
+    void discordSdk.subscribe(Events.ACTIVITY_LAYOUT_MODE_UPDATE, (update) => {
+      applyLayout(update.layout_mode);
     });
   } catch {
     // optional
+  }
+
+  // Keep the PIP surface alive so last-hit updates (WS/logs) still arrive
+  try {
+    await discordSdk.commands.setConfig({ use_interactive_pip: true });
+  } catch {
+    // optional / unsupported on some clients
   }
 
   report(38, 'Authorizing with Discord…');

@@ -614,6 +614,15 @@ export function App() {
     return () => window.clearInterval(id);
   }, [pip, token, me?.consent, refreshLogs]);
 
+  useEffect(() => {
+    document.documentElement.classList.toggle('pip-mode', pip);
+    document.body.classList.toggle('pip-mode', pip);
+    return () => {
+      document.documentElement.classList.remove('pip-mode');
+      document.body.classList.remove('pip-mode');
+    };
+  }, [pip]);
+
   const friendBlocked = Boolean(
     friendsMode &&
       selectedTargetIds.length > 0 &&
@@ -1089,12 +1098,9 @@ export function App() {
       setOverlay(next);
     };
 
+    // PIP: nothing but the last hit — no header, menu, safety bar, or controls
     if (pip) {
-      return (
-        <div className="official-activity-root pip-shell">
-          <PipIncomingShock hit={lastIncoming} />
-        </div>
-      );
+      return <PipIncomingShock hit={lastIncoming} />;
     }
 
     return (

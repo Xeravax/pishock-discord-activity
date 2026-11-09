@@ -290,7 +290,7 @@ export function DemoApp() {
       ) : null}
 
       {screen === 'pip' ? (
-        <div className="official-activity-root pip-shell" style={{ height: 180, width: 320, margin: 16 }}>
+        <div style={{ height: 160, width: 280, margin: 16, border: '1px solid #333' }}>
           <PipIncomingShock
             hit={{
               executorDiscordUserId: '111',

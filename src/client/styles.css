@@ -206,24 +206,35 @@ body,
   max-width: 168px;
 }
 
-.pip-shell {
-  min-height: 100vh;
-  min-height: 100dvh;
-  display: flex;
-  align-items: stretch;
-  justify-content: stretch;
-  background: #121212;
+html.pip-mode,
+html.pip-mode body,
+html.pip-mode #root {
+  margin: 0 !important;
+  padding: 0 !important;
+  width: 100% !important;
+  height: 100% !important;
+  overflow: hidden !important;
+  background: #121212 !important;
+}
+
+html.pip-mode #root > * {
+  min-height: 100% !important;
+  height: 100% !important;
 }
 
 .pip-incoming {
-  flex: 1;
+  width: 100%;
+  height: 100%;
+  min-height: 100vh;
+  min-height: 100dvh;
   display: flex;
   flex-direction: row;
   align-items: center;
   justify-content: center;
   gap: 10px;
-  padding: 8px 10px;
+  padding: 6px 8px;
   box-sizing: border-box;
+  margin: 0;
   background: #121212;
   color: #e8e8e8;
   overflow: hidden;
