@@ -91,6 +91,27 @@ function intensityLabel(random: boolean, value: number, min: number, max: number
   return `${Math.min(min, max)}-${Math.max(min, max)}`;
 }
 
+function nudgeIntensity(input: {
+  random: boolean;
+  value: number;
+  min: number;
+  max: number;
+  cap: number;
+  delta: number;
+  setValue: (n: number) => void;
+  setMin?: (n: number) => void;
+  setMax?: (n: number) => void;
+}) {
+  const lo = clamp(Math.min(input.min, input.max), 0, input.cap);
+  const hi = clamp(Math.max(input.min, input.max), 0, input.cap);
+  if (!input.random) {
+    input.setValue(clamp(input.value + input.delta, 0, input.cap));
+    return;
+  }
+  if (input.delta > 0) input.setMax?.(clamp(hi + input.delta, lo, input.cap));
+  else input.setMin?.(clamp(lo + input.delta, 0, hi));
+}
+
 /** Exact Quasar DOM structure + classes from pishock.com/#/control */
 export function OfficialController({
   hub,
@@ -138,9 +159,6 @@ export function OfficialController({
   const [shockMax, setShockMax] = useState(25);
   const [vibIntensity, setVibIntensity] = useState(69);
   const [vibDurationMs, setVibDurationMs] = useState(1000);
-  const [vibRandom, setVibRandom] = useState(false);
-  const [vibMin, setVibMin] = useState(1);
-  const [vibMax, setVibMax] = useState(69);
   const [durationMenu, setDurationMenu] = useState<'shock' | 'vibrate' | null>(null);
   const [warningOn, setWarningOn] = useState(false);
   /** Use Mode: press-and-hold Operate/Beep until release (official Remote-style). */
@@ -176,8 +194,6 @@ export function OfficialController({
     setVibIntensity((v) => clamp(v, 0, maxInt));
     setShockMin((v) => clamp(v, 0, maxInt));
     setShockMax((v) => clamp(v, 0, maxInt));
-    setVibMin((v) => clamp(v, 0, maxInt));
-    setVibMax((v) => clamp(v, 0, maxInt));
     setShockDurationMs((v) => clamp(v, 16, maxDur));
     setVibDurationMs((v) => clamp(v, 16, maxDur));
   }, [maxInt, maxDur, activeId]);
@@ -197,11 +213,6 @@ export function OfficialController({
     shockRandom
       ? Math.max(1, rollIntensity(shockMin, Math.min(shockMax, maxInt)))
       : Math.max(1, shockIntensity || 1);
-
-  const resolveVibIntensity = () =>
-    vibRandom
-      ? Math.max(1, rollIntensity(vibMin, Math.min(vibMax, maxInt)))
-      : Math.max(1, vibIntensity || 1);
 
   useEffect(() => {
     if (eStop) {
@@ -557,127 +568,170 @@ export function OfficialController({
                               <div className="flex row no-wrap justify-center q-mt-md">
                                 {/* SHOCK */}
                                 <div className="flex col-4 justify-end">
-                                  <div className="border-color-secondary q-card q-card--dark q-dark q-card--bordered">
-                                    <div className="q-item__label text-center bg-dark text-secondary q-mb-xs border-color-secondary q-item__label--overline text-overline">
-                                      SHOCK
-                                    </div>
-                                    <div className="q-card__section q-card__section--horiz row no-wrap">
-                                      <div className="column justify-between items-center q-ml-xs">
-                                        <div className="flex column q-gutter-sm">
-                                          <MetricStack
-                                            icon="mdi-flash"
-                                            value={intensityLabel(
-                                              shockRandom,
-                                              shockIntensity,
-                                              shockMin,
-                                              shockMax,
-                                            )}
-                                            label={tapMode ? 'Hold' : 'Operate'}
-                                            filled
-                                            active={holdingOp === 'shock'}
-                                            disabled={
-                                              (busy && !holdingOp) ||
-                                              controlsLocked ||
-                                              !active.canShock ||
-                                              !!active.paused
-                                            }
-                                            onClick={
-                                              tapMode
-                                                ? undefined
-                                                : () =>
-                                                    fire(
-                                                      'shock',
-                                                      resolveShockIntensity(),
-                                                      shockDurationMs,
-                                                    )
-                                            }
-                                            onPointerDown={
-                                              tapMode
-                                                ? (ev) =>
-                                                    beginHold(
-                                                      'shock',
-                                                      resolveShockIntensity(),
-                                                      ev,
-                                                    )
-                                                : undefined
-                                            }
-                                            onPointerUp={tapMode ? () => endHold() : undefined}
-                                            onPointerCancel={tapMode ? () => endHold() : undefined}
-                                          />
-                                          <DurationMetric
-                                            valueMs={shockDurationMs}
-                                            maxMs={maxDur}
-                                            open={durationMenu === 'shock'}
-                                            disabled={tapMode}
-                                            side="right"
-                                            onToggle={() =>
-                                              setDurationMenu((m) =>
-                                                m === 'shock' ? null : 'shock',
-                                              )
-                                            }
-                                            onSelect={(ms) => {
-                                              setShockDurationMs(ms);
-                                              setDurationMenu(null);
-                                            }}
-                                          />
-                                        </div>
-                                        <div className="q-mt-sm q-mb-xs flex column">
-                                          <button
-                                            type="button"
-                                            className="q-btn q-btn-item non-selectable no-outline q-btn--push q-btn--round text-accent q-btn--actionable q-focusable q-hoverable q-btn--wrap"
-                                            disabled={controlsLocked}
-                                            onClick={() => setWarningOn((v) => !v)}
-                                          >
-                                            <span className="q-btn__wrapper col row q-anchor--skip">
-                                              <span className="q-btn__content text-center col items-center q-anchor--skip justify-center column">
-                                                <i className="q-icon mdi mdi-car-brake-alert" aria-hidden />
-                                                <span className="block">{warningOn ? 'ON' : 'None'}</span>
+                                  <div className="official-panel-shell">
+                                    <div className="border-color-secondary q-card q-card--dark q-dark q-card--bordered">
+                                      <div className="q-item__label text-center bg-dark text-secondary q-mb-xs border-color-secondary q-item__label--overline text-overline">
+                                        SHOCK
+                                      </div>
+                                      <div className="q-card__section q-card__section--horiz row no-wrap">
+                                        <div className="column justify-between items-center q-ml-xs">
+                                          <div className="flex column q-gutter-sm">
+                                            <MetricStack
+                                              icon="mdi-flash"
+                                              value={intensityLabel(
+                                                shockRandom,
+                                                shockIntensity,
+                                                shockMin,
+                                                shockMax,
+                                              )}
+                                              label={tapMode ? 'Hold' : 'Operate'}
+                                              filled
+                                              active={holdingOp === 'shock'}
+                                              disabled={
+                                                (busy && !holdingOp) ||
+                                                controlsLocked ||
+                                                !active.canShock ||
+                                                !!active.paused
+                                              }
+                                              onClick={
+                                                tapMode
+                                                  ? undefined
+                                                  : () =>
+                                                      fire(
+                                                        'shock',
+                                                        resolveShockIntensity(),
+                                                        shockDurationMs,
+                                                      )
+                                              }
+                                              onPointerDown={
+                                                tapMode
+                                                  ? (ev) =>
+                                                      beginHold(
+                                                        'shock',
+                                                        resolveShockIntensity(),
+                                                        ev,
+                                                      )
+                                                  : undefined
+                                              }
+                                              onPointerUp={tapMode ? () => endHold() : undefined}
+                                              onPointerCancel={
+                                                tapMode ? () => endHold() : undefined
+                                              }
+                                            />
+                                            <DurationMetric
+                                              valueMs={shockDurationMs}
+                                              maxMs={maxDur}
+                                              open={durationMenu === 'shock'}
+                                              disabled={tapMode}
+                                              side="right"
+                                              onToggle={() =>
+                                                setDurationMenu((m) =>
+                                                  m === 'shock' ? null : 'shock',
+                                                )
+                                              }
+                                              onSelect={(ms) => {
+                                                setShockDurationMs(ms);
+                                                setDurationMenu(null);
+                                              }}
+                                            />
+                                          </div>
+                                          <div className="q-mt-sm q-mb-xs flex column">
+                                            <button
+                                              type="button"
+                                              className="q-btn q-btn-item non-selectable no-outline q-btn--push q-btn--round text-accent q-btn--actionable q-focusable q-hoverable q-btn--wrap"
+                                              disabled={controlsLocked}
+                                              onClick={() => setWarningOn((v) => !v)}
+                                            >
+                                              <span className="q-btn__wrapper col row q-anchor--skip">
+                                                <span className="q-btn__content text-center col items-center q-anchor--skip justify-center column">
+                                                  <i
+                                                    className="q-icon mdi mdi-car-brake-alert"
+                                                    aria-hidden
+                                                  />
+                                                  <span className="block">
+                                                    {warningOn ? 'ON' : 'None'}
+                                                  </span>
+                                                </span>
                                               </span>
-                                            </span>
-                                          </button>
-                                          <div
-                                            className="q-chip row inline no-wrap items-center text-center no-margin bg-secondary text-dark q-chip--colored q-chip--dense q-chip--square"
-                                            style={{ fontSize: 10 }}
-                                          >
-                                            <div className="q-chip__content col row no-wrap items-center q-anchor--skip">
-                                              <div className="full-width text-center text-caption">
-                                                <span>Warning</span>
+                                            </button>
+                                            <div
+                                              className="q-chip row inline no-wrap items-center text-center no-margin bg-secondary text-dark q-chip--colored q-chip--dense q-chip--square"
+                                              style={{ fontSize: 10 }}
+                                            >
+                                              <div className="q-chip__content col row no-wrap items-center q-anchor--skip">
+                                                <div className="full-width text-center text-caption">
+                                                  <span>Warning</span>
+                                                </div>
                                               </div>
                                             </div>
                                           </div>
                                         </div>
+                                        <VerticalQuasarSlider
+                                          value={shockIntensity}
+                                          minValue={shockMin}
+                                          maxValue={shockMax}
+                                          random={shockRandom}
+                                          deviceMax={deviceMaxInt}
+                                          activityMax={maxInt}
+                                          onChange={setShockIntensity}
+                                          onChangeMin={setShockMin}
+                                          onChangeMax={setShockMax}
+                                          disabled={controlsLocked || !active.canShock}
+                                        />
                                       </div>
-                                      <VerticalQuasarSlider
-                                        value={shockIntensity}
-                                        minValue={shockMin}
-                                        maxValue={shockMax}
-                                        random={shockRandom}
-                                        deviceMax={deviceMaxInt}
-                                        activityMax={maxInt}
-                                        onChange={setShockIntensity}
-                                        onChangeMin={setShockMin}
-                                        onChangeMax={setShockMax}
-                                        onToggleRandom={() => {
-                                          setShockRandom((on) => {
-                                            if (!on) {
-                                              const base = Math.max(1, shockIntensity || 1);
-                                              setShockMin(clamp(Math.max(1, base - 10), 0, maxInt));
-                                              setShockMax(clamp(base, 0, maxInt));
-                                            } else {
-                                              setShockIntensity(
-                                                clamp(
-                                                  Math.round((shockMin + shockMax) / 2),
-                                                  0,
-                                                  maxInt,
-                                                ),
-                                              );
-                                            }
-                                            return !on;
-                                          });
-                                        }}
-                                        disabled={controlsLocked || !active.canShock}
-                                      />
                                     </div>
+                                    <IntensityEdgeRail
+                                      side="right"
+                                      disabled={controlsLocked || !active.canShock}
+                                      random={shockRandom}
+                                      showRandom
+                                      onUp={() =>
+                                        nudgeIntensity({
+                                          random: shockRandom,
+                                          value: shockIntensity,
+                                          min: shockMin,
+                                          max: shockMax,
+                                          cap: maxInt,
+                                          delta: 1,
+                                          setValue: setShockIntensity,
+                                          setMin: setShockMin,
+                                          setMax: setShockMax,
+                                        })
+                                      }
+                                      onDown={() =>
+                                        nudgeIntensity({
+                                          random: shockRandom,
+                                          value: shockIntensity,
+                                          min: shockMin,
+                                          max: shockMax,
+                                          cap: maxInt,
+                                          delta: -1,
+                                          setValue: setShockIntensity,
+                                          setMin: setShockMin,
+                                          setMax: setShockMax,
+                                        })
+                                      }
+                                      onToggleRandom={() => {
+                                        setShockRandom((on) => {
+                                          if (!on) {
+                                            const base = Math.max(1, shockIntensity || 1);
+                                            setShockMin(
+                                              clamp(Math.max(1, base - 10), 0, maxInt),
+                                            );
+                                            setShockMax(clamp(base, 0, maxInt));
+                                          } else {
+                                            setShockIntensity(
+                                              clamp(
+                                                Math.round((shockMin + shockMax) / 2),
+                                                0,
+                                                maxInt,
+                                              ),
+                                            );
+                                          }
+                                          return !on;
+                                        });
+                                      }}
+                                    />
                                   </div>
                                 </div>
 
@@ -761,100 +815,102 @@ export function OfficialController({
 
                                 {/* VIBRATE */}
                                 <div className="flex col-4 justify-start">
-                                  <div className="border-color-secondary q-card q-card--dark q-dark q-card--bordered">
-                                    <div className="q-item__label text-center bg-dark text-secondary q-mb-xs q-item__label--overline text-overline">
-                                      VIBRATE
-                                    </div>
-                                    <div className="q-card__section q-card__section--horiz row no-wrap">
-                                      <VerticalQuasarSlider
-                                        value={vibIntensity}
-                                        minValue={vibMin}
-                                        maxValue={vibMax}
-                                        random={vibRandom}
-                                        deviceMax={deviceMaxInt}
-                                        activityMax={maxInt}
-                                        onChange={setVibIntensity}
-                                        onChangeMin={setVibMin}
-                                        onChangeMax={setVibMax}
-                                        onToggleRandom={() => {
-                                          setVibRandom((on) => {
-                                            if (!on) {
-                                              const base = Math.max(1, vibIntensity || 1);
-                                              setVibMin(clamp(Math.max(1, base - 10), 0, maxInt));
-                                              setVibMax(clamp(base, 0, maxInt));
-                                            } else {
-                                              setVibIntensity(
-                                                clamp(
-                                                  Math.round((vibMin + vibMax) / 2),
-                                                  0,
-                                                  maxInt,
-                                                ),
-                                              );
-                                            }
-                                            return !on;
-                                          });
-                                        }}
-                                        disabled={controlsLocked || !active.canVibrate}
-                                      />
-                                      <div className="column justify-between items-center q-mr-xs">
-                                        <div className="flex column q-gutter-sm">
-                                          <MetricStack
-                                            icon="mdi-vibrate"
-                                            value={intensityLabel(
-                                              vibRandom,
-                                              vibIntensity,
-                                              vibMin,
-                                              vibMax,
-                                            )}
-                                            label={tapMode ? 'Hold' : 'Operate'}
-                                            filled
-                                            active={holdingOp === 'vibrate'}
-                                            disabled={
-                                              (busy && !holdingOp) ||
-                                              controlsLocked ||
-                                              !active.canVibrate ||
-                                              !!active.paused
-                                            }
-                                            onClick={
-                                              tapMode
-                                                ? undefined
-                                                : () =>
-                                                    fire(
-                                                      'vibrate',
-                                                      resolveVibIntensity(),
-                                                      vibDurationMs,
-                                                      { hold },
-                                                    )
-                                            }
-                                            onPointerDown={
-                                              tapMode
-                                                ? (ev) =>
-                                                    beginHold(
-                                                      'vibrate',
-                                                      resolveVibIntensity(),
-                                                      ev,
-                                                    )
-                                                : undefined
-                                            }
-                                            onPointerUp={tapMode ? () => endHold() : undefined}
-                                            onPointerCancel={tapMode ? () => endHold() : undefined}
-                                          />
-                                          <DurationMetric
-                                            valueMs={vibDurationMs}
-                                            maxMs={maxDur}
-                                            open={durationMenu === 'vibrate'}
-                                            disabled={tapMode}
-                                            side="left"
-                                            onToggle={() =>
-                                              setDurationMenu((m) =>
-                                                m === 'vibrate' ? null : 'vibrate',
-                                              )
-                                            }
-                                            onSelect={(ms) => {
-                                              setVibDurationMs(ms);
-                                              setDurationMenu(null);
-                                            }}
-                                          />
+                                  <div className="official-panel-shell">
+                                    <IntensityEdgeRail
+                                      side="left"
+                                      disabled={controlsLocked || !active.canVibrate}
+                                      onUp={() =>
+                                        nudgeIntensity({
+                                          random: false,
+                                          value: vibIntensity,
+                                          min: 0,
+                                          max: vibIntensity,
+                                          cap: maxInt,
+                                          delta: 1,
+                                          setValue: setVibIntensity,
+                                        })
+                                      }
+                                      onDown={() =>
+                                        nudgeIntensity({
+                                          random: false,
+                                          value: vibIntensity,
+                                          min: 0,
+                                          max: vibIntensity,
+                                          cap: maxInt,
+                                          delta: -1,
+                                          setValue: setVibIntensity,
+                                        })
+                                      }
+                                    />
+                                    <div className="border-color-secondary q-card q-card--dark q-dark q-card--bordered">
+                                      <div className="q-item__label text-center bg-dark text-secondary q-mb-xs q-item__label--overline text-overline">
+                                        VIBRATE
+                                      </div>
+                                      <div className="q-card__section q-card__section--horiz row no-wrap">
+                                        <VerticalQuasarSlider
+                                          value={vibIntensity}
+                                          deviceMax={deviceMaxInt}
+                                          activityMax={maxInt}
+                                          onChange={setVibIntensity}
+                                          disabled={controlsLocked || !active.canVibrate}
+                                        />
+                                        <div className="column justify-between items-center q-mr-xs">
+                                          <div className="flex column q-gutter-sm">
+                                            <MetricStack
+                                              icon="mdi-vibrate"
+                                              value={String(vibIntensity)}
+                                              label={tapMode ? 'Hold' : 'Operate'}
+                                              filled
+                                              active={holdingOp === 'vibrate'}
+                                              disabled={
+                                                (busy && !holdingOp) ||
+                                                controlsLocked ||
+                                                !active.canVibrate ||
+                                                !!active.paused
+                                              }
+                                              onClick={
+                                                tapMode
+                                                  ? undefined
+                                                  : () =>
+                                                      fire(
+                                                        'vibrate',
+                                                        Math.max(1, vibIntensity || 1),
+                                                        vibDurationMs,
+                                                        { hold },
+                                                      )
+                                              }
+                                              onPointerDown={
+                                                tapMode
+                                                  ? (ev) =>
+                                                      beginHold(
+                                                        'vibrate',
+                                                        Math.max(1, vibIntensity || 1),
+                                                        ev,
+                                                      )
+                                                  : undefined
+                                              }
+                                              onPointerUp={tapMode ? () => endHold() : undefined}
+                                              onPointerCancel={
+                                                tapMode ? () => endHold() : undefined
+                                              }
+                                            />
+                                            <DurationMetric
+                                              valueMs={vibDurationMs}
+                                              maxMs={maxDur}
+                                              open={durationMenu === 'vibrate'}
+                                              disabled={tapMode}
+                                              side="left"
+                                              onToggle={() =>
+                                                setDurationMenu((m) =>
+                                                  m === 'vibrate' ? null : 'vibrate',
+                                                )
+                                              }
+                                              onSelect={(ms) => {
+                                                setVibDurationMs(ms);
+                                                setDurationMenu(null);
+                                              }}
+                                            />
+                                          </div>
                                         </div>
                                       </div>
                                     </div>
@@ -1207,6 +1263,60 @@ function CenterControl({
   );
 }
 
+function IntensityEdgeRail({
+  side,
+  disabled,
+  random,
+  showRandom,
+  onUp,
+  onDown,
+  onToggleRandom,
+}: {
+  side: 'left' | 'right';
+  disabled?: boolean;
+  random?: boolean;
+  showRandom?: boolean;
+  onUp: () => void;
+  onDown: () => void;
+  onToggleRandom?: () => void;
+}) {
+  return (
+    <div className={`official-edge-rail official-edge-rail--${side}`} aria-hidden={false}>
+      <button
+        type="button"
+        className="official-edge-btn"
+        disabled={disabled}
+        aria-label="Increase intensity"
+        onClick={onUp}
+      >
+        <i className="q-icon mdi mdi-chevron-double-up" aria-hidden />
+      </button>
+      {showRandom ? (
+        <button
+          type="button"
+          className={`official-edge-btn official-edge-btn--dice${random ? ' is-active' : ''}`}
+          disabled={disabled}
+          aria-pressed={random}
+          aria-label="Random intensity"
+          title="Random intensity"
+          onClick={onToggleRandom}
+        >
+          <i className="q-icon mdi mdi-dice-multiple" aria-hidden />
+        </button>
+      ) : null}
+      <button
+        type="button"
+        className="official-edge-btn"
+        disabled={disabled}
+        aria-label="Decrease intensity"
+        onClick={onDown}
+      >
+        <i className="q-icon mdi mdi-chevron-double-down" aria-hidden />
+      </button>
+    </div>
+  );
+}
+
 function VerticalQuasarSlider({
   value,
   minValue = 0,
@@ -1217,7 +1327,6 @@ function VerticalQuasarSlider({
   onChange,
   onChangeMin,
   onChangeMax,
-  onToggleRandom,
   disabled,
 }: {
   value: number;
@@ -1231,7 +1340,6 @@ function VerticalQuasarSlider({
   onChange: (n: number) => void;
   onChangeMin?: (n: number) => void;
   onChangeMax?: (n: number) => void;
-  onToggleRandom?: () => void;
   disabled?: boolean;
 }) {
   const trackRef = useRef<HTMLDivElement | null>(null);
@@ -1322,16 +1430,7 @@ function VerticalQuasarSlider({
       className="q-card__section q-card__section--vert official-slider-col"
       style={{ padding: '0px 5px', marginLeft: 5, position: 'relative' }}
     >
-      <div className="flex column items-center q-gutter-xs justify-between">
-        <button
-          type="button"
-          className="official-slider-step"
-          disabled={disabled}
-          aria-label="Increase intensity"
-          onClick={() => nudge(1)}
-        >
-          <i className="q-icon mdi mdi-chevron-up" aria-hidden />
-        </button>
+      <div className="flex column items-center q-gutter-sm justify-between">
         <div
           role="slider"
           aria-valuemin={0}
@@ -1439,26 +1538,7 @@ function VerticalQuasarSlider({
             </div>
           </div>
         </div>
-        <button
-          type="button"
-          className="official-slider-step"
-          disabled={disabled}
-          aria-label="Decrease intensity"
-          onClick={() => nudge(-1)}
-        >
-          <i className="q-icon mdi mdi-chevron-down" aria-hidden />
-        </button>
-        <button
-          type="button"
-          className={`official-random-toggle${random ? ' is-active' : ''}`}
-          disabled={disabled || !onToggleRandom}
-          aria-pressed={random}
-          aria-label="Random intensity"
-          title="Random intensity"
-          onClick={() => onToggleRandom?.()}
-        >
-          <i className="q-icon mdi mdi-dice-multiple" aria-hidden />
-        </button>
+        <i className="q-icon mdi mdi-speedometer" style={{ fontSize: 24 }} aria-hidden />
       </div>
     </div>
   );

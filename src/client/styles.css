@@ -405,43 +405,63 @@ body,
   box-sizing: content-box;
 }
 
-.official-slider-step,
-.official-random-toggle {
+/* Official remote: step/random buttons mesh into the SHOCK/VIBRATE card border */
+.official-panel-shell {
+  position: relative;
+  display: inline-flex;
+  align-items: stretch;
+}
+
+.official-panel-shell > .q-card {
+  overflow: visible;
+}
+
+.official-edge-rail {
+  position: absolute;
+  top: 50%;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  transform: translateY(-50%);
+}
+
+.official-edge-rail--right {
+  right: 0;
+  transform: translate(50%, -50%);
+}
+
+.official-edge-rail--left {
+  left: 0;
+  transform: translate(-50%, -50%);
+}
+
+.official-edge-btn {
   appearance: none;
-  border: none;
-  background: transparent;
-  color: #79c6db;
-  cursor: pointer;
+  width: 22px;
+  height: 22px;
   padding: 0;
-  line-height: 1;
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  border: 1px solid #79c6db;
+  background: #121212;
+  color: #79c6db;
+  cursor: pointer;
+  line-height: 1;
+  border-radius: 2px;
 }
 
-.official-slider-step:disabled,
-.official-random-toggle:disabled {
+.official-edge-btn .q-icon {
+  font-size: 14px;
+}
+
+.official-edge-btn:disabled {
   opacity: 0.35;
   cursor: not-allowed;
 }
 
-.official-slider-step .q-icon {
-  font-size: 22px;
-}
-
-.official-random-toggle {
-  margin-top: 2px;
-  width: 28px;
-  height: 28px;
-  border-radius: 50%;
-  border: 1px solid #79c6db;
-}
-
-.official-random-toggle .q-icon {
-  font-size: 16px;
-}
-
-.official-random-toggle.is-active {
+.official-edge-btn--dice.is-active {
   background: #79c6db;
   color: #121212;
 }
