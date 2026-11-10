@@ -25,8 +25,8 @@ docker-compose*.yml
 TestResults/
 sdk-bundle/node_modules/
 
-# local data
-data
+# local data (repo root only — src/**/Data is EF Core source)
+/data
 *.db
 *.db-journal
 *.log

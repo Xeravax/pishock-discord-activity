@@ -15,7 +15,8 @@ TestResults/
 
 ## Optional local artifacts
 version.json
-data/
+# Repo-root Postgres volume only. Do not ignore src/**/Data (EF Core).
+/data/
 *.db
 *.db-journal
 
