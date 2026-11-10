@@ -98,6 +98,68 @@ export function assertModeAllowed(
   }
 }
 
+/** Reject raw body values that exceed the resolved policy ceilings (pre-clamp). */
+export function assertWithinCeilings(
+  intensity: unknown,
+  durationMs: unknown,
+  maxIntensity: number,
+  maxDurationMs: number,
+): void {
+  if (Number(intensity ?? 1) > maxIntensity) {
+    throw new OperatePolicyError('Intensity exceeds allowed maximum', 412, 'INTENSITY_CEILING');
+  }
+  if (Number(durationMs ?? 300) > maxDurationMs) {
+    throw new OperatePolicyError('Duration exceeds allowed maximum', 416, 'DURATION_CEILING');
+  }
+}
+
+/** Fields read from ActivityShare rows during operate policy resolution. */
+export type ActivitySharePolicyRow = {
+  discordUserId: string;
+  shockerId: number;
+  shareCode: string | null;
+  hubClientId: string | null;
+  deviceMaxIntensity: number;
+  deviceMaxDurationMs: number;
+  enabled: boolean;
+  paused: boolean;
+  maxIntensity: number;
+  maxDurationMs: number;
+  canShock: boolean;
+  canVibrate: boolean;
+  canBeep: boolean;
+  canHold: boolean;
+};
+
+export type OperatePolicyDeps = {
+  getPersonalActivityLimits: (discordUserId: string) => Promise<{
+    activityMaxIntensity: number;
+    activityMaxDurationMs: number;
+  }>;
+  fetchControlSnapshot: (creds: PiShockCreds) => Promise<ControlSnapshot>;
+  findActivityShareByCode: (shareCode: string) => Promise<ActivitySharePolicyRow | null>;
+  findActivityShareByShocker: (
+    discordUserId: string,
+    shockerId: number,
+  ) => Promise<ActivitySharePolicyRow | null>;
+  getConsent: (discordUserId: string) => Promise<boolean>;
+  isExecutorBanned: (
+    ownerDiscordUserId: string,
+    executorDiscordUserId: string,
+  ) => Promise<boolean>;
+  isEmergencyStopped: (discordUserId: string, shockerId: number) => Promise<boolean>;
+};
+
+const defaultOperatePolicyDeps: OperatePolicyDeps = {
+  getPersonalActivityLimits,
+  fetchControlSnapshot,
+  findActivityShareByCode,
+  findActivityShareByShocker,
+  getConsent,
+  isExecutorBanned,
+  isEmergencyStopped,
+};
+
 function numField(row: Record<string, unknown>, ...keys: string[]): number | null {
   for (const key of keys) {
     const v = row[key];
@@ -189,20 +251,21 @@ export async function resolveOwnOperatePolicy(
   callerDiscordUserId: string,
   creds: PiShockCreds,
   input: { shockerId?: number; shareCode?: string },
+  deps: OperatePolicyDeps = defaultOperatePolicyDeps,
 ): Promise<ResolvedOperatePolicy> {
-  const personal = await getPersonalActivityLimits(callerDiscordUserId);
-  const snapshot = await fetchControlSnapshot(creds);
+  const personal = await deps.getPersonalActivityLimits(callerDiscordUserId);
+  const snapshot = await deps.fetchControlSnapshot(creds);
 
   if (input.shareCode) {
     const code = String(input.shareCode).trim();
-    const registered = await findActivityShareByCode(code);
+    const registered = await deps.findActivityShareByCode(code);
 
     if (registered) {
       if (registered.discordUserId !== callerDiscordUserId) {
-        if (!(await getConsent(registered.discordUserId))) {
+        if (!(await deps.getConsent(registered.discordUserId))) {
           throw new OperatePolicyError('Target has not consented', 403, 'TARGET_CONSENT');
         }
-        if (await isExecutorBanned(registered.discordUserId, callerDiscordUserId)) {
+        if (await deps.isExecutorBanned(registered.discordUserId, callerDiscordUserId)) {
           throw new OperatePolicyError(
             'This user has blocked you from controlling their device',
             403,
@@ -212,7 +275,7 @@ export async function resolveOwnOperatePolicy(
         if (!registered.enabled || registered.paused) {
           throw new OperatePolicyError('Share is not available', 404, 'TARGET_UNAVAILABLE');
         }
-        if (await isEmergencyStopped(registered.discordUserId, registered.shockerId)) {
+        if (await deps.isEmergencyStopped(registered.discordUserId, registered.shockerId)) {
           throw new OperatePolicyError('Owner has emergency stop engaged', 423, 'EMERGENCY_STOP');
         }
         return {
@@ -233,7 +296,7 @@ export async function resolveOwnOperatePolicy(
       }
 
       // Owner using their own activity share code — still honor e-stop + activity/share caps
-      if (await isEmergencyStopped(callerDiscordUserId, registered.shockerId)) {
+      if (await deps.isEmergencyStopped(callerDiscordUserId, registered.shockerId)) {
         throw new OperatePolicyError(
           'Emergency stop is engaged — release STOP to allow commands',
           423,
@@ -271,7 +334,7 @@ export async function resolveOwnOperatePolicy(
       throw new OperatePolicyError('Unknown or unauthorized share code', 404, 'SHARE_UNKNOWN');
     }
     const claimedShockerId = shockerIdOf(claimed) ?? (input.shockerId ? Number(input.shockerId) : null);
-    if (claimedShockerId != null && (await isEmergencyStopped(callerDiscordUserId, claimedShockerId))) {
+    if (claimedShockerId != null && (await deps.isEmergencyStopped(callerDiscordUserId, claimedShockerId))) {
       throw new OperatePolicyError(
         'Emergency stop is engaged — release STOP to allow commands',
         423,
@@ -297,7 +360,7 @@ export async function resolveOwnOperatePolicy(
     throw new OperatePolicyError('Missing shockerId or shareCode', 400, 'BAD_REQUEST');
   }
 
-  if (await isEmergencyStopped(callerDiscordUserId, shockerId)) {
+  if (await deps.isEmergencyStopped(callerDiscordUserId, shockerId)) {
     throw new OperatePolicyError(
       'Emergency stop is engaged — release STOP to allow commands',
       423,
@@ -310,7 +373,7 @@ export async function resolveOwnOperatePolicy(
     throw new OperatePolicyError('Shocker not found on this PiShock account', 404, 'SHOCKER_UNKNOWN');
   }
 
-  const activityShare = await findActivityShareByShocker(callerDiscordUserId, shockerId);
+  const activityShare = await deps.findActivityShareByShocker(callerDiscordUserId, shockerId);
   const deviceMaxI = activityShare
     ? Math.min(activityShare.deviceMaxIntensity, deviceMaxIntensityOf(owned))
     : deviceMaxIntensityOf(owned);

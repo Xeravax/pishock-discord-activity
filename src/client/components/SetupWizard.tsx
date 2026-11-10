@@ -61,7 +61,7 @@ export function SetupWizard({ discordName, onComplete, onSkipToLogin }: Props) {
         <div className="auth-boot__mark" aria-hidden>
           <i className="q-icon mdi mdi-flash auth-boot__bolt" />
         </div>
-        <h1 className="auth-boot__brand auth-boot__brand-stack">
+        <h1 className="auth-boot__brand auth-boot__brand-row">
           <span className="auth-boot__brand-name">
             Pi<span>Shock</span>
           </span>

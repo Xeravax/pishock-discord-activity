@@ -1746,7 +1746,7 @@ export function App() {
   return (
     <div className={`app-shell official-preflight consent-shell ${pip ? 'pip' : ''}`}>
       <div className="consent-shell__brand">
-        <h1 className="auth-boot__brand auth-boot__brand-stack">
+        <h1 className="auth-boot__brand auth-boot__brand-row">
           <span className="auth-boot__brand-name">
             Pi<span>Shock</span>
           </span>

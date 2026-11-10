@@ -12,6 +12,7 @@
     "build": "prisma generate && vite build && tsc -p tsconfig.server.json && node -e \"require('fs').copyFileSync('src/server.js','dist/server.js'); require('fs').copyFileSync('version.json','dist/version.json'); require('fs').copyFileSync('version.json','client-dist/version.json')\"",
     "start": "node dist/server.js",
     "typecheck": "tsc -p tsconfig.server.json --noEmit && tsc -p tsconfig.client.json --noEmit",
+    "test": "node --import ./test/preload-env.mjs --import tsx --test test/**/*.test.ts",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate deploy",
     "version:write": "node scripts/write-version.mjs"

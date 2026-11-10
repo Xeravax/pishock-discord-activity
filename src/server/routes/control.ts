@@ -19,6 +19,7 @@ import { getOnlineMap, probeOnlineStatus, publishOperate } from '../pishock/brok
 import {
   assertModeAllowed,
   assertOperateRateLimit,
+  assertWithinCeilings,
   clearHoldAutoEnd,
   clampDurationMs,
   clampIntensity,
@@ -308,15 +309,22 @@ export const controlRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app, op
       throw err;
     }
 
+    try {
+      assertWithinCeilings(
+        body.intensity,
+        body.durationMs,
+        policy.maxIntensity,
+        policy.maxDurationMs,
+      );
+    } catch (err) {
+      if (err instanceof OperatePolicyError) {
+        return reply.code(err.status).send({ error: err.message });
+      }
+      throw err;
+    }
+
     const intensity = clampIntensity(body.intensity, policy.maxIntensity);
     const durationMs = clampDurationMs(body.durationMs, policy.maxDurationMs);
-
-    if (Number(body.intensity ?? 1) > policy.maxIntensity) {
-      return reply.code(412).send({ error: 'Intensity exceeds allowed maximum' });
-    }
-    if (Number(body.durationMs ?? 300) > policy.maxDurationMs) {
-      return reply.code(416).send({ error: 'Duration exceeds allowed maximum' });
-    }
 
     try {
       const op =

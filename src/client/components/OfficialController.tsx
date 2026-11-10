@@ -760,7 +760,7 @@ export function OfficialController({
           <div className="official-header-brand">
             <div className="text-dark text-h3 q-toolbar__title" style={{ margin: 0 }}>
               <div
-                className="official-header-brand__stack"
+                className="official-header-brand__row"
                 style={{ fontFamily: 'geo, Oxanium, sans-serif' }}
               >
                 <span className="text-grey-3">PiShock</span>
