@@ -557,6 +557,51 @@ html.pip-mode #root > * {
   color: rgba(255, 255, 255, 0.45);
 }
 
+.official-log-source {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.official-log-source--discord {
+  background: rgba(88, 101, 242, 0.28);
+  color: #c5caff;
+}
+
+.official-log-source--website {
+  background: rgba(121, 198, 219, 0.22);
+  color: #9fd8e8;
+}
+
+.official-log-location {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 160px;
+  padding: 2px 8px 2px 3px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  color: #e8e8e8;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.official-log-location__icon,
+.official-log-location .q-icon {
+  width: 16px;
+  height: 16px;
+  font-size: 14px;
+  border-radius: 4px;
+  object-fit: cover;
+  flex-shrink: 0;
+  opacity: 0.95;
+}
+
 .official-log-row__bottom {
   display: flex;
   align-items: center;

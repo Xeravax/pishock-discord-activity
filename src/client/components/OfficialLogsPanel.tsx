@@ -6,6 +6,14 @@ export type OfficialLogPerson = {
   avatarUrl: string;
 };
 
+export type OfficialLogLocation = {
+  kind?: string | null;
+  name?: string | null;
+  iconUrl?: string | null;
+  guildId?: string | null;
+  channelId?: string | null;
+};
+
 export type OfficialLogEntry = {
   id: string;
   from: OfficialLogPerson;
@@ -15,6 +23,8 @@ export type OfficialLogEntry = {
   /** @deprecated use to.displayName */
   toLabel: string;
   viaApi: boolean;
+  source: 'discord' | 'website';
+  location: OfficialLogLocation | null;
   action: 'shock' | 'vibrate' | 'beep' | 'other';
   intensity: number | null;
   durationSec: number | null;
@@ -66,6 +76,40 @@ function PersonChip({
     >
       <img src={person.avatarUrl} alt="" className="official-log-avatar" />
       <span className="ellipsis">{person.displayName}</span>
+    </span>
+  );
+}
+
+function SourceBadge({ source }: { source: OfficialLogEntry['source'] }) {
+  if (source === 'website') {
+    return (
+      <span className="official-log-source official-log-source--website" title="PiShock website / panel">
+        Website
+      </span>
+    );
+  }
+  return (
+    <span className="official-log-source official-log-source--discord" title="Discord Activity app">
+      App
+    </span>
+  );
+}
+
+function LocationChip({ location }: { location: OfficialLogLocation | null }) {
+  if (!location?.name) return null;
+  return (
+    <span className="official-log-location" title={location.name}>
+      {location.iconUrl ? (
+        <img src={location.iconUrl} alt="" className="official-log-location__icon" />
+      ) : (
+        <i
+          className={`q-icon mdi ${
+            location.guildId ? 'mdi-discord' : 'mdi-message-text'
+          }`}
+          aria-hidden
+        />
+      )}
+      <span className="ellipsis">{location.name}</span>
     </span>
   );
 }
@@ -135,6 +179,8 @@ export function OfficialLogsPanel({ open, entries, onClose }: Omit<Props, 'onOpe
                   </div>
                   <div className="official-log-row__bottom">
                     <div className="official-log-row__meta">
+                      <SourceBadge source={row.source} />
+                      <LocationChip location={row.location} />
                       {row.intensity != null ? (
                         <span className="official-log-stat">
                           <i className={`q-icon mdi ${actionIcon(row.action)}`} aria-hidden />
@@ -184,6 +230,8 @@ type PublicLogApiRow = {
   intensity?: number | null;
   durationMs?: number | null;
   createdAt?: string;
+  source?: string;
+  location?: OfficialLogLocation | null;
   executor?: PublicLogPersonApi;
   target?: PublicLogPersonApi;
 };
@@ -201,7 +249,7 @@ function personFromApi(
     'Unknown';
   const avatarUrl =
     raw?.avatarUrl ||
-    avatarUrlFn(id, raw?.avatar ?? null);
+    avatarUrlFn(id.startsWith('label:') ? '0' : id, raw?.avatar ?? null);
   return { id, displayName: String(displayName), avatarUrl };
 }
 
@@ -230,13 +278,24 @@ export function normalizePublicLogs(
     const intensity = typeof row.intensity === 'number' ? row.intensity : null;
     const durationMs = typeof row.durationMs === 'number' ? row.durationMs : null;
     const at = new Date(String(row.createdAt ?? '')).getTime() || Date.now() - idx;
+    const source = row.source === 'website' ? 'website' : 'discord';
     out.push({
       id: String(row.id ?? `public-${at}-${idx}`),
       from,
       to,
       fromLabel: from.displayName,
       toLabel: to.displayName,
-      viaApi: false,
+      viaApi: source === 'website',
+      source,
+      location: row.location?.name
+        ? {
+            kind: row.location.kind ?? null,
+            name: row.location.name ?? null,
+            iconUrl: row.location.iconUrl ?? null,
+            guildId: row.location.guildId ?? null,
+            channelId: row.location.channelId ?? null,
+          }
+        : null,
       action: normalizeAction(actionRaw, intensity),
       intensity,
       durationSec: durationMs != null ? Math.round((durationMs / 1000) * 10) / 10 : null,
@@ -246,7 +305,7 @@ export function normalizePublicLogs(
   return out.sort((a, b) => b.at - a.at);
 }
 
-/** @deprecated device website logs are no longer shown in the activity log panel */
+/** @deprecated device website logs are synced server-side into the public feed */
 export function normalizeDeviceLogs(_raw: unknown): OfficialLogEntry[] {
   return [];
 }
@@ -289,6 +348,8 @@ export function normalizeActivityLogs(
       fromLabel: from.displayName,
       toLabel: to.displayName,
       viaApi: false,
+      source: row.source === 'website' ? 'website' : 'discord',
+      location: null,
       action: normalizeAction(actionRaw, intensity),
       intensity,
       durationSec: durationMs != null ? Math.round((durationMs / 1000) * 10) / 10 : null,

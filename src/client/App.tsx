@@ -900,7 +900,11 @@ export function App() {
         );
         return;
       } else {
-        await apiFetch('/operate', token, { method: 'POST', body: JSON.stringify(input) });
+        const instanceId = getActivityInstanceId();
+        await apiFetch('/operate', token, {
+          method: 'POST',
+          body: JSON.stringify({ ...input, instanceId }),
+        });
       }
       await refreshLogs(token).catch(() => undefined);
     } catch (err) {

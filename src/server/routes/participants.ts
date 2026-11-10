@@ -34,6 +34,10 @@ import {
 } from '../session.js';
 import { prisma } from '../db.js';
 import { broadcastRealtime } from '../realtime.js';
+import {
+  resolveActivityLocation,
+  type ActivityLocationContext,
+} from '../discord-location.js';
 
 function executorLabel(user: { id: string; username?: string | null; global_name?: string | null }) {
   const name = user.global_name || user.username || 'unknown';
@@ -53,7 +57,9 @@ async function auditParticipantCommand(input: {
   durationMs: number;
   success: boolean;
   detail: string;
+  location?: ActivityLocationContext | null;
 }) {
+  const loc = input.location;
   const base = {
     executorDiscordUserId: input.executorDiscordUserId,
     targetDiscordUserId: input.targetDiscordUserId,
@@ -63,6 +69,13 @@ async function auditParticipantCommand(input: {
     durationMs: input.durationMs,
     success: input.success,
     detail: input.detail,
+    source: 'discord' as const,
+    instanceId: loc?.instanceId,
+    guildId: loc?.guildId,
+    channelId: loc?.channelId,
+    locationKind: loc?.locationKind,
+    locationName: loc?.locationName,
+    locationIconUrl: loc?.locationIconUrl,
   };
   // Executor log never receives the share code; owner/target row may store it server-side.
   await Promise.all([
@@ -234,8 +247,9 @@ export const participantRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app
     };
 
     const instanceId = body.instanceId ? String(body.instanceId) : '';
+    let instanceInfo = null;
     try {
-      await verifyActivityInstance(opts.env, instanceId, {
+      instanceInfo = await verifyActivityInstance(opts.env, instanceId, {
         requireUserId: req.discordUser.id,
         requireUserIds: [targetDiscordUserId],
         allowMissingBot: true,
@@ -246,6 +260,7 @@ export const participantRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app
       }
       throw err;
     }
+    const location = await resolveActivityLocation(opts.env, instanceId, instanceInfo);
 
     if (await isExecutorBanned(targetDiscordUserId, req.discordUser.id)) {
       return reply.code(403).send({
@@ -321,6 +336,7 @@ export const participantRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app
         intensity: 0,
         durationMs: 0,
         success: published,
+        location,
         detail: JSON.stringify({
           via: 'broker',
           path: useSharePath ? 'executor_share' : 'target_session',
@@ -413,6 +429,7 @@ export const participantRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app
             intensity,
             durationMs,
             success: true,
+            location,
             detail: JSON.stringify({
               via: 'broker',
               path: useSharePath ? 'executor_share' : 'target_session',
@@ -447,6 +464,7 @@ export const participantRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app
           intensity,
           durationMs,
           success: true,
+          location,
           detail: JSON.stringify({
             via: 'operateByShare',
             path: 'executor_share',
@@ -480,6 +498,7 @@ export const participantRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app
         intensity,
         durationMs,
         success: true,
+        location,
         detail: JSON.stringify({
           via: 'operateById',
           path: 'target_session',
@@ -504,6 +523,7 @@ export const participantRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app
         intensity,
         durationMs,
         success: false,
+        location,
         detail: JSON.stringify({
           error: err instanceof Error ? err.message : String(err),
           agent,

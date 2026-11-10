@@ -34,8 +34,10 @@ import {
   listPublicCommandLogs,
   logCommand,
   setEmergencyStop,
+  syncWebsiteDeviceLogs,
 } from '../session.js';
 import { broadcastRealtimeAll } from '../realtime.js';
+import { resolveActivityLocation, type ActivityLocationContext } from '../discord-location.js';
 
 /** Activity feed row: always attribute to the device owner so the public log can dedupe. */
 async function logOperateEvent(input: {
@@ -48,7 +50,9 @@ async function logOperateEvent(input: {
   durationMs: number;
   success: boolean;
   detail?: string;
+  location?: ActivityLocationContext | null;
 }) {
+  const loc = input.location;
   await logCommand({
     discordUserId: input.ownerDiscordUserId,
     executorDiscordUserId: input.executorDiscordUserId,
@@ -60,6 +64,13 @@ async function logOperateEvent(input: {
     durationMs: input.durationMs,
     success: input.success,
     detail: input.detail,
+    source: 'discord',
+    instanceId: loc?.instanceId,
+    guildId: loc?.guildId,
+    channelId: loc?.channelId,
+    locationKind: loc?.locationKind,
+    locationName: loc?.locationName,
+    locationIconUrl: loc?.locationIconUrl,
   });
 }
 
@@ -88,7 +99,7 @@ async function handlePiShockError(
   throw err;
 }
 
-export const controlRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app) => {
+export const controlRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app, opts) => {
   app.get('/api/devices', async (req, reply) => {
     const blocked = requireSession(req, reply);
     if (blocked) return blocked;
@@ -205,6 +216,7 @@ export const controlRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app) =>
       clientId?: number | string;
       hold?: boolean;
       warning?: { Active: boolean; Min: number; Max: number } | null;
+      instanceId?: string;
     };
 
     const operation = body.operation;
@@ -222,6 +234,10 @@ export const controlRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app) =>
     }
 
     const creds = req.pishockCreds!;
+    const location = await resolveActivityLocation(
+      opts.env,
+      body.instanceId ? String(body.instanceId) : null,
+    );
     let policy;
     try {
       policy = await resolveOwnOperatePolicy(req.discordUser.id, creds, {
@@ -266,6 +282,7 @@ export const controlRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app) =>
         durationMs: 0,
         success: published,
         detail: published ? 'broker' : 'broker_failed',
+        location,
       });
       if (!published) {
         return reply.code(502).send({ error: 'Failed to end hold via broker' });
@@ -333,7 +350,8 @@ export const controlRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app) =>
             durationMs,
             success: true,
             detail: 'broker',
-          });
+            location,
+      });
           return { ok: true, via: 'broker' };
         }
       }
@@ -369,7 +387,8 @@ export const controlRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app) =>
             durationMs,
             success: true,
             detail: 'broker',
-          });
+            location,
+      });
           return { ok: true, via: 'broker' };
         }
       }
@@ -396,7 +415,8 @@ export const controlRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app) =>
             intensity,
             durationMs,
             success: true,
-          });
+            location,
+      });
           return { ok: true, via: 'client-operate' };
         }
       }
@@ -416,6 +436,7 @@ export const controlRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app) =>
         intensity,
         durationMs,
         success: true,
+        location,
       });
       return { ok: true };
     } catch (err) {
@@ -429,6 +450,7 @@ export const controlRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app) =>
         durationMs,
         success: false,
         detail: err instanceof Error ? err.message : String(err),
+        location,
       });
       return handlePiShockError(err, req.discordUser.id, reply);
     }
@@ -585,6 +607,16 @@ export const controlRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app) =>
     }
     const query = req.query as { limit?: string };
     const limit = Number(query.limit ?? 200);
+
+    // Import PiShock website/panel device logs into the shared feed when linked
+    if (req.pishockCreds) {
+      try {
+        await syncWebsiteDeviceLogs(req.discordUser.id, req.pishockCreds);
+      } catch {
+        // optional — public Discord feed still useful
+      }
+    }
+
     const [publicFeed, activity] = await Promise.all([
       listPublicCommandLogs(Number.isFinite(limit) ? limit : 200),
       listCommandLogs(req.discordUser.id, 50),
@@ -624,3 +656,4 @@ export const controlRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app) =>
     }
   });
 };
+

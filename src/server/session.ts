@@ -1,7 +1,8 @@
 import { prisma } from './db.js';
 import { decryptToken, encryptToken } from './crypto.js';
 import type { AppEnv } from './env.js';
-import type { PiShockCreds } from './pishock/client.js';
+import { loadLogs, type PiShockCreds } from './pishock/client.js';
+import { AGENT_NAME } from '../shared/constants.js';
 
 export async function savePiShockSession(
   env: AppEnv,
@@ -77,10 +78,13 @@ export async function findActivityShareByShocker(discordUserId: string, shockerI
   });
 }
 
+export type CommandLogSource = 'discord' | 'website';
+
 export async function logCommand(input: {
   discordUserId: string;
   executorDiscordUserId?: string;
   targetDiscordUserId?: string;
+  executorLabel?: string;
   action: string;
   shockerId?: number;
   shareCode?: string;
@@ -88,8 +92,38 @@ export async function logCommand(input: {
   durationMs?: number;
   success: boolean;
   detail?: string;
+  source?: CommandLogSource;
+  instanceId?: string | null;
+  guildId?: string | null;
+  channelId?: string | null;
+  locationKind?: string | null;
+  locationName?: string | null;
+  locationIconUrl?: string | null;
+  externalLogKey?: string | null;
 }) {
-  await prisma.commandLog.create({ data: input });
+  await prisma.commandLog.create({
+    data: {
+      discordUserId: input.discordUserId,
+      executorDiscordUserId: input.executorDiscordUserId,
+      targetDiscordUserId: input.targetDiscordUserId,
+      executorLabel: input.executorLabel,
+      action: input.action,
+      shockerId: input.shockerId,
+      shareCode: input.shareCode,
+      intensity: input.intensity,
+      durationMs: input.durationMs,
+      success: input.success,
+      detail: input.detail,
+      source: input.source ?? 'discord',
+      instanceId: input.instanceId ?? undefined,
+      guildId: input.guildId ?? undefined,
+      channelId: input.channelId ?? undefined,
+      locationKind: input.locationKind ?? undefined,
+      locationName: input.locationName ?? undefined,
+      locationIconUrl: input.locationIconUrl ?? undefined,
+      externalLogKey: input.externalLogKey ?? undefined,
+    },
+  });
 }
 
 export async function listActivityShares(discordUserId: string) {
@@ -333,8 +367,8 @@ export async function listPublicCommandLogs(limit = 200) {
   const rows = await prisma.commandLog.findMany({
     where: {
       success: true,
-      executorDiscordUserId: { not: null },
       targetDiscordUserId: { not: null },
+      OR: [{ executorDiscordUserId: { not: null } }, { executorLabel: { not: null } }],
     },
     orderBy: { createdAt: 'desc' },
     take: take * 3,
@@ -343,26 +377,37 @@ export async function listPublicCommandLogs(limit = 200) {
       discordUserId: true,
       executorDiscordUserId: true,
       targetDiscordUserId: true,
+      executorLabel: true,
       action: true,
       shockerId: true,
       intensity: true,
       durationMs: true,
       success: true,
+      source: true,
+      locationKind: true,
+      locationName: true,
+      locationIconUrl: true,
+      guildId: true,
+      channelId: true,
       createdAt: true,
     },
   });
 
-  const deduped = rows.filter(
-    (row) =>
-      row.executorDiscordUserId &&
-      row.targetDiscordUserId &&
-      row.discordUserId === row.targetDiscordUserId &&
-      isPublicLogAction(row.action),
-  ).slice(0, take);
+  const deduped = rows
+    .filter(
+      (row) =>
+        row.targetDiscordUserId &&
+        row.discordUserId === row.targetDiscordUserId &&
+        isPublicLogAction(row.action) &&
+        (row.executorDiscordUserId || row.executorLabel),
+    )
+    .slice(0, take);
 
   const userIds = [
     ...new Set(
-      deduped.flatMap((row) => [row.executorDiscordUserId!, row.targetDiscordUserId!]),
+      deduped.flatMap((row) =>
+        [row.executorDiscordUserId, row.targetDiscordUserId].filter(Boolean) as string[],
+      ),
     ),
   ];
   const users = userIds.length
@@ -374,8 +419,18 @@ export async function listPublicCommandLogs(limit = 200) {
   const byId = new Map(users.map((u) => [u.id, u]));
 
   return deduped.map((row) => {
-    const executorId = row.executorDiscordUserId!;
     const targetId = row.targetDiscordUserId!;
+    const executorId = row.executorDiscordUserId;
+    const executor = executorId
+      ? publicLogPerson(byId.get(executorId), executorId)
+      : {
+          id: `label:${row.executorLabel ?? 'website'}`,
+          username: null,
+          globalName: null,
+          displayName: row.executorLabel || 'Website',
+          avatar: null,
+          avatarUrl: discordAvatarUrl('0', null),
+        };
     return {
       id: row.id,
       action: row.action,
@@ -384,8 +439,177 @@ export async function listPublicCommandLogs(limit = 200) {
       durationMs: row.durationMs,
       success: row.success,
       createdAt: row.createdAt,
-      executor: publicLogPerson(byId.get(executorId), executorId),
+      source: row.source === 'website' ? 'website' : 'discord',
+      location:
+        row.locationName || row.locationIconUrl
+          ? {
+              kind: row.locationKind,
+              name: row.locationName,
+              iconUrl: row.locationIconUrl,
+              guildId: row.guildId,
+              channelId: row.channelId,
+            }
+          : null,
+      executor,
       target: publicLogPerson(byId.get(targetId), targetId),
     };
   });
+}
+
+function pickDeviceLogString(row: Record<string, unknown>, keys: string[]): string | null {
+  for (const key of keys) {
+    const v = row[key];
+    if (v == null) continue;
+    const s = String(v).trim();
+    if (s) return s;
+  }
+  return null;
+}
+
+function pickDeviceLogNumber(row: Record<string, unknown>, keys: string[]): number | null {
+  for (const key of keys) {
+    const v = row[key];
+    if (v == null || v === '') continue;
+    const n = Number(v);
+    if (Number.isFinite(n)) return n;
+  }
+  return null;
+}
+
+function parseDeviceLogTime(row: Record<string, unknown>): Date {
+  const raw = pickDeviceLogString(row, [
+    'Time',
+    'time',
+    'Timestamp',
+    'timestamp',
+    'Date',
+    'date',
+    'Created',
+    'created',
+    'CreatedAt',
+    'createdAt',
+    'LogTime',
+    'logTime',
+  ]);
+  if (!raw) return new Date();
+  const msMatch = /\/Date\((\d+)/.exec(raw);
+  if (msMatch) return new Date(Number(msMatch[1]));
+  const asNum = Number(raw);
+  if (Number.isFinite(asNum) && asNum > 1_000_000_000) {
+    return new Date(asNum < 1e12 ? asNum * 1000 : asNum);
+  }
+  const parsed = Date.parse(raw);
+  return Number.isFinite(parsed) ? new Date(parsed) : new Date();
+}
+
+function normalizeDeviceLogAction(raw: string | null): string {
+  const a = (raw ?? '').toLowerCase();
+  if (a.includes('vib') || a === 'v' || a === '1') return 'vibrate';
+  if (a.includes('beep') || a === 'b' || a === '2') return 'beep';
+  if (a.includes('shock') || a === 's' || a === '0' || a.includes('hold')) return 'shock';
+  return 'shock';
+}
+
+function durationMsFromDeviceLog(row: Record<string, unknown>): number | null {
+  const ms = pickDeviceLogNumber(row, ['DurationMs', 'durationMs', 'duration_ms']);
+  if (ms != null) return Math.round(ms);
+  const dur = pickDeviceLogNumber(row, ['Duration', 'duration', 'Dur', 'dur', 'd']);
+  if (dur == null) return null;
+  if (dur > 30) return Math.round(dur);
+  return Math.round(dur * 1000);
+}
+
+function isDiscordAppAgent(agent: string | null): boolean {
+  if (!agent) return false;
+  const a = agent.toLowerCase();
+  return a.includes('discord pishock activity') || a.includes('discord ·');
+}
+
+/**
+ * Pull PiShock website/device logs for this account into CommandLog (source=website).
+ * Skips rows that already look like Discord Activity commands (those live in our DB).
+ */
+export async function syncWebsiteDeviceLogs(
+  ownerDiscordUserId: string,
+  creds: PiShockCreds,
+): Promise<number> {
+  let raw: unknown = null;
+  try {
+    const result = await loadLogs(creds);
+    if (result.status === 404 || result.status === 405) return 0;
+    raw = result.data;
+  } catch {
+    return 0;
+  }
+
+  const list = Array.isArray(raw)
+    ? raw
+    : raw && typeof raw === 'object'
+      ? (() => {
+          const obj = raw as Record<string, unknown>;
+          for (const key of ['Logs', 'logs', 'Items', 'items', 'Data', 'data', 'Entries', 'entries']) {
+            if (Array.isArray(obj[key])) return obj[key] as unknown[];
+          }
+          return [];
+        })()
+      : [];
+
+  let inserted = 0;
+  for (const [idx, item] of list.slice(0, 100).entries()) {
+    if (!item || typeof item !== 'object') continue;
+    const row = item as Record<string, unknown>;
+    const agent =
+      pickDeviceLogString(row, [
+        'AgentName',
+        'agentName',
+        'Username',
+        'UserName',
+        'username',
+        'From',
+        'from',
+        'Name',
+        'name',
+        'Origin',
+        'origin',
+      ]) ?? 'Website';
+    if (isDiscordAppAgent(agent) || agent === AGENT_NAME) continue;
+
+    const action = normalizeDeviceLogAction(
+      pickDeviceLogString(row, ['Type', 'type', 'Mode', 'mode', 'Op', 'op', 'Operation', 'operation']),
+    );
+    if (!isPublicLogAction(action)) continue;
+
+    const intensity = pickDeviceLogNumber(row, ['Intensity', 'intensity', 'Int', 'int', 'i']);
+    const durationMs = durationMsFromDeviceLog(row);
+    const shockerId = pickDeviceLogNumber(row, ['ShockerId', 'shockerId', 'Id', 'id']);
+    const at = parseDeviceLogTime(row);
+    const externalId =
+      pickDeviceLogString(row, ['Id', 'id', 'LogId', 'logId']) ??
+      `${at.toISOString()}:${agent}:${action}:${intensity ?? ''}:${durationMs ?? ''}:${shockerId ?? idx}`;
+    const externalLogKey = `website:${ownerDiscordUserId}:${externalId}`;
+
+    try {
+      await prisma.commandLog.create({
+        data: {
+          discordUserId: ownerDiscordUserId,
+          executorDiscordUserId: null,
+          targetDiscordUserId: ownerDiscordUserId,
+          executorLabel: agent.slice(0, 80),
+          action,
+          shockerId: shockerId != null && shockerId > 0 ? Math.round(shockerId) : null,
+          intensity: intensity != null ? Math.round(intensity) : null,
+          durationMs: durationMs != null ? Math.round(durationMs) : null,
+          success: true,
+          source: 'website',
+          externalLogKey,
+          createdAt: at,
+          detail: JSON.stringify({ via: 'pishock_load_logs', agent }),
+        },
+      });
+      inserted += 1;
+    } catch {
+      // unique externalLogKey → already synced
+    }
+  }
+  return inserted;
 }
