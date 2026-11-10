@@ -1,7 +1,9 @@
 function required(name: string): string {
-  const value = process.env[name];
+  const value = process.env[name]?.trim();
   if (!value) {
-    throw new Error(`Missing required environment variable: ${name}`);
+    throw new Error(
+      `Missing required environment variable: ${name}. Set it in .env / compose; the process will not start without it.`,
+    );
   }
   return value;
 }

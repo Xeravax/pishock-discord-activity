@@ -18,7 +18,7 @@ function readAppVersion(root: string): string {
 }
 
 export default defineConfig(({ mode }) => {
-  const root = path.resolve(__dirname);
+  const root = path.resolve(import.meta.dirname);
   // Allow scripts/write-version.mjs output (.env.version) to feed VITE_* vars
   loadEnv(mode, root, '');
   try {
@@ -35,14 +35,14 @@ export default defineConfig(({ mode }) => {
 
   return {
     plugins: [react()],
-    root: path.resolve(__dirname, 'src/client'),
-    publicDir: path.resolve(__dirname, 'public'),
+    root: path.resolve(import.meta.dirname, 'src/client'),
+    publicDir: path.resolve(import.meta.dirname, 'public'),
     envDir: root,
     define: {
       'import.meta.env.VITE_APP_VERSION': JSON.stringify(appVersion),
     },
     build: {
-      outDir: path.resolve(__dirname, 'client-dist'),
+      outDir: path.resolve(import.meta.dirname, 'client-dist'),
       emptyOutDir: true,
     },
     server: {

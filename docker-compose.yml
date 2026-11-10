@@ -1,3 +1,10 @@
+# Local build + run
+#   cp .env.example .env   # fill secrets
+#   docker compose up --build -d
+#
+# Required in .env: DISCORD_CLIENT_ID, DISCORD_CLIENT_SECRET, TOKEN_KEY, PUBLIC_URL
+# DATABASE_URL is set below for the compose network (override in .env if needed).
+
 services:
   db:
     image: postgres:16-alpine
@@ -12,30 +19,46 @@ services:
       test: ["CMD-SHELL", "pg_isready -U pishock -d pishock"]
       interval: 5s
       timeout: 5s
-      retries: 10
+      retries: 12
+      start_period: 10s
+    networks:
+      - internal
 
   app:
     build:
       context: .
       args:
-        VITE_DISCORD_CLIENT_ID: ${DISCORD_CLIENT_ID}
+        # Baked into the client bundle — must match DISCORD_CLIENT_ID
+        VITE_DISCORD_CLIENT_ID: ${DISCORD_CLIENT_ID:?Set DISCORD_CLIENT_ID in .env}
+        GIT_SHA: ${GIT_SHA:-local}
+        GIT_REF_NAME: ${GIT_REF_NAME:-local}
+        GIT_REF_TYPE: ${GIT_REF_TYPE:-branch}
+    image: pishock-activity:local
     restart: unless-stopped
     ports:
       - "${PORT:-3000}:3000"
+    env_file:
+      - .env
     environment:
+      # Compose network hostname; wins over env_file if both set
       DATABASE_URL: ${DATABASE_URL:-postgresql://pishock:pishock@db:5432/pishock?schema=public}
-      DISCORD_CLIENT_ID: ${DISCORD_CLIENT_ID}
-      DISCORD_CLIENT_SECRET: ${DISCORD_CLIENT_SECRET}
-      DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN:-}
-      DISCORD_PUBLIC_KEY: ${DISCORD_PUBLIC_KEY:-}
-      REQUIRE_DISCORD_PROXY_AUTH: ${REQUIRE_DISCORD_PROXY_AUTH:-0}
-      TOKEN_KEY: ${TOKEN_KEY}
-      PUBLIC_URL: ${PUBLIC_URL:-http://localhost:3000}
       PORT: "3000"
-      VITE_DISCORD_CLIENT_ID: ${DISCORD_CLIENT_ID}
+      NODE_ENV: production
     depends_on:
       db:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3000/api/health >/dev/null || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 8
+      start_period: 50s
+    networks:
+      - internal
 
 volumes:
   pishock_pgdata:
+
+networks:
+  internal:
+    driver: bridge

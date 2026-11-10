@@ -1,0 +1,33 @@
+# deps / build output
+node_modules
+dist
+client-dist
+coverage
+*.log
+
+# git / IDE
+.git
+.github
+.gitignore
+.cursor
+.vscode
+.idea
+
+# env & local secrets (never bake into image)
+.env
+.env.*
+!.env.example
+.env.version
+version.json
+
+# docs / misc not needed to build
+README.md
+docker-compose*.yml
+agent-transcripts
+**/*.md
+!prisma/migrations/**/*.sql
+
+# local data
+data
+*.db
+*.db-journal
