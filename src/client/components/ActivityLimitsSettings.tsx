@@ -1,6 +1,10 @@
 import { useEffect, useState } from 'react';
 import type { ShockerView } from './ShockerCard';
-import type { CSSProperties } from 'react';
+import {
+  LimitSlider,
+  formatDurationMs,
+  formatIntensityPct,
+} from './LimitSlider';
 
 export type PersonalLimits = {
   activityMaxIntensity: number;
@@ -37,15 +41,6 @@ type Props = {
     shares: ShareLimitRow[];
   }) => Promise<void>;
   onRevokeConsent?: () => Promise<void> | void;
-};
-
-const fieldStyle: CSSProperties = {
-  width: 72,
-  background: '#121212',
-  border: '1px solid hsla(0,0%,100%,.28)',
-  color: '#e8e8e8',
-  padding: '4px 6px',
-  marginLeft: 6,
 };
 
 export function ActivityLimitsSettings({
@@ -151,39 +146,28 @@ export function ActivityLimitsSettings({
           <div className="text-caption text-grey-5 q-mb-sm">
             Applied when you control your linked shockers in this activity.
           </div>
-          <div className="row q-gutter-sm items-center">
-            <label className="text-caption text-grey-5">
-              Max %
-              <input
-                type="number"
-                min={1}
-                max={100}
-                value={personal.activityMaxIntensity}
-                style={fieldStyle}
-                onChange={(e) =>
-                  setPersonal((p) => ({
-                    ...p,
-                    activityMaxIntensity: Math.max(1, Math.min(100, Number(e.target.value) || 1)),
-                  }))
-                }
-              />
-            </label>
-            <label className="text-caption text-grey-5">
-              Max ms
-              <input
-                type="number"
-                min={16}
-                max={15000}
-                value={personal.activityMaxDurationMs}
-                style={fieldStyle}
-                onChange={(e) =>
-                  setPersonal((p) => ({
-                    ...p,
-                    activityMaxDurationMs: Math.max(16, Math.min(15_000, Number(e.target.value) || 16)),
-                  }))
-                }
-              />
-            </label>
+          <div className="column q-gutter-sm">
+            <LimitSlider
+              label="Max intensity"
+              value={personal.activityMaxIntensity}
+              min={1}
+              max={100}
+              formatValue={formatIntensityPct}
+              onChange={(activityMaxIntensity) =>
+                setPersonal((p) => ({ ...p, activityMaxIntensity }))
+              }
+            />
+            <LimitSlider
+              label="Max duration"
+              value={personal.activityMaxDurationMs}
+              min={16}
+              max={15_000}
+              step={100}
+              formatValue={formatDurationMs}
+              onChange={(activityMaxDurationMs) =>
+                setPersonal((p) => ({ ...p, activityMaxDurationMs }))
+              }
+            />
           </div>
         </div>
       </div>
@@ -231,47 +215,34 @@ export function ActivityLimitsSettings({
                     </span>
                   </label>
                   {row ? (
-                    <div className="row q-gutter-sm q-mt-sm items-center">
-                      <label className="text-caption text-grey-5">
-                        Activity max %
-                        <input
-                          type="number"
-                          min={1}
-                          max={row.deviceMaxIntensity}
-                          value={row.maxIntensity}
-                          style={fieldStyle}
-                          onChange={(e) => {
-                            const v = Math.max(
-                              1,
-                              Math.min(row.deviceMaxIntensity, Number(e.target.value) || 1),
-                            );
-                            setShares((prev) =>
-                              prev.map((x) => (x.shockerId === s.id ? { ...x, maxIntensity: v } : x)),
-                            );
-                          }}
-                        />
-                      </label>
-                      <label className="text-caption text-grey-5">
-                        Activity max ms
-                        <input
-                          type="number"
-                          min={16}
-                          max={row.deviceMaxDurationMs}
-                          value={row.maxDurationMs}
-                          style={fieldStyle}
-                          onChange={(e) => {
-                            const v = Math.max(
-                              16,
-                              Math.min(row.deviceMaxDurationMs, Number(e.target.value) || 16),
-                            );
-                            setShares((prev) =>
-                              prev.map((x) =>
-                                x.shockerId === s.id ? { ...x, maxDurationMs: v } : x,
-                              ),
-                            );
-                          }}
-                        />
-                      </label>
+                    <div className="column q-gutter-sm q-mt-sm">
+                      <LimitSlider
+                        label="Activity max intensity"
+                        value={row.maxIntensity}
+                        min={1}
+                        max={row.deviceMaxIntensity}
+                        formatValue={formatIntensityPct}
+                        onChange={(maxIntensity) =>
+                          setShares((prev) =>
+                            prev.map((x) => (x.shockerId === s.id ? { ...x, maxIntensity } : x)),
+                          )
+                        }
+                      />
+                      <LimitSlider
+                        label="Activity max duration"
+                        value={row.maxDurationMs}
+                        min={16}
+                        max={row.deviceMaxDurationMs}
+                        step={100}
+                        formatValue={formatDurationMs}
+                        onChange={(maxDurationMs) =>
+                          setShares((prev) =>
+                            prev.map((x) =>
+                              x.shockerId === s.id ? { ...x, maxDurationMs } : x,
+                            ),
+                          )
+                        }
+                      />
                       <label className="row items-center text-caption text-grey-5 cursor-pointer">
                         <input
                           type="checkbox"

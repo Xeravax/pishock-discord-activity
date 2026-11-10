@@ -1,3 +1,5 @@
+import { PiShockAuthDisclaimer } from './PiShockAuthDisclaimer';
+
 type Props = {
   linking: boolean;
   loginUrl: string | null;
@@ -11,9 +13,9 @@ type Props = {
 export function LoginPanel({ linking, loginUrl, error, onStart, onOpen, onRefresh }: Props) {
   return (
     <section className="pishock-link-panel">
-      <p className="text-grey-5 text-body2" style={{ marginTop: 0 }}>
-        Sign in through PiShock&apos;s login page. Your password never enters this activity — we only
-        store the encrypted session PiShock returns.
+      <PiShockAuthDisclaimer compact />
+      <p className="text-grey-5 text-body2">
+        Continue only if you accept that. Your password never enters this activity.
       </p>
       {error ? (
         <div className="auth-boot__error" style={{ marginBottom: 12 }}>

@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { AppVersionBadge } from './AppVersionBadge';
+import { PiShockAuthDisclaimer } from './PiShockAuthDisclaimer';
 
 export type SetupChoices = {
   wantsDiscordShare: boolean;
@@ -12,6 +13,18 @@ type Props = {
 };
 
 const STEPS = [
+  {
+    title: 'Authentication — read this first',
+    body: (
+      <>
+        <PiShockAuthDisclaimer />
+        <p>
+          Your PiShock <strong>password never enters Discord</strong>. Linking opens PiShock&apos;s
+          own browser login page; only the session token PiShock returns is kept (encrypted).
+        </p>
+      </>
+    ),
+  },
   {
     title: 'How linking works',
     body: (

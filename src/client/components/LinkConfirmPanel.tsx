@@ -1,4 +1,5 @@
 import { AppVersionBadge } from './AppVersionBadge';
+import { PiShockAuthDisclaimer } from './PiShockAuthDisclaimer';
 
 type Props = {
   pishockUserId: number;
@@ -60,6 +61,8 @@ export function LinkConfirmPanel({
             </div>
           )}
         </div>
+
+        <PiShockAuthDisclaimer compact />
 
         <p className="auth-boot__caption">
           Only confirm if this is your account. Cancel discards the login and does not link anything.

@@ -47,7 +47,9 @@ export function PiShockLinkingScreen({
               <span className="auth-boot__label">{label}</span>
             </div>
             <p className="auth-boot__hint">
-              Finish signing in in your browser, then return here. We’ll detect it automatically.
+              This requests a PiShock <strong>authentication token</strong> (not an API key). Tokens
+              are encrypted in the database. Finish signing in in your browser, then return here —
+              we&apos;ll detect it automatically.
             </p>
           </>
         )}

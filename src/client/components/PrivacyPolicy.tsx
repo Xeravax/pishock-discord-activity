@@ -20,10 +20,25 @@ export function PrivacyPolicy({ onBack }: Props) {
       </section>
 
       <section className="panel">
+        <h2>PiShock authentication</h2>
+        <p className="muted">
+          Linking your account <strong>requests an authentication (session) token</strong> from
+          PiShock via their login page. This activity does <strong>not</strong> use a classic
+          PiShock API key for your account. Other people&apos;s devices are only available when
+          those users have logged in with their own PiShock accounts. Authentication tokens are
+          encrypted at rest in the database (AES-256-GCM) and are never exposed to other
+          participants&apos; browsers. Your PiShock password is never stored here.
+        </p>
+      </section>
+
+      <section className="panel">
         <h2>Information We Store</h2>
         <ul className="legal-list">
           <li>Discord user id and profile fields needed for the activity session</li>
-          <li>Encrypted PiShock session credentials (user id + website token) linked to your Discord user</li>
+          <li>
+            Encrypted PiShock authentication / session token (not an API key) linked to your Discord
+            user
+          </li>
           <li>Consent acknowledgment status</li>
           <li>Command activity logs for accountability (action, intensity, duration, success)</li>
         </ul>

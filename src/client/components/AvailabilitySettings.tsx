@@ -1,6 +1,11 @@
-import { useEffect, useState, type CSSProperties } from 'react';
+import { useEffect, useState } from 'react';
 import type { ShockerView } from './ShockerCard';
 import type { DiscordParticipant } from '../participants';
+import {
+  LimitSlider,
+  formatDurationMs,
+  formatIntensityPct,
+} from './LimitSlider';
 
 export type ActivityShareConfig = {
   shockerId: number;
@@ -169,35 +174,24 @@ export function AvailabilitySettings({
                     </div>
                   </label>
                   {cfg ? (
-                    <div className="row q-gutter-sm q-mt-sm items-center">
-                      <label className="text-caption text-grey-5">
-                        Max %
-                        <input
-                          type="number"
-                          min={1}
-                          max={100}
-                          value={cfg.maxIntensity}
-                          className="q-field__native q-ml-xs"
-                          style={inputStyle}
-                          onChange={(e) =>
-                            updateShare(s.id, { maxIntensity: Number(e.target.value) || 1 })
-                          }
-                        />
-                      </label>
-                      <label className="text-caption text-grey-5">
-                        Max ms
-                        <input
-                          type="number"
-                          min={16}
-                          max={15000}
-                          value={cfg.maxDurationMs}
-                          className="q-field__native q-ml-xs"
-                          style={inputStyle}
-                          onChange={(e) =>
-                            updateShare(s.id, { maxDurationMs: Number(e.target.value) || 16 })
-                          }
-                        />
-                      </label>
+                    <div className="column q-gutter-sm q-mt-sm">
+                      <LimitSlider
+                        label="Max intensity"
+                        value={cfg.maxIntensity}
+                        min={1}
+                        max={Math.min(100, cfg.deviceMaxIntensity ?? 100)}
+                        formatValue={formatIntensityPct}
+                        onChange={(maxIntensity) => updateShare(s.id, { maxIntensity })}
+                      />
+                      <LimitSlider
+                        label="Max duration"
+                        value={cfg.maxDurationMs}
+                        min={16}
+                        max={Math.min(15_000, cfg.deviceMaxDurationMs ?? 15_000)}
+                        step={100}
+                        formatValue={formatDurationMs}
+                        onChange={(maxDurationMs) => updateShare(s.id, { maxDurationMs })}
+                      />
                       <label className="row items-center text-caption text-grey-5 cursor-pointer">
                         <input
                           type="checkbox"
@@ -256,12 +250,3 @@ export function AvailabilitySettings({
     </div>
   );
 }
-
-const inputStyle: CSSProperties = {
-  width: 72,
-  background: '#121212',
-  border: '1px solid hsla(0,0%,100%,.28)',
-  color: '#e8e8e8',
-  padding: '4px 6px',
-  marginLeft: 6,
-};

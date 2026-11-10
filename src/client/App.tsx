@@ -106,8 +106,8 @@ export function App() {
   const [confirmBusy, setConfirmBusy] = useState(false);
   const [setupPhase, setSetupPhase] = useState(false);
   const [setupSharePhase, setSetupSharePhase] = useState(false);
+  const [setupDevicesReady, setSetupDevicesReady] = useState(false);
   const [setupShareBusy, setSetupShareBusy] = useState(false);
-  const [setupChoices, setSetupChoices] = useState<SetupChoices>({ wantsDiscordShare: true });
   const [actionError, setActionError] = useState<string | null>(null);
   const [legalView, setLegalView] = useState<LegalView>(null);
   const [friendsMode, setFriendsMode] = useState(true);
@@ -850,16 +850,22 @@ export function App() {
     setLinkError(null);
     try {
       await apiFetch('/pishock/login/confirm', token, { method: 'POST', body: '{}' });
+      // Enter setup before clearing confirm so we never flash the control panel.
+      setSetupDevicesReady(false);
+      setSetupSharePhase(true);
       setLinkConfirm(null);
       const meData = await refreshMe(token);
       if (meData.pishockLinked) {
         await refreshDevices(token);
         await refreshLogs(token).catch(() => undefined);
-        if (setupChoices.wantsDiscordShare) {
-          setSetupSharePhase(true);
-        }
+        setSetupDevicesReady(true);
+      } else {
+        setSetupSharePhase(false);
+        setSetupDevicesReady(false);
       }
     } catch (err) {
+      setSetupSharePhase(false);
+      setSetupDevicesReady(false);
       setLinkError(err instanceof Error ? err.message : String(err));
     } finally {
       setConfirmBusy(false);
@@ -870,7 +876,6 @@ export function App() {
     if (!me) return;
     setLinkError(null);
     const prefs = loadSetupPrefs(me.user.id);
-    setSetupChoices({ wantsDiscordShare: prefs.wantsDiscordShare });
     if (!prefs.seen) {
       setSetupPhase(true);
       setOverlay(null);
@@ -883,7 +888,6 @@ export function App() {
   const finishSetup = (choices: SetupChoices) => {
     if (!me) return;
     saveSetupPrefs(me.user.id, choices);
-    setSetupChoices(choices);
     setSetupPhase(false);
     void startPiShockLogin();
   };
@@ -1067,24 +1071,10 @@ export function App() {
 
   const finishSetupShare = useCallback(() => {
     setSetupSharePhase(false);
+    setSetupDevicesReady(false);
     setSetupShareBusy(false);
     setLinkError(null);
   }, []);
-
-  const saveSetupDiscordShares = useCallback(
-    async (shares: ActivityShareConfig[]) => {
-      setSetupShareBusy(true);
-      setLinkError(null);
-      try {
-        await saveAvailability({ shares, bannedDiscordUserIds: [] });
-        finishSetupShare();
-      } catch (err) {
-        setLinkError(err instanceof Error ? err.message : String(err));
-        setSetupShareBusy(false);
-      }
-    },
-    [saveAvailability, finishSetupShare],
-  );
 
   const applyDiscordShareLimits = useCallback((shares: ShareLimitRow[]) => {
     const next: Record<number, { enabled: boolean; maxIntensity: number; maxDurationMs: number }> =
@@ -1125,6 +1115,36 @@ export function App() {
       }
     },
     [token, participants, refreshParticipantStatus, applyDiscordShareLimits],
+  );
+
+  const saveSetupDiscordShares = useCallback(
+    async (result: { shares: ActivityShareConfig[]; personal: PersonalLimits }) => {
+      setSetupShareBusy(true);
+      setLinkError(null);
+      try {
+        const shares: ShareLimitRow[] = result.shares.map((s) => ({
+          shockerId: s.shockerId,
+          shockerName: s.shockerName,
+          hubClientId: s.hubClientId ?? null,
+          enabled: s.enabled,
+          paused: s.paused,
+          deviceMaxIntensity: s.deviceMaxIntensity ?? s.maxIntensity,
+          deviceMaxDurationMs: s.deviceMaxDurationMs ?? s.maxDurationMs,
+          maxIntensity: s.maxIntensity,
+          maxDurationMs: s.maxDurationMs,
+          canShock: s.canShock,
+          canVibrate: s.canVibrate,
+          canBeep: s.canBeep,
+          canHold: s.canHold,
+        }));
+        await saveSettings({ personal: result.personal, shares });
+        finishSetupShare();
+      } catch (err) {
+        setLinkError(err instanceof Error ? err.message : String(err));
+        setSetupShareBusy(false);
+      }
+    },
+    [saveSettings, finishSetupShare],
   );
 
   useEffect(() => {
@@ -1233,9 +1253,11 @@ export function App() {
     return (
       <SetupDiscordShareScreen
         shockers={ownedForSetup}
+        initialPersonal={personalLimits}
+        devicesReady={setupDevicesReady}
         busy={setupShareBusy}
         error={linkError}
-        onSave={saveSetupDiscordShares}
+        onComplete={saveSetupDiscordShares}
         onSkip={finishSetupShare}
       />
     );
