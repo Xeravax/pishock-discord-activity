@@ -29,18 +29,8 @@ export function PsDialog({ open, title, onClose, children, wide }: Props) {
         onClick={(e) => e.stopPropagation()}
         onMouseDown={(e) => e.stopPropagation()}
       >
-        <div
-          className="q-card q-card--dark q-dark bg-dark"
-          style={{
-            width: wide ? 'min(720px, 94vw)' : 'min(480px, 94vw)',
-            maxHeight: '88vh',
-            display: 'flex',
-            flexDirection: 'column',
-            border: '1px solid rgba(121, 198, 219, 0.35)',
-            pointerEvents: 'auto',
-          }}
-        >
-          <div className="q-card__section q-card__section--vert row items-center justify-between no-wrap">
+        <div className={`ps-dialog-card q-card q-card--dark q-dark bg-dark${wide ? ' is-wide' : ''}`}>
+          <div className="ps-dialog-header q-card__section q-card__section--vert row items-center justify-between no-wrap">
             <div className="text-h6 text-secondary" style={{ fontFamily: 'geo, Oxanium, sans-serif' }}>
               {title}
             </div>
@@ -57,12 +47,7 @@ export function PsDialog({ open, title, onClose, children, wide }: Props) {
               </span>
             </button>
           </div>
-          <div
-            className="q-card__section q-card__section--vert"
-            style={{ overflow: 'auto', paddingTop: 0 }}
-          >
-            {children}
-          </div>
+          <div className="ps-dialog-body q-card__section q-card__section--vert">{children}</div>
         </div>
       </div>
     </div>

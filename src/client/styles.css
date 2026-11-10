@@ -46,23 +46,41 @@
 }
 
 html,
-body,
-#root {
+body {
   margin: 0;
-  min-height: 100%;
+  height: 100%;
+  max-height: 100%;
   background: #121212;
   color: #e8e8e8;
+  overflow: hidden;
+}
+
+#root {
+  margin: 0;
+  height: 100%;
+  max-height: 100%;
+  background: #121212;
+  color: #e8e8e8;
+  overflow: auto;
+  -webkit-overflow-scrolling: touch;
 }
 
 .official-root,
 .official-activity-root {
   min-height: 100vh;
+  height: 100%;
+  max-height: 100dvh;
   background: #121212;
   position: relative;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 
 .official-activity-root .official-root {
-  min-height: 100vh;
+  min-height: 0;
+  flex: 1 1 auto;
+  max-height: 100%;
 }
 
 .official-root > .q-header.custom-header {
@@ -71,10 +89,15 @@ body,
   z-index: 2000;
   height: auto !important;
   min-height: 50px;
+  flex-shrink: 0;
 }
 
 .official-root > .q-page-container {
   padding-top: 0 !important;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  -webkit-overflow-scrolling: touch;
 }
 
 .official-safety-banner {
@@ -197,6 +220,8 @@ body,
   align-items: flex-start;
   gap: 8px;
   pointer-events: none;
+  max-height: calc(100vh - 16px);
+  max-height: calc(100dvh - 16px);
 }
 
 .official-mode-dock > * {
@@ -207,11 +232,10 @@ body,
   min-width: 44px !important;
   min-height: 44px !important;
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.45);
+  flex-shrink: 0;
 }
 
 .official-mode-dock--compact .official-mode-switch {
-  max-height: min(52vh, 420px);
-  overflow: auto;
   padding: 8px;
   border-radius: 14px;
   background: rgba(18, 18, 18, 0.94);
@@ -223,7 +247,32 @@ body,
   display: flex;
   flex-direction: column;
   gap: 6px;
-  max-width: 168px;
+  max-width: 196px;
+  min-height: 0;
+  max-height: calc(100vh - 88px);
+  max-height: calc(100dvh - 88px);
+  overflow: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
+.official-hub-picker {
+  border-radius: 14px;
+  border: 1px solid rgba(121, 198, 219, 0.35);
+  min-height: 0;
+  max-height: min(36vh, 260px);
+  display: flex;
+  flex-direction: column;
+}
+
+.official-hub-picker__scroll {
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
 }
 
 html.pip-mode,
@@ -417,6 +466,21 @@ html.pip-mode #root > * {
   padding: 4px;
   border-radius: 14px;
   max-width: 196px;
+  min-height: 0;
+  max-height: min(52vh, 420px);
+  display: flex;
+  flex-direction: column;
+}
+
+.official-friends-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
 }
 
 .official-friend-row {
@@ -562,6 +626,7 @@ html.pip-mode #root > * {
 
 .official-friends-header {
   padding: 2px 4px 4px;
+  flex-shrink: 0;
 }
 
 .official-friends-title {
@@ -1239,7 +1304,11 @@ html.pip-mode .app-restart-overlay:not(.app-restart-overlay--outdated) {
 }
 
 .official-logs-list {
+  flex: 1 1 auto;
+  min-height: 0;
   overflow: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
   padding: 8px 10px 14px;
 }
 
@@ -1481,6 +1550,8 @@ html.pip-mode .app-restart-overlay:not(.app-restart-overlay--outdated) {
   display: flex;
   align-items: center;
   justify-content: center;
+  padding: 12px;
+  box-sizing: border-box;
 }
 
 .ps-dialog-backdrop {
@@ -1493,8 +1564,39 @@ html.pip-mode .app-restart-overlay:not(.app-restart-overlay--outdated) {
 .ps-dialog-inner {
   position: relative;
   z-index: 1;
-  max-height: 90vh;
+  width: min(420px, 100%);
+  max-height: min(88vh, calc(100vh - 24px));
+  max-height: min(88dvh, calc(100dvh - 24px));
   pointer-events: auto;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.ps-dialog-inner:has(.ps-dialog-card.is-wide) {
+  width: min(560px, 100%);
+}
+
+.ps-dialog-card {
+  width: 100%;
+  max-height: inherit;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+  border: 1px solid rgba(121, 198, 219, 0.28);
+}
+
+.ps-dialog-header {
+  flex-shrink: 0;
+}
+
+.ps-dialog-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
 }
 
 .menu-action-list > button.q-item {
@@ -1642,6 +1744,32 @@ html.pip-mode .app-restart-overlay:not(.app-restart-overlay--outdated) {
   border: 1px solid #2a2a2a;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.55);
   min-width: 88px;
+  max-height: min(56vh, 320px);
+  overflow: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
+.official-hub-menu {
+  background: #1e1e1e !important;
+  border: 1px solid rgba(121, 198, 219, 0.35) !important;
+  border-radius: 4px;
+  max-height: min(48vh, 280px);
+  overflow: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
+.official-hub-menu__list {
+  max-height: inherit;
+}
+
+.official-shocker-chips {
+  max-height: min(22vh, 140px);
+  overflow: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  align-content: flex-start;
 }
 
 .official-duration-menu--left {
@@ -1690,7 +1818,8 @@ html.pip-mode .app-restart-overlay:not(.app-restart-overlay--outdated) {
 
 /* Consent / login panels (pre-controller) */
 .app-shell {
-  min-height: 100vh;
+  min-height: 100%;
+  min-height: 100dvh;
   display: flex;
   flex-direction: column;
   padding: 12px;
@@ -1698,6 +1827,7 @@ html.pip-mode .app-restart-overlay:not(.app-restart-overlay--outdated) {
   background: #121212;
   color: #e8e8e8;
   font-family: Roboto, sans-serif;
+  box-sizing: border-box;
 }
 
 .brand {
@@ -1836,6 +1966,8 @@ html.pip-mode .app-restart-overlay:not(.app-restart-overlay--outdated) {
   background: radial-gradient(ellipse 80% 60% at 50% 42%, #1a2428 0%, #121212 55%, #0c0c0c 100%);
   color: #e8e8e8;
   box-sizing: border-box;
+  overflow: auto;
+  -webkit-overflow-scrolling: touch;
 }
 
 .auth-boot__glow {
@@ -1851,11 +1983,17 @@ html.pip-mode .app-restart-overlay:not(.app-restart-overlay--outdated) {
 .auth-boot__panel {
   position: relative;
   width: min(360px, 100%);
+  max-height: min(92vh, calc(100dvh - 32px));
   display: flex;
   flex-direction: column;
   align-items: center;
   text-align: center;
   gap: 10px;
+  overflow: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  padding: 4px 2px;
+  box-sizing: border-box;
 }
 
 .auth-boot__mark {
@@ -2131,7 +2269,16 @@ html.pip-mode .app-restart-overlay:not(.app-restart-overlay--outdated) {
   flex-direction: column;
   align-items: stretch;
   gap: 0;
+  min-height: 0;
   animation: setup-flow-in-forward 320ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.setup-limits-block + .setup-limits-block,
+.setup-flow-step .setup-limits-block {
+  max-height: min(46vh, 360px);
+  overflow: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
 }
 
 .setup-flow-step--back {
@@ -2448,7 +2595,8 @@ html.pip-mode .app-restart-overlay:not(.app-restart-overlay--outdated) {
 }
 
 .consent-shell {
-  min-height: 100vh;
+  min-height: 100%;
+  min-height: 100dvh;
   align-items: center;
   justify-content: center;
   gap: 16px;
@@ -2634,6 +2782,7 @@ html.pip-mode .app-restart-overlay:not(.app-restart-overlay--outdated) {
   padding: 16px 14px 40px;
   display: grid;
   gap: 14px;
+  box-sizing: border-box;
 }
 
 .legal-page h1 {
@@ -2653,5 +2802,73 @@ html.pip-mode .app-restart-overlay:not(.app-restart-overlay--outdated) {
 
 .legal-list li + li {
   margin-top: 6px;
+}
+
+/* Compact scrollbars for dense menus / dialogs inside the Discord iframe */
+.ps-dialog-body,
+.official-mode-switch,
+.official-friends-scroll,
+.official-hub-picker__scroll,
+.official-duration-menu,
+.official-hub-menu,
+.official-shocker-chips,
+.official-logs-list,
+.official-right-rail .queue-panel--controls,
+.official-right-rail .queue-panel--people,
+.auth-boot__panel,
+.auth-boot__shocker-list,
+.setup-flow-step .setup-limits-block {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(121, 198, 219, 0.45) transparent;
+}
+
+.ps-dialog-body::-webkit-scrollbar,
+.official-mode-switch::-webkit-scrollbar,
+.official-friends-scroll::-webkit-scrollbar,
+.official-hub-picker__scroll::-webkit-scrollbar,
+.official-duration-menu::-webkit-scrollbar,
+.official-hub-menu::-webkit-scrollbar,
+.official-shocker-chips::-webkit-scrollbar,
+.official-logs-list::-webkit-scrollbar,
+.official-right-rail .queue-panel--controls::-webkit-scrollbar,
+.official-right-rail .queue-panel--people::-webkit-scrollbar,
+.auth-boot__panel::-webkit-scrollbar,
+.auth-boot__shocker-list::-webkit-scrollbar,
+.setup-flow-step .setup-limits-block::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+.ps-dialog-body::-webkit-scrollbar-thumb,
+.official-mode-switch::-webkit-scrollbar-thumb,
+.official-friends-scroll::-webkit-scrollbar-thumb,
+.official-hub-picker__scroll::-webkit-scrollbar-thumb,
+.official-duration-menu::-webkit-scrollbar-thumb,
+.official-hub-menu::-webkit-scrollbar-thumb,
+.official-shocker-chips::-webkit-scrollbar-thumb,
+.official-logs-list::-webkit-scrollbar-thumb,
+.official-right-rail .queue-panel--controls::-webkit-scrollbar-thumb,
+.official-right-rail .queue-panel--people::-webkit-scrollbar-thumb,
+.auth-boot__panel::-webkit-scrollbar-thumb,
+.auth-boot__shocker-list::-webkit-scrollbar-thumb,
+.setup-flow-step .setup-limits-block::-webkit-scrollbar-thumb {
+  background: rgba(121, 198, 219, 0.45);
+  border-radius: 999px;
+}
+
+.ps-dialog-body::-webkit-scrollbar-track,
+.official-mode-switch::-webkit-scrollbar-track,
+.official-friends-scroll::-webkit-scrollbar-track,
+.official-hub-picker__scroll::-webkit-scrollbar-track,
+.official-duration-menu::-webkit-scrollbar-track,
+.official-hub-menu::-webkit-scrollbar-track,
+.official-shocker-chips::-webkit-scrollbar-track,
+.official-logs-list::-webkit-scrollbar-track,
+.official-right-rail .queue-panel--controls::-webkit-scrollbar-track,
+.official-right-rail .queue-panel--people::-webkit-scrollbar-track,
+.auth-boot__panel::-webkit-scrollbar-track,
+.auth-boot__shocker-list::-webkit-scrollbar-track,
+.setup-flow-step .setup-limits-block::-webkit-scrollbar-track {
+  background: transparent;
 }
 

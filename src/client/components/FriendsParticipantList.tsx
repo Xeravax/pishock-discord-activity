@@ -80,128 +80,130 @@ export function FriendsParticipantList({
         </div>
       </div>
 
-      {others.length === 0 ? (
-        <div className="text-grey-5 official-friends-empty">No other participants</div>
-      ) : (
-        others.map((p) => {
-          const status = statuses[p.id];
-          const banned = Boolean(status?.bannedYou);
-          const eStop = Boolean(
-            status?.emergencyStop || status?.shockers?.some((s) => s.emergencyStop),
-          );
-          const notLoggedIn = Boolean(status && !status.linked);
-          const starBlocked = Boolean(status?.queue?.starOnly && !status.queue.starredByThem);
-          const queueHalted = Boolean(status?.queue?.enabled && status.queue.halted);
-          const selectable =
-            Boolean(status) &&
-            !notLoggedIn &&
-            (banned ||
-              eStop ||
-              starBlocked ||
-              queueHalted ||
-              status?.available ||
-              (status?.shockers?.length ?? 0) > 0);
-          const active = selectedSet.has(p.id);
-          const label = statusLabel(status);
-          const detail = statusDetail(status);
-          const primary = !banned && !notLoggedIn ? status?.shockers?.[0] : undefined;
-          const limits = primary ? formatLimits(primary) : null;
-          const flags = primary
-            ? [
-                primary.canShock ? 'S' : null,
-                primary.canVibrate ? 'V' : null,
-                primary.canBeep ? 'B' : null,
-              ]
-                .filter(Boolean)
-                .join('')
-            : null;
-          const multiColor = multiSelect && active ? colorForUser(`u:${p.id}`) : undefined;
+      <div className="official-friends-scroll">
+        {others.length === 0 ? (
+          <div className="text-grey-5 official-friends-empty">No other participants</div>
+        ) : (
+          others.map((p) => {
+            const status = statuses[p.id];
+            const banned = Boolean(status?.bannedYou);
+            const eStop = Boolean(
+              status?.emergencyStop || status?.shockers?.some((s) => s.emergencyStop),
+            );
+            const notLoggedIn = Boolean(status && !status.linked);
+            const starBlocked = Boolean(status?.queue?.starOnly && !status.queue.starredByThem);
+            const queueHalted = Boolean(status?.queue?.enabled && status.queue.halted);
+            const selectable =
+              Boolean(status) &&
+              !notLoggedIn &&
+              (banned ||
+                eStop ||
+                starBlocked ||
+                queueHalted ||
+                status?.available ||
+                (status?.shockers?.length ?? 0) > 0);
+            const active = selectedSet.has(p.id);
+            const label = statusLabel(status);
+            const detail = statusDetail(status);
+            const primary = !banned && !notLoggedIn ? status?.shockers?.[0] : undefined;
+            const limits = primary ? formatLimits(primary) : null;
+            const flags = primary
+              ? [
+                  primary.canShock ? 'S' : null,
+                  primary.canVibrate ? 'V' : null,
+                  primary.canBeep ? 'B' : null,
+                ]
+                  .filter(Boolean)
+                  .join('')
+              : null;
+            const multiColor = multiSelect && active ? colorForUser(`u:${p.id}`) : undefined;
 
-          const starred = Boolean(status?.priority);
+            const starred = Boolean(status?.priority);
 
-          return (
-            <div
-              key={p.id}
-              className={`official-friend-row ${starred ? 'starred' : ''}`}
-            >
-              <button
-                type="button"
-                disabled={!selectable}
-                className={`official-friend-btn ${active && !multiSelect ? 'active' : ''} ${
-                  selectable ? '' : 'disabled'
-                } ${banned ? 'blocked' : ''} ${eStop && !banned ? 'estop' : ''} ${
-                  starBlocked && !banned && !eStop ? 'star-blocked' : ''
-                } ${queueHalted && !banned && !eStop && !starBlocked ? 'queue-halted' : ''} ${
-                  notLoggedIn ? 'not-logged-in' : ''
-                }`}
-                style={
-                  multiSelect && multiColor
-                    ? {
-                        background: multiColor,
-                        borderColor: multiColor,
-                        color: '#121212',
-                      }
-                    : undefined
-                }
-                onClick={() => {
-                  if (!selectable) return;
-                  if (multiSelect) {
-                    onSelect(p.id);
-                    return;
-                  }
-                  onSelect(active ? null : p.id);
-                }}
+            return (
+              <div
+                key={p.id}
+                className={`official-friend-row ${starred ? 'starred' : ''}`}
               >
-                <img src={p.avatarUrl} alt="" className="official-friend-avatar" />
-                <span className="official-friend-meta">
-                  <span className="official-friend-name ellipsis">{p.displayName}</span>
-                  <span
-                    className={`official-friend-status ${
-                      banned || eStop || notLoggedIn || !status?.available ? 'bad' : 'ok'
-                    }`}
-                  >
-                    {label}
-                  </span>
-                  {detail ? (
-                    <span className="official-friend-limits ellipsis">{detail}</span>
-                  ) : primary ? (
-                    <span className="official-friend-limits ellipsis">
-                      {primary.shockerName}
-                      {limits ? ` · ${limits}` : ''}
-                      {flags ? ` · ${flags}` : ''}
-                      {primary.emergencyStop ? ' · E-STOP' : ''}
-                    </span>
-                  ) : null}
-                </span>
-              </button>
-              {onTogglePriority ? (
                 <button
                   type="button"
-                  className={`official-friend-star ${starred ? 'active' : ''}`}
-                  title={
-                    starred
-                      ? 'Remove priority / stars-only access for them'
-                      : 'Star for queue priority (and stars-only access) on your shockers'
+                  disabled={!selectable}
+                  className={`official-friend-btn ${active && !multiSelect ? 'active' : ''} ${
+                    selectable ? '' : 'disabled'
+                  } ${banned ? 'blocked' : ''} ${eStop && !banned ? 'estop' : ''} ${
+                    starBlocked && !banned && !eStop ? 'star-blocked' : ''
+                  } ${queueHalted && !banned && !eStop && !starBlocked ? 'queue-halted' : ''} ${
+                    notLoggedIn ? 'not-logged-in' : ''
+                  }`}
+                  style={
+                    multiSelect && multiColor
+                      ? {
+                          background: multiColor,
+                          borderColor: multiColor,
+                          color: '#121212',
+                        }
+                      : undefined
                   }
-                  aria-label={starred ? 'Unstar for priority' : 'Star for priority'}
-                  aria-pressed={starred}
-                  onClick={(e) => {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    onTogglePriority(p.id, !starred);
+                  onClick={() => {
+                    if (!selectable) return;
+                    if (multiSelect) {
+                      onSelect(p.id);
+                      return;
+                    }
+                    onSelect(active ? null : p.id);
                   }}
                 >
-                  <i
-                    className={`q-icon mdi ${starred ? 'mdi-star' : 'mdi-star-outline'}`}
-                    style={{ fontSize: 16 }}
-                    aria-hidden
-                  />
+                  <img src={p.avatarUrl} alt="" className="official-friend-avatar" />
+                  <span className="official-friend-meta">
+                    <span className="official-friend-name ellipsis">{p.displayName}</span>
+                    <span
+                      className={`official-friend-status ${
+                        banned || eStop || notLoggedIn || !status?.available ? 'bad' : 'ok'
+                      }`}
+                    >
+                      {label}
+                    </span>
+                    {detail ? (
+                      <span className="official-friend-limits ellipsis">{detail}</span>
+                    ) : primary ? (
+                      <span className="official-friend-limits ellipsis">
+                        {primary.shockerName}
+                        {limits ? ` · ${limits}` : ''}
+                        {flags ? ` · ${flags}` : ''}
+                        {primary.emergencyStop ? ' · E-STOP' : ''}
+                      </span>
+                    ) : null}
+                  </span>
                 </button>
-              ) : null}
-            </div>
-          );
-        })
-      )}
+                {onTogglePriority ? (
+                  <button
+                    type="button"
+                    className={`official-friend-star ${starred ? 'active' : ''}`}
+                    title={
+                      starred
+                        ? 'Remove priority / stars-only access for them'
+                        : 'Star for queue priority (and stars-only access) on your shockers'
+                    }
+                    aria-label={starred ? 'Unstar for priority' : 'Star for priority'}
+                    aria-pressed={starred}
+                    onClick={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      onTogglePriority(p.id, !starred);
+                    }}
+                  >
+                    <i
+                      className={`q-icon mdi ${starred ? 'mdi-star' : 'mdi-star-outline'}`}
+                      style={{ fontSize: 16 }}
+                      aria-hidden
+                    />
+                  </button>
+                ) : null}
+              </div>
+            );
+          })
+        )}
+      </div>
     </div>
   );
 }

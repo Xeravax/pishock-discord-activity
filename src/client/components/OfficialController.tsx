@@ -133,7 +133,7 @@ function formatDurationSec(ms: number) {
 }
 
 /** Official remote duration chips (seconds). */
-const DURATION_PRESETS_SEC = [0.1, 0.3, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10] as const;
+const DURATION_PRESETS_SEC = [0.3, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10] as const;
 
 function rollIntensity(min: number, max: number) {
   const lo = Math.min(min, max);
@@ -1038,12 +1038,9 @@ export function OfficialController({
                           top: '100%',
                           zIndex: 6000,
                           minWidth: 180,
-                          background: '#1e1e1e',
-                          border: '1px solid rgba(121,198,219,.35)',
-                          borderRadius: 4,
                         }}
                       >
-                        <div className="q-list q-list--dark" style={{ padding: 4 }}>
+                        <div className="q-list q-list--dark official-hub-menu__list" style={{ padding: 4 }}>
                           <div className="q-item q-item-type row no-wrap q-item--dark full-width">
                             <div className="q-item__section column q-item__section--main justify-center">
                               <div className="q-item__label text-secondary">Hub ID</div>
@@ -1174,7 +1171,7 @@ export function OfficialController({
                       </div>
                     ) : null}
                     {shockers.length > 0 ? (
-                      <div className="row q-gutter-sm">
+                      <div className="row q-gutter-sm official-shocker-chips">
                         {shockers.map((s) => {
                           const selected = multiShock
                             ? selectedIds.includes(s.id)
@@ -1806,11 +1803,9 @@ export function OfficialController({
               : null}
 
             {showOwnMode && !friendsOpen && hubsOpen ? (
-              <div
-                className="column flex q-pa-xs bg-dark"
-                style={{ borderRadius: 14, border: '1px solid rgba(121,198,219,.35)' }}
-              >
+              <div className="official-hub-picker column flex q-pa-xs bg-dark">
                 <div className="text-caption text-secondary q-px-xs q-pb-xs">Your hubs</div>
+                <div className="official-hub-picker__scroll">
                 {(hubs.length ? hubs : [hub]).map((h) => {
                   const selected = selectedHubId ? selectedHubId === h.id : h.id === hub.id;
                   return (
@@ -1837,6 +1832,7 @@ export function OfficialController({
                     </button>
                   );
                 })}
+                </div>
               </div>
             ) : null}
           </div>
