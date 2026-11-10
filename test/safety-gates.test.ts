@@ -33,7 +33,7 @@ import {
 import type { AppEnv } from '../src/server/env.js';
 import type { ControlSnapshot, PiShockCreds } from '../src/server/pishock/client.js';
 
-const CREDS: PiShockCreds = { userId: 1, token: 'test-token' };
+const CREDS: PiShockCreds = { userId: 1, username: 'test-user', token: 'test-token' };
 
 function emptySnapshot(overrides: Partial<ControlSnapshot> = {}): ControlSnapshot {
   return {

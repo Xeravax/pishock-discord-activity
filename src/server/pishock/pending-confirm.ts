@@ -2,7 +2,9 @@ import type { RelayCredentials } from './relay.js';
 
 export type PendingPiShockConfirm = {
   userId: number;
+  /** Short-lived website session token — never persisted. */
   token: string;
+  username: string;
   createdAt: number;
   hubNames: string[];
 };
@@ -15,10 +17,12 @@ export function setPendingConfirm(
   discordUserId: string,
   creds: RelayCredentials,
   hubNames: string[] = [],
+  username = '',
 ) {
   pendingConfirmByDiscordUser.set(discordUserId, {
     userId: creds.UserId,
     token: creds.Token,
+    username,
     createdAt: Date.now(),
     hubNames,
   });

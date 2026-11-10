@@ -1885,6 +1885,20 @@ html.pip-mode .app-restart-overlay:not(.app-restart-overlay--outdated) {
   line-height: 1.4;
 }
 
+.auth-boot__api-key-box {
+  word-break: break-all;
+}
+
+.auth-boot__api-key {
+  display: block;
+  margin-top: 6px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.9rem;
+  line-height: 1.45;
+  color: #e8e8e8;
+  user-select: all;
+}
+
 .auth-boot__actions {
   display: flex;
   flex-wrap: wrap;

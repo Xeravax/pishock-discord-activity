@@ -1,5 +1,6 @@
 import WebSocket from 'ws';
 import { AGENT_NAME, PISHOCK_BROKER, ShockerOp } from '../../shared/constants.js';
+import { ingestBrokerDeviceLog } from './broker-log-ingest.js';
 import type { PiShockCreds } from './client.js';
 
 export type BrokerEvent =
@@ -18,10 +19,19 @@ type BrokerSession = {
   lastSeenAt: Map<string, number>;
   reconnectTimer?: NodeJS.Timeout;
   idleTimer?: NodeJS.Timeout;
+  logCapture?: Subscriber;
+  logCaptureTouchAt?: number;
+  logCaptureIdleTimer?: NodeJS.Timeout;
 };
 
 const sessions = new Map<string, BrokerSession>();
 const IDLE_TEARDOWN_MS = 90_000;
+/** Keep `-log` capture warm between Discord activity polls without holding forever. */
+const LOG_CAPTURE_IDLE_MS = 15 * 60 * 1000;
+
+function brokerUrl(creds: PiShockCreds): string {
+  return `${PISHOCK_BROKER}?Username=${encodeURIComponent(creds.username)}&ApiKey=${encodeURIComponent(creds.token)}`;
+}
 
 export function subscribeBroker(
   discordUserId: string,
@@ -87,6 +97,13 @@ function clearIdleTimer(session: BrokerSession) {
   }
 }
 
+function clearLogCaptureIdleTimer(session: BrokerSession) {
+  if (session.logCaptureIdleTimer) {
+    clearTimeout(session.logCaptureIdleTimer);
+    session.logCaptureIdleTimer = undefined;
+  }
+}
+
 function scheduleIdleTeardown(discordUserId: string) {
   const session = sessions.get(discordUserId);
   if (!session) return;
@@ -97,6 +114,81 @@ function scheduleIdleTeardown(discordUserId: string) {
     if (current.subscribers.size === 0) teardown(discordUserId);
   }, IDLE_TEARDOWN_MS);
   session.idleTimer.unref?.();
+}
+
+function scheduleLogCaptureIdle(discordUserId: string) {
+  const session = sessions.get(discordUserId);
+  if (!session?.logCapture) return;
+  clearLogCaptureIdleTimer(session);
+  session.logCaptureIdleTimer = setTimeout(() => {
+    stopLogCapture(discordUserId);
+  }, LOG_CAPTURE_IDLE_MS);
+  session.logCaptureIdleTimer.unref?.();
+}
+
+/**
+ * Keep a sticky broker subscriber that persists live `{clientId}-log` frames.
+ * PiShock website history is ephemeral — this is the maintained capture path.
+ */
+export function ensureLogCapture(
+  discordUserId: string,
+  creds: PiShockCreds,
+  clientIds: string[],
+) {
+  let session = sessions.get(discordUserId);
+  if (!session) {
+    session = {
+      ws: null,
+      creds,
+      clientIds: new Set(),
+      subscribers: new Set(),
+      online: new Map(),
+      lastSeenAt: new Map(),
+    };
+    sessions.set(discordUserId, session);
+  } else {
+    session.creds = creds;
+  }
+
+  session.logCaptureTouchAt = Date.now();
+  clearIdleTimer(session);
+  addClientIds(session, clientIds);
+
+  if (!session.logCapture) {
+    const capture: Subscriber = (event) => {
+      if (event.type !== 'log') return;
+      void ingestBrokerDeviceLog(discordUserId, {
+        clientId: event.clientId,
+        payload: event.payload,
+        at: event.at,
+      }).catch((err) => {
+        console.warn(
+          '[broker] log ingest failed',
+          err instanceof Error ? err.message : err,
+        );
+      });
+    };
+    session.logCapture = capture;
+    session.subscribers.add(capture);
+  }
+
+  ensureConnected(discordUserId);
+  if (session.ws?.readyState === WebSocket.OPEN) {
+    subscribeTargets(session, [...session.clientIds]);
+  }
+  scheduleLogCaptureIdle(discordUserId);
+}
+
+export function stopLogCapture(discordUserId: string) {
+  const session = sessions.get(discordUserId);
+  if (!session?.logCapture) return;
+  clearLogCaptureIdleTimer(session);
+  session.subscribers.delete(session.logCapture);
+  session.logCapture = undefined;
+  session.logCaptureTouchAt = undefined;
+  if (session.subscribers.size === 0) {
+    scheduleIdleTeardown(discordUserId);
+  }
 }
 
 /**
@@ -279,7 +371,7 @@ function publishPayload(creds: PiShockCreds, payload: string): Promise<boolean> 
       resolve(ok);
     };
 
-    const url = `${PISHOCK_BROKER}?UserId=${encodeURIComponent(String(creds.userId))}&Token=${encodeURIComponent(creds.token)}`;
+    const url = brokerUrl(creds);
     const ws = new WebSocket(url);
     const timer = setTimeout(() => done(false), 8000);
 
@@ -314,7 +406,7 @@ function ensureConnected(discordUserId: string) {
     return;
   }
 
-  const url = `${PISHOCK_BROKER}?UserId=${encodeURIComponent(String(session.creds.userId))}&Token=${encodeURIComponent(session.creds.token)}`;
+  const url = brokerUrl(session.creds);
   const ws = new WebSocket(url);
   session.ws = ws;
 
@@ -405,7 +497,10 @@ function handleBrokerMessage(session: BrokerSession, parsed: Record<string, unkn
       session.online.set(bare, true);
       session.lastSeenAt.set(bare, Date.now());
       broadcast(session, { type: 'online', clientId: bare, online: true, at: Date.now() });
-      broadcast(session, { type: 'log', clientId: bare, payload: parsed, at: Date.now() });
+      // Prefer unwrapped command body for ingest/UI; fall back to full frame.
+      const logPayload =
+        Object.keys(payload).length > 0 ? payload : (parsed as unknown);
+      broadcast(session, { type: 'log', clientId: bare, payload: logPayload, at: Date.now() });
       return;
     }
   }
@@ -463,6 +558,8 @@ function teardown(discordUserId: string) {
   if (!session) return;
   if (session.reconnectTimer) clearTimeout(session.reconnectTimer);
   clearIdleTimer(session);
+  clearLogCaptureIdleTimer(session);
+  session.logCapture = undefined;
   try {
     session.ws?.close();
   } catch {

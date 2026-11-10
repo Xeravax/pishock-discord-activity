@@ -1,11 +1,19 @@
 import {
   AGENT_NAME,
   PISHOCK_API,
-  PISHOCK_DO,
   ShockerOp,
 } from '../../shared/constants.js';
 
-export type PiShockCreds = { userId: number; token: string };
+/**
+ * Stored day-to-day creds use `mode: 'apiKey'` (default): `X-PiShock-Api-Key`.
+ * Short-lived website login uses `mode: 'session'`: UserId + Token (never persisted).
+ */
+export type PiShockCreds = {
+  userId: number;
+  username: string;
+  token: string;
+  mode?: 'apiKey' | 'session';
+};
 
 export class PiShockApiError extends Error {
   status: number;
@@ -23,9 +31,15 @@ export class PiShockApiError extends Error {
 function headers(creds: PiShockCreds, hasJsonBody: boolean): HeadersInit {
   const h: Record<string, string> = {
     Accept: 'application/json',
-    'X-PiShock-UserId': String(creds.userId),
-    'X-PiShock-Token': creds.token,
   };
+  if (creds.mode === 'session') {
+    h['X-PiShock-UserId'] = String(creds.userId);
+    h['X-PiShock-Token'] = creds.token;
+  } else {
+    // Official public API auth for API keys (swagger: APIKey / X-PiShock-Api-Key)
+    h['X-PiShock-Api-Key'] = creds.token;
+    if (creds.userId) h['X-PiShock-UserId'] = String(creds.userId);
+  }
   // Never send Content-Type on GETs — api.pishock.com rejects empty JSON bodies with 400 SerializerErrors
   if (hasJsonBody) h['Content-Type'] = 'application/json';
   return h;
@@ -155,41 +169,6 @@ export async function operateByShare(
     Duration: durationMs,
     IntensityAsPercentage: true,
   });
-}
-
-/** Hold / warning / Client operate path used by the website control page */
-export async function clientOperate(
-  creds: PiShockCreds,
-  body: {
-    ShockerId: number;
-    Intensity: number;
-    Duration: number;
-    Op: number;
-    Hold?: boolean;
-    Warning?: boolean;
-  },
-) {
-  // Official website body (do.pishock.com). Currently 404 for many accounts; callers should fall back.
-  return request(creds, 'POST', `${PISHOCK_DO}/Client/Operate`, {
-    ShockerId: body.ShockerId,
-    Intensity: body.Intensity,
-    Duration: body.Duration,
-    UserId: creds.userId,
-    Token: creds.token,
-    Op: body.Op,
-    Shared: false,
-    Hold: Boolean(body.Hold),
-    SessionHex: '',
-    Warning: body.Warning ? { Active: true, Min: 1, Max: 30 } : null,
-    Name: AGENT_NAME,
-  });
-}
-
-export async function loadLogs(creds: PiShockCreds, clientId?: number) {
-  const url = clientId
-    ? `${PISHOCK_DO}/Client/LoadLogs?ClientId=${clientId}`
-    : `${PISHOCK_DO}/Client/LoadLogs`;
-  return request(creds, 'GET', url);
 }
 
 async function softList(

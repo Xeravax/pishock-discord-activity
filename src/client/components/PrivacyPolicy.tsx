@@ -22,12 +22,13 @@ export function PrivacyPolicy({ onBack }: Props) {
       <section className="panel">
         <h2>PiShock authentication</h2>
         <p className="muted">
-          Linking your account <strong>requests an authentication (session) token</strong> from
-          PiShock via their login page. This activity does <strong>not</strong> use a classic
-          PiShock API key for your account. Other people&apos;s devices are only available when
-          those users have logged in with their own PiShock accounts. Authentication tokens are
-          encrypted at rest in the database (AES-256-GCM) and are never exposed to other
-          participants&apos; browsers. Your PiShock password is never stored here.
+          Linking your account uses PiShock&apos;s login page, then{' '}
+          <strong>creates a named 7-day API key</strong> (Discord Activity) for device control. The
+          short-lived login session is not persisted. The API key is shown once at link time,
+          encrypted at rest (AES-256-GCM), and is never exposed to other participants&apos;
+          browsers afterward. After 7 days you must reauthenticate. Your PiShock password is never
+          stored here. Other people&apos;s devices are only available when those users have linked
+          their own PiShock accounts.
         </p>
       </section>
 
@@ -36,8 +37,7 @@ export function PrivacyPolicy({ onBack }: Props) {
         <ul className="legal-list">
           <li>Discord user id and profile fields needed for the activity session</li>
           <li>
-            Encrypted PiShock authentication / session token (not an API key) linked to your Discord
-            user
+            Encrypted PiShock API key, username, and expiry linked to your Discord user
           </li>
           <li>Consent acknowledgment status</li>
           <li>Command activity logs for accountability (action, intensity, duration, success)</li>
@@ -49,7 +49,7 @@ export function PrivacyPolicy({ onBack }: Props) {
         <ul className="legal-list">
           <li>Authenticate you inside Discord and authorize PiShock control requests</li>
           <li>Enforce consent and safety gates before device control</li>
-          <li>Proxy commands to PiShock APIs without exposing your PiShock token to other clients</li>
+          <li>Proxy commands to PiShock APIs without exposing your API key to other clients</li>
           <li>Maintain activity logs for transparency and abuse investigation</li>
         </ul>
       </section>
@@ -59,7 +59,7 @@ export function PrivacyPolicy({ onBack }: Props) {
         <ul className="legal-list">
           <li>We do not store your PiShock password</li>
           <li>We do not sell personal data</li>
-          <li>We do not share PiShock tokens with other activity participants</li>
+          <li>We do not share PiShock API keys with other activity participants</li>
         </ul>
       </section>
 
@@ -75,8 +75,9 @@ export function PrivacyPolicy({ onBack }: Props) {
       <section className="panel">
         <h2>Retention</h2>
         <p className="muted">
-          Sessions and logs are retained only as long as needed for operation, safety, and
-          abuse prevention. You can unlink your PiShock session from the activity at any time.
+          API keys expire after 7 days (you must re-link). Logs are retained only as long as needed
+          for operation, safety, and abuse prevention. You can unlink your PiShock account from the
+          activity at any time.
         </p>
       </section>
     </div>

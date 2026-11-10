@@ -4,7 +4,7 @@ type Props = {
 };
 
 /**
- * Explicit notice: session auth token (not API key), encrypted at rest.
+ * Explicit notice: named 7-day API key, encrypted at rest.
  * Shown before / during PiShock linking so users are not surprised.
  */
 export function PiShockAuthDisclaimer({ compact }: Props) {
@@ -16,22 +16,26 @@ export function PiShockAuthDisclaimer({ compact }: Props) {
     >
       <div className="pishock-auth-disclaimer__eyebrow">Authentication disclaimer</div>
       <p className="pishock-auth-disclaimer__lead">
-        This application <strong>will request an authentication token</strong> from PiShock when you
-        link your account.
+        This application <strong>will create a named PiShock API key</strong> when you link your
+        account.
       </p>
       <ul className="pishock-auth-disclaimer__list">
         <li>
-          It uses a <strong>PiShock login / session authentication token</strong>, not a classic
-          PiShock <strong>API key</strong>, for your account.
+          After you sign in on PiShock&apos;s login page, confirming the link creates a{' '}
+          <strong>7-day API key</strong> named <strong>Discord Activity</strong> and stores it
+          encrypted for control.
         </li>
         <li>
-          It will <strong>not</strong> ask for or store an API key for you. Other people&apos;s
-          devices are only controllable when <strong>those users have logged in with their own
-          PiShock accounts</strong> in this activity (their own tokens / shares).
+          The short-lived login session token is used only to create that key and is{' '}
+          <strong>not</strong> persisted. After 7 days you must reauthenticate.
         </li>
         <li>
-          Authentication tokens are <strong>encrypted in the database</strong> (AES-256-GCM) and are
-          never sent to other users&apos; browsers.
+          Other people&apos;s devices are only controllable when{' '}
+          <strong>those users have linked their own PiShock accounts</strong> in this activity.
+        </li>
+        <li>
+          API keys are <strong>encrypted in the database</strong> (AES-256-GCM) and are never sent
+          to other users&apos; browsers after the one-time reveal.
         </li>
       </ul>
     </aside>

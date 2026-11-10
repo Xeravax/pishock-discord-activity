@@ -3,7 +3,7 @@ name: Tests (optional)
 on:
   pull_request:
   push:
-    branches: [release, develop]
+    branches: [release, develop, feature/api-key]
   workflow_dispatch:
 
 concurrency:

@@ -43,6 +43,7 @@ import {
 } from './components/QueuePanel';
 import { PsDialog } from './components/PsDialog';
 import { LinkConfirmPanel } from './components/LinkConfirmPanel';
+import { ApiKeyRevealPanel } from './components/ApiKeyRevealPanel';
 import { AuthLoadingScreen } from './components/AuthLoadingScreen';
 import {
   SetupWizard,
@@ -106,7 +107,15 @@ type LegalView = null | 'terms' | 'privacy';
 
 type PendingLinkConfirm = {
   pishockUserId: number;
+  pishockUsername?: string | null;
   hubNames: string[];
+};
+
+type PendingApiKeyReveal = {
+  apiKey: string;
+  apiKeyName: string;
+  expiresAt: string;
+  pishockUsername?: string | null;
 };
 
 const PARTICIPANT_STATUS_TTL_MS = 3 * 60 * 1000;
@@ -137,6 +146,7 @@ export function App() {
   const [linking, setLinking] = useState(false);
   const [linkError, setLinkError] = useState<string | null>(null);
   const [linkConfirm, setLinkConfirm] = useState<PendingLinkConfirm | null>(null);
+  const [apiKeyReveal, setApiKeyReveal] = useState<PendingApiKeyReveal | null>(null);
   const [confirmBusy, setConfirmBusy] = useState(false);
   const [setupPhase, setSetupPhase] = useState(false);
   const [setupSharePhase, setSetupSharePhase] = useState(false);
@@ -339,11 +349,13 @@ export function App() {
             const loginStatus = await apiFetch<{
               status: string;
               pishockUserId?: number;
+              pishockUsername?: string | null;
               hubNames?: string[];
             }>('/pishock/login/status', authState.accessToken);
             if (loginStatus.status === 'confirm' && loginStatus.pishockUserId != null) {
               setLinkConfirm({
                 pishockUserId: loginStatus.pishockUserId,
+                pishockUsername: loginStatus.pishockUsername ?? null,
                 hubNames: loginStatus.hubNames ?? [],
               });
               report(100, 'Ready');
@@ -912,6 +924,7 @@ export function App() {
           status: string;
           error?: string;
           pishockUserId?: number;
+          pishockUsername?: string | null;
           hubNames?: string[];
         }>('/pishock/login/status', accessToken);
         if (linkPollGenRef.current !== gen) return;
@@ -923,6 +936,7 @@ export function App() {
           setActionError(null);
           setLinkConfirm({
             pishockUserId: status.pishockUserId,
+            pishockUsername: status.pishockUsername ?? null,
             hubNames: status.hubNames ?? [],
           });
           return;
@@ -982,15 +996,40 @@ export function App() {
     setConfirmBusy(true);
     setLinkError(null);
     try {
-      await apiFetch('/pishock/login/confirm', token, { method: 'POST', body: '{}' });
-      // Enter setup before clearing confirm so we never flash the control panel.
-      setSetupDevicesReady(false);
-      setSetupSharePhase(true);
+      const result = await apiFetch<{
+        ok: boolean;
+        apiKey?: string;
+        apiKeyName?: string;
+        expiresAt?: string;
+        pishockUsername?: string | null;
+      }>('/pishock/login/confirm', token, { method: 'POST', body: '{}' });
       setLinkConfirm(null);
-      const meData = await refreshMe(token);
+      if (result.apiKey && result.expiresAt) {
+        setApiKeyReveal({
+          apiKey: result.apiKey,
+          apiKeyName: result.apiKeyName || 'Discord Activity',
+          expiresAt: result.expiresAt,
+          pishockUsername: result.pishockUsername ?? linkConfirm.pishockUsername ?? null,
+        });
+      } else {
+        await continueAfterApiKeyReveal(token);
+      }
+    } catch (err) {
+      setLinkError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setConfirmBusy(false);
+    }
+  };
+
+  const continueAfterApiKeyReveal = async (accessToken: string) => {
+    setApiKeyReveal(null);
+    setSetupDevicesReady(false);
+    setSetupSharePhase(true);
+    try {
+      const meData = await refreshMe(accessToken);
       if (meData.pishockLinked) {
-        await refreshDevices(token);
-        await refreshLogs(token).catch(() => undefined);
+        await refreshDevices(accessToken);
+        await refreshLogs(accessToken).catch(() => undefined);
         setSetupDevicesReady(true);
       } else {
         setSetupSharePhase(false);
@@ -1000,8 +1039,6 @@ export function App() {
       setSetupSharePhase(false);
       setSetupDevicesReady(false);
       setLinkError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setConfirmBusy(false);
     }
   };
 
@@ -1112,7 +1149,7 @@ export function App() {
     } catch (err) {
       if (err instanceof ApiError && err.code === 'PISHOCK_RELOGIN') {
         await handleReloginNeeded();
-        requirePiShockLink('PiShock session expired — link again to control your own devices.');
+        requirePiShockLink('PiShock API key expired — link again to control your own devices.');
       } else if (err instanceof ApiError && err.code === 'EMERGENCY_STOP') {
         setActionError('Emergency stop is engaged — owner must release STOP');
         if (token) void refreshParticipantStatus(token, participants, true).catch(() => undefined);
@@ -1303,7 +1340,7 @@ export function App() {
     } catch (err) {
       if (err instanceof ApiError && err.code === 'PISHOCK_RELOGIN') {
         await handleReloginNeeded();
-        requirePiShockLink('PiShock session expired — link again to control your own devices.');
+        requirePiShockLink('PiShock API key expired — link again to control your own devices.');
       } else {
         setActionError(err instanceof Error ? err.message : String(err));
       }
@@ -1552,10 +1589,29 @@ export function App() {
     );
   }
 
+  if (apiKeyReveal) {
+    return (
+      <ApiKeyRevealPanel
+        apiKey={apiKeyReveal.apiKey}
+        apiKeyName={apiKeyReveal.apiKeyName}
+        expiresAt={apiKeyReveal.expiresAt}
+        pishockUsername={apiKeyReveal.pishockUsername}
+        onContinue={() => {
+          if (!token) {
+            setApiKeyReveal(null);
+            return;
+          }
+          void continueAfterApiKeyReveal(token);
+        }}
+      />
+    );
+  }
+
   if (linkConfirm) {
     return (
       <LinkConfirmPanel
         pishockUserId={linkConfirm.pishockUserId}
+        pishockUsername={linkConfirm.pishockUsername}
         hubNames={linkConfirm.hubNames}
         discordName={me.user.global_name || me.user.username}
         busy={confirmBusy}

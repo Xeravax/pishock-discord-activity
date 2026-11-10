@@ -1,6 +1,11 @@
 import type { FastifyPluginAsync } from 'fastify';
+import {
+  PISHOCK_API_KEY_NAME,
+  PISHOCK_API_KEY_TTL_MS,
+} from '../../shared/constants.js';
 import type { AppEnv } from '../env.js';
-import { getHubs } from '../pishock/client.js';
+import { createApiKey, getAccount } from '../pishock/auth-api.js';
+import { getHubs, PiShockApiError } from '../pishock/client.js';
 import {
   clearPendingConfirm,
   getPendingConfirm,
@@ -23,8 +28,12 @@ export const pishockSessionRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (
       void (async () => {
         try {
           const creds = await awaitRelayLogin(req.discordUser.id);
-          const hubNames = await softHubNames({ userId: creds.UserId, token: creds.Token });
-          setPendingConfirm(req.discordUser.id, creds, hubNames);
+          const session = { userId: creds.UserId, token: creds.Token };
+          const [hubNames, username] = await Promise.all([
+            softHubNames(session),
+            softUsername(session),
+          ]);
+          setPendingConfirm(req.discordUser.id, creds, hubNames, username);
         } catch {
           // Status endpoint / poll will surface failure
         }
@@ -44,6 +53,7 @@ export const pishockSessionRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (
       return {
         status: 'confirm' as const,
         pishockUserId: confirm.userId,
+        pishockUsername: confirm.username || null,
         hubNames: confirm.hubNames,
         discordUser: {
           id: req.discordUser.id,
@@ -63,11 +73,16 @@ export const pishockSessionRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (
     if (pending.settled) {
       try {
         const creds = await pending.promise;
-        const hubNames = await softHubNames({ userId: creds.UserId, token: creds.Token });
-        setPendingConfirm(req.discordUser.id, creds, hubNames);
+        const session = { userId: creds.UserId, token: creds.Token };
+        const [hubNames, username] = await Promise.all([
+          softHubNames(session),
+          softUsername(session),
+        ]);
+        setPendingConfirm(req.discordUser.id, creds, hubNames, username);
         return {
           status: 'confirm' as const,
           pishockUserId: creds.UserId,
+          pishockUsername: username || null,
           hubNames,
           discordUser: {
             id: req.discordUser.id,
@@ -96,12 +111,60 @@ export const pishockSessionRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (
         code: 'NO_PENDING_CONFIRM',
       });
     }
-    await savePiShockSession(opts.env, req.discordUser.id, pending.userId, pending.token);
-    return {
-      ok: true,
-      pishockUserId: pending.userId,
-      hubNames: pending.hubNames,
-    };
+
+    const session = { userId: pending.userId, token: pending.token };
+    const expiresAt = new Date(Date.now() + PISHOCK_API_KEY_TTL_MS);
+
+    try {
+      let username = pending.username.trim();
+      if (!username) {
+        username = (await getAccount(session)).Username;
+      }
+      if (!username) {
+        return reply.code(502).send({ error: 'PiShock account username unavailable' });
+      }
+
+      const created = await createApiKey(session, {
+        name: PISHOCK_API_KEY_NAME,
+        expiry: expiresAt,
+      });
+
+      await savePiShockSession(opts.env, req.discordUser.id, {
+        userId: pending.userId,
+        username,
+        apiKey: created.apiKey,
+        expiresAt,
+        apiKeyId: created.apiKeyId,
+      });
+
+      return {
+        ok: true,
+        pishockUserId: pending.userId,
+        pishockUsername: username,
+        hubNames: pending.hubNames,
+        apiKey: created.apiKey,
+        apiKeyName: PISHOCK_API_KEY_NAME,
+        expiresAt: expiresAt.toISOString(),
+      };
+    } catch (err) {
+      // Put pending back so the user can retry confirm without re-logging in.
+      setPendingConfirm(
+        req.discordUser.id,
+        { UserId: pending.userId, Token: pending.token },
+        pending.hubNames,
+        pending.username,
+      );
+      if (err instanceof PiShockApiError) {
+        return reply.code(err.status >= 400 && err.status < 600 ? err.status : 502).send({
+          error: err.body || err.message,
+          code: err.needsRelogin ? 'PISHOCK_RELOGIN' : 'PISHOCK_API_KEY_CREATE_FAILED',
+        });
+      }
+      return reply.code(502).send({
+        error: err instanceof Error ? err.message : 'Failed to create PiShock API key',
+        code: 'PISHOCK_API_KEY_CREATE_FAILED',
+      });
+    }
   });
 
   app.post('/api/pishock/login/cancel', async (req) => {
@@ -118,7 +181,13 @@ export const pishockSessionRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (
 
 async function softHubNames(creds: { userId: number; token: string }): Promise<string[]> {
   try {
-    const result = await getHubs(creds);
+    // Ephemeral website session — never use API-key headers here.
+    const result = await getHubs({
+      userId: creds.userId,
+      username: '',
+      token: creds.token,
+      mode: 'session',
+    });
     const rows = Array.isArray(result.data) ? result.data : [];
     return rows
       .map((row) => {
@@ -129,5 +198,14 @@ async function softHubNames(creds: { userId: number; token: string }): Promise<s
       .slice(0, 5);
   } catch {
     return [];
+  }
+}
+
+async function softUsername(creds: { userId: number; token: string }): Promise<string> {
+  try {
+    const account = await getAccount(creds);
+    return String(account.Username ?? '').trim();
+  } catch {
+    return '';
   }
 }

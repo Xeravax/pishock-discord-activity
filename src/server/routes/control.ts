@@ -3,7 +3,6 @@ import { ShockerOp } from '../../shared/constants.js';
 import type { AppEnv } from '../env.js';
 import {
   PiShockApiError,
-  clientOperate,
   claimShareCodes,
   createLink,
   createShare,
@@ -15,7 +14,12 @@ import {
   pauseLink,
   pauseShare,
 } from '../pishock/client.js';
-import { getOnlineMap, probeOnlineStatus, publishOperate } from '../pishock/broker.js';
+import {
+  ensureLogCapture,
+  getOnlineMap,
+  probeOnlineStatus,
+  publishOperate,
+} from '../pishock/broker.js';
 import { commandQueue } from '../pishock/command-queue-runtime.js';
 import {
   assertModeAllowed,
@@ -36,7 +40,6 @@ import {
   listPublicCommandLogs,
   logCommand,
   setEmergencyStop,
-  syncWebsiteDeviceLogs,
 } from '../session.js';
 import { broadcastRealtimeAll } from '../realtime.js';
 import {
@@ -98,7 +101,7 @@ async function handlePiShockError(
   if (err instanceof PiShockApiError) {
     if (err.needsRelogin) {
       await clearPiShockSession(discordUserId);
-      return reply.code(401).send({ error: 'PiShock session expired', code: 'PISHOCK_RELOGIN' });
+      return reply.code(401).send({ error: 'PiShock API key expired', code: 'PISHOCK_RELOGIN' });
     }
     return reply.code(err.status).send({ error: err.message, body: err.body });
   }
@@ -111,6 +114,8 @@ export const controlRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app, op
     if (blocked) return blocked;
     try {
       const snapshot = await fetchControlSnapshot(req.pishockCreds!);
+      const clientIds = collectHubClientIds(snapshot.hubs);
+      ensureLogCapture(req.discordUser.id, req.pishockCreds!, clientIds);
       return {
         ...snapshot,
         online: getOnlineMap(req.discordUser.id),
@@ -414,31 +419,23 @@ export const controlRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app, op
       }
 
       if (hold || warning) {
-        if (shockerId == null) {
-          return reply.code(400).send({ error: 'Hold/warning requires shockerId' });
-        }
-        const result = await clientOperate(creds, {
-          ShockerId: shockerId,
-          Intensity: Math.max(1, intensity),
-          Duration: Math.max(1, Math.round(durationMs / 1000)),
-          Op: op,
-          Hold: hold,
-          Warning: warning,
+        // Hold/warning require broker PUBLISH — no legacy do.pishock.com fallback.
+        await logOperateEvent({
+          executorDiscordUserId: req.discordUser.id,
+          ownerDiscordUserId: policy.ownerDiscordUserId,
+          action: operation,
+          shockerId,
+          shareCode: policy.crossUser ? null : shareCode,
+          intensity,
+          durationMs,
+          success: false,
+          detail: 'broker_failed',
+          location,
         });
-        if (result.status !== 404 && result.status !== 405) {
-          await logOperateEvent({
-            executorDiscordUserId: req.discordUser.id,
-            ownerDiscordUserId: policy.ownerDiscordUserId,
-            action: operation,
-            shockerId,
-            shareCode: policy.crossUser ? null : shareCode,
-            intensity,
-            durationMs,
-            success: true,
-            location,
-      });
-          return { ok: true, via: 'client-operate' };
-        }
+        return reply.code(502).send({
+          error: 'Hold/warning requires broker; publish failed',
+          code: 'BROKER_PUBLISH_FAILED',
+        });
       }
 
       if (shareCode) {
@@ -628,14 +625,7 @@ export const controlRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app, op
     const query = req.query as { limit?: string };
     const limit = Number(query.limit ?? 200);
 
-    // Import PiShock website/panel device logs into the shared feed when linked
-    if (req.pishockCreds) {
-      try {
-        await syncWebsiteDeviceLogs(req.discordUser.id, req.pishockCreds);
-      } catch {
-        // optional — public Discord feed still useful
-      }
-    }
+    // Website/device history is ephemeral — live broker `-log` ingest fills source=website rows.
 
     const [publicFeed, activity] = await Promise.all([
       listPublicCommandLogs(Number.isFinite(limit) ? limit : 200),
@@ -664,6 +654,7 @@ export const controlRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app, op
     const waitMs = Number(query.waitMs ?? 2500);
 
     try {
+      ensureLogCapture(req.discordUser.id, req.pishockCreds!, clientIds);
       const result = await probeOnlineStatus(
         req.discordUser.id,
         req.pishockCreds!,
@@ -676,4 +667,16 @@ export const controlRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app, op
     }
   });
 };
+
+function collectHubClientIds(hubs: unknown[]): string[] {
+  const ids: string[] = [];
+  for (const hub of hubs) {
+    if (!hub || typeof hub !== 'object') continue;
+    const row = hub as Record<string, unknown>;
+    const raw = row.HubId ?? row.hubId ?? row.ClientId ?? row.clientId ?? row.id ?? row.Id;
+    if (raw == null || raw === '') continue;
+    ids.push(String(raw));
+  }
+  return ids;
+}
 
