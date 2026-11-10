@@ -47,7 +47,6 @@ export type ParticipantStatus = {
     starredByThem: boolean;
     canOperate: boolean;
     maxPerSender: number;
-    maxSenderMs: number;
     progressMs: number;
   };
   shockers: ParticipantShockerStatus[];

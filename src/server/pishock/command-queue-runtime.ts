@@ -325,7 +325,6 @@ async function emitQueueState(state: QueueStatePublic): Promise<void> {
       enabled: settings.enabled,
       progressMs: settings.progressMs,
       maxPerSender: settings.maxPerSender,
-      maxSenderMs: settings.maxSenderMs,
       starOnly: settings.starOnly,
       paused: state.paused,
       active: state.active,
@@ -343,7 +342,6 @@ export const commandQueue = createCommandQueue({
     return {
       progressMs: s.progressMs,
       maxPerSender: s.maxPerSender,
-      maxSenderMs: s.maxSenderMs,
     };
   },
   validateBeforeRun: validateQueuedItem,

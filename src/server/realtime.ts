@@ -44,7 +44,6 @@ export type RealtimeEvent =
       /** Minimum ms before the next queue item may start. */
       progressMs: number;
       maxPerSender: number;
-      maxSenderMs: number;
       starOnly: boolean;
       paused: boolean;
       active: {

@@ -232,7 +232,6 @@ export const participantRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app
           starredByThem: theyStarredMe,
           canOperate: !theirSettings.starOnly || theyStarredMe,
           maxPerSender: theirSettings.maxPerSender,
-          maxSenderMs: theirSettings.maxSenderMs,
           progressMs: theirSettings.progressMs,
         },
         shockers: visibleShockers,

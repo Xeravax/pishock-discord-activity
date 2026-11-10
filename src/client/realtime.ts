@@ -40,7 +40,6 @@ export type RealtimeEvent =
       enabled: boolean;
       progressMs: number;
       maxPerSender: number;
-      maxSenderMs: number;
       starOnly: boolean;
       paused: boolean;
       active: {

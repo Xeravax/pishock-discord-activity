@@ -6,7 +6,6 @@ import {
   QUEUE_PROGRESS_MAX_MS,
   QUEUE_PROGRESS_MIN_MS,
   clampQueueMaxPerSender,
-  clampQueueMaxSenderMs,
 } from './pishock/command-queue.js';
 import { AGENT_NAME } from '../shared/constants.js';
 
@@ -241,7 +240,6 @@ export type CommandQueueSettings = {
   enabled: boolean;
   progressMs: number;
   maxPerSender: number;
-  maxSenderMs: number;
   starOnly: boolean;
 };
 
@@ -249,7 +247,6 @@ const QUEUE_SETTINGS_SELECT = {
   commandQueueEnabled: true,
   commandQueueProgressMs: true,
   commandQueueMaxPerSender: true,
-  commandQueueMaxSenderMs: true,
   commandQueueStarOnly: true,
 } as const;
 
@@ -257,14 +254,12 @@ function mapQueueSettings(user: {
   commandQueueEnabled: boolean;
   commandQueueProgressMs: number;
   commandQueueMaxPerSender: number;
-  commandQueueMaxSenderMs: number;
   commandQueueStarOnly: boolean;
 } | null): CommandQueueSettings {
   return {
     enabled: Boolean(user?.commandQueueEnabled),
     progressMs: user?.commandQueueProgressMs ?? 0,
     maxPerSender: clampQueueMaxPerSender(user?.commandQueueMaxPerSender ?? 3),
-    maxSenderMs: clampQueueMaxSenderMs(user?.commandQueueMaxSenderMs ?? 30_000),
     starOnly: Boolean(user?.commandQueueStarOnly),
   };
 }
@@ -321,7 +316,6 @@ export async function setCommandQueueSettings(
     enabled: boolean;
     progressMs: number;
     maxPerSender: number;
-    maxSenderMs: number;
     starOnly: boolean;
   }>,
 ): Promise<CommandQueueSettings> {
@@ -329,7 +323,6 @@ export async function setCommandQueueSettings(
     commandQueueEnabled?: boolean;
     commandQueueProgressMs?: number;
     commandQueueMaxPerSender?: number;
-    commandQueueMaxSenderMs?: number;
     commandQueueStarOnly?: boolean;
   } = {};
   if (typeof patch.enabled === 'boolean') data.commandQueueEnabled = patch.enabled;
@@ -341,9 +334,6 @@ export async function setCommandQueueSettings(
   }
   if (typeof patch.maxPerSender === 'number' && Number.isFinite(patch.maxPerSender)) {
     data.commandQueueMaxPerSender = clampQueueMaxPerSender(patch.maxPerSender);
-  }
-  if (typeof patch.maxSenderMs === 'number' && Number.isFinite(patch.maxSenderMs)) {
-    data.commandQueueMaxSenderMs = clampQueueMaxSenderMs(patch.maxSenderMs);
   }
   if (typeof patch.starOnly === 'boolean') data.commandQueueStarOnly = patch.starOnly;
 

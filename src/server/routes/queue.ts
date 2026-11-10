@@ -33,7 +33,6 @@ async function broadcastOwnerQueueState(
       enabled: settings.enabled,
       progressMs: settings.progressMs,
       maxPerSender: settings.maxPerSender,
-      maxSenderMs: settings.maxSenderMs,
       starOnly: settings.starOnly,
       paused: state.paused,
       active: state.active,
@@ -72,7 +71,6 @@ export const queueRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app) => {
       enabled: boolean;
       progressMs: number;
       maxPerSender: number;
-      maxSenderMs: number;
       starOnly: boolean;
     }>;
 

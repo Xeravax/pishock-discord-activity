@@ -10,8 +10,6 @@ export const QUEUE_PROGRESS_MAX_MS = 60_000;
 export const QUEUE_MAX_PER_SENDER_MIN = 1;
 /** Soft ceiling only — Prisma Int / abuse guard, not a product limit of 10. */
 export const QUEUE_MAX_PER_SENDER_MAX = 1_000_000;
-export const QUEUE_MAX_SENDER_MS_MIN = 0;
-export const QUEUE_MAX_SENDER_MS_MAX = 300_000;
 
 /**
  * How long the queue holds an item before advancing.
@@ -32,17 +30,9 @@ export function clampQueueMaxPerSender(value: unknown): number {
   return Math.max(QUEUE_MAX_PER_SENDER_MIN, Math.min(QUEUE_MAX_PER_SENDER_MAX, n));
 }
 
-export function clampQueueMaxSenderMs(value: unknown): number {
-  const n = Math.floor(Number(value));
-  if (!Number.isFinite(n)) return 30_000;
-  return Math.max(QUEUE_MAX_SENDER_MS_MIN, Math.min(QUEUE_MAX_SENDER_MS_MAX, n));
-}
-
 export type QueueOwnerLimits = {
   progressMs: number;
   maxPerSender: number;
-  /** 0 = unlimited */
-  maxSenderMs: number;
 };
 
 export type QueuedOperation = 'shock' | 'vibrate' | 'beep' | 'hold' | 'warning';
@@ -462,27 +452,6 @@ export function createCommandQueue(deps: CommandQueueDeps) {
         429,
         'QUEUE_SENDER_FULL',
       );
-    }
-
-    const newAdvance = resolveQueueAdvanceMs(input.durationMs, limits.progressMs);
-    if (limits.maxSenderMs > 0) {
-      let senderMs = 0;
-      if (
-        q.active &&
-        q.active.executorDiscordUserId === input.executorDiscordUserId
-      ) {
-        senderMs += remainingActiveMs(q);
-      }
-      for (const w of senderWaiting) {
-        senderMs += resolveQueueAdvanceMs(w.durationMs, limits.progressMs);
-      }
-      if (senderMs + newAdvance > limits.maxSenderMs) {
-        throw new CommandQueueError(
-          `That would exceed this person's max queue time (${Math.round(limits.maxSenderMs / 1000)}s) for you`,
-          429,
-          'QUEUE_SENDER_TIME',
-        );
-      }
     }
 
     const item: QueueItemInternal = {

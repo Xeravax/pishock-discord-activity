@@ -48,7 +48,6 @@ function makeHarness(opts?: {
   validate?: (item: QueueItemInternal) => boolean | Promise<boolean>;
   progressMs?: number;
   maxPerSender?: number;
-  maxSenderMs?: number;
 }): Harness {
   let now = 1_000_000;
   const timers: Array<{ at: number; resolve: () => void }> = [];
@@ -58,7 +57,6 @@ function makeHarness(opts?: {
   const stars = new Set<string>();
   let progressMs = opts?.progressMs ?? 0;
   let maxPerSender = opts?.maxPerSender ?? QUEUE_MAX_WAITING_PER_SENDER;
-  let maxSenderMs = opts?.maxSenderMs ?? 0;
 
   const sleep = (ms: number) =>
     new Promise<void>((resolve) => {
@@ -88,7 +86,7 @@ function makeHarness(opts?: {
     now: () => now,
     sleep,
     isStarred: (owner, executor) => stars.has(`${owner}:${executor}`),
-    getLimits: () => ({ progressMs, maxPerSender, maxSenderMs }),
+    getLimits: () => ({ progressMs, maxPerSender }),
     validateBeforeRun: opts?.validate ?? (async () => true),
     execute: async (item) => {
       executed.push(item.id);
@@ -289,21 +287,6 @@ describe('command queue', () => {
           }),
         ),
       (err: unknown) => err instanceof CommandQueueError && err.code === 'QUEUE_FULL',
-    );
-  });
-
-  it('enforces max total queue time per sender', async () => {
-    const h = makeHarness({ maxSenderMs: 500, progressMs: 400 });
-    await h.queue.setPaused('owner', true);
-    await h.queue.enqueue(
-      baseInput({ ownerDiscordUserId: 'owner', executorDiscordUserId: 'a', durationMs: 100 }),
-    );
-    await assert.rejects(
-      () =>
-        h.queue.enqueue(
-          baseInput({ ownerDiscordUserId: 'owner', executorDiscordUserId: 'a', durationMs: 100 }),
-        ),
-      (err: unknown) => err instanceof CommandQueueError && err.code === 'QUEUE_SENDER_TIME',
     );
   });
 

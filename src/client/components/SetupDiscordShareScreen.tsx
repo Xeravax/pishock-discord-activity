@@ -31,7 +31,6 @@ const DEFAULT_QUEUE: QueuePanelSettings = {
   enabled: false,
   progressMs: 0,
   maxPerSender: 3,
-  maxSenderMs: 30_000,
   starOnly: false,
 };
 
@@ -498,16 +497,6 @@ export function SetupDiscordShareScreen({
                     formatValue={(n) => String(n)}
                     disabled={busy}
                     onChange={(maxPerSender) => setQueue((q) => ({ ...q, maxPerSender }))}
-                  />
-                  <LimitSlider
-                    label="Max queue time per person"
-                    value={queue.maxSenderMs}
-                    min={0}
-                    max={120_000}
-                    step={1000}
-                    formatValue={(ms) => (ms <= 0 ? 'Unlimited' : formatDurationMs(ms))}
-                    disabled={busy}
-                    onChange={(maxSenderMs) => setQueue((q) => ({ ...q, maxSenderMs }))}
                   />
                   <label className={`auth-boot__shocker${queue.starOnly ? ' is-on' : ''}`}>
                     <input

@@ -543,8 +543,21 @@ html.pip-mode #root > * {
   border: 1px solid rgba(121, 198, 219, 0.35);
   color: #79c6db;
   border-radius: 8px;
-  padding: 4px 8px;
-  max-width: 196px;
+  padding: 6px 10px;
+  max-width: 220px;
+  text-align: right;
+}
+
+.queue-ticket-banner__title {
+  font-weight: 600;
+  line-height: 1.2;
+}
+
+.queue-ticket-banner__eta {
+  margin-top: 2px;
+  color: #c5eaf3;
+  font-size: 12px;
+  line-height: 1.25;
 }
 
 .official-friends-header {
@@ -876,7 +889,7 @@ html.pip-mode .app-restart-overlay:not(.app-restart-overlay--outdated) {
   flex-direction: column;
   align-items: flex-end;
   gap: 8px;
-  max-width: min(240px, calc(100vw - 28px));
+  max-width: min(280px, calc(100vw - 28px));
   max-height: calc(100vh - 28px);
   pointer-events: none;
 }
@@ -885,14 +898,156 @@ html.pip-mode .app-restart-overlay:not(.app-restart-overlay--outdated) {
   pointer-events: auto;
 }
 
+.official-right-rail .queue-dash {
+  max-width: 100%;
+  max-height: min(70vh, 560px);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  overflow: hidden;
+}
+
 .official-right-rail .queue-panel {
   max-width: 100%;
-  max-height: min(52vh, 440px);
+}
+
+.official-right-rail .queue-panel--controls {
+  flex-shrink: 0;
+  max-height: min(34vh, 280px);
+  overflow: auto;
+}
+
+.official-right-rail .queue-panel--people {
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: min(42vh, 320px);
   overflow: auto;
 }
 
 .official-right-rail .queue-ticket-banner {
   max-width: 100%;
+}
+
+.queue-dash .queue-panel {
+  width: min(268px, calc(100vw - 28px));
+}
+
+.queue-people-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 4px;
+}
+
+.queue-person {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: #121212;
+  border: 1px solid hsla(0, 0%, 100%, 0.12);
+  border-radius: 10px;
+  padding: 5px 6px;
+}
+
+.queue-person.is-now {
+  border-color: #79c6db;
+}
+
+.queue-person.is-starred {
+  border-color: rgba(244, 214, 0, 0.55);
+  background: rgba(244, 214, 0, 0.06);
+}
+
+.queue-person__avatar {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  object-fit: cover;
+  flex-shrink: 0;
+  background: #2a2a2a;
+}
+
+.queue-person__body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.queue-person__top {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+.queue-person__name {
+  font-size: 12px;
+  line-height: 1.2;
+  color: #e8e8e8;
+  min-width: 0;
+}
+
+.queue-person__star-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: #1a1500;
+  background: #f4d600;
+  border-radius: 999px;
+  padding: 1px 5px 1px 3px;
+  line-height: 1.3;
+}
+
+.queue-person__star-badge .q-icon {
+  font-size: 11px;
+}
+
+.queue-person__meta {
+  line-height: 1.2;
+}
+
+.queue-person__now {
+  color: #79c6db;
+  font-weight: 600;
+}
+
+.queue-person__actions {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  gap: 0;
+}
+
+.queue-person__star-btn {
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: #6b7280;
+  cursor: pointer;
+  padding: 2px;
+  min-width: 22px;
+  min-height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.queue-person__star-btn.active {
+  color: #f4d600;
+}
+
+.official-right-rail__fabs {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
 }
 
 .official-logs-fab {
@@ -909,6 +1064,21 @@ html.pip-mode .app-restart-overlay:not(.app-restart-overlay--outdated) {
   justify-content: center;
   box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45);
   flex-shrink: 0;
+}
+
+.queue-fab:not(.is-enabled) {
+  background: #3a3a3a;
+  color: #9aa0a6;
+}
+
+.queue-fab.is-enabled {
+  background: #79c6db;
+  color: #121212;
+}
+
+.queue-fab.is-paused {
+  background: #f4d600;
+  color: #1a1500;
 }
 
 .official-logs-fab .q-icon {

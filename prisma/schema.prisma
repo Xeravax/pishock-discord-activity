@@ -21,10 +21,8 @@ model DiscordUser {
   commandQueueEnabled Boolean @default(false)
   /// Minimum ms a queue item occupies before the next starts (0 = follow command duration).
   commandQueueProgressMs Int @default(0)
-  /// How many waiting commands one sender may have lined up (1–10).
+  /// How many waiting commands one sender may have lined up.
   commandQueueMaxPerSender Int @default(3)
-  /// Max total queued advance time (ms) one sender may hold; 0 = unlimited.
-  commandQueueMaxSenderMs Int @default(30000)
   /// When true, only starred participants may operate this wearer's shared shockers.
   commandQueueStarOnly Boolean @default(false)
   createdAt      DateTime        @default(now())

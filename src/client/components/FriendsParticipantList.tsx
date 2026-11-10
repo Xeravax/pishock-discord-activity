@@ -234,10 +234,8 @@ function statusDetail(status?: ParticipantStatus): string | null {
   if (status.queue?.enabled) {
     const parts = [
       `Queue on · ${status.queue.maxPerSender} ahead`,
-      status.queue.maxSenderMs > 0
-        ? `max ${Math.round(status.queue.maxSenderMs / 1000)}s`
-        : null,
       status.queue.starOnly ? 'stars only' : null,
+      'wait time shown when you send',
     ].filter(Boolean);
     return parts.join(' · ');
   }

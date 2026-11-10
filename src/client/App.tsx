@@ -36,6 +36,7 @@ import {
 } from './components/ActivityLimitsSettings';
 import { FriendsParticipantList } from './components/FriendsParticipantList';
 import {
+  QueueFab,
   QueuePanel,
   type QueuePanelItem,
   type QueuePanelSettings,
@@ -85,7 +86,10 @@ function formatQueueEta(waitMs: number | null | undefined): string | null {
   if (waitMs == null || !Number.isFinite(waitMs)) return null;
   if (waitMs <= 0) return 'now';
   const sec = Math.max(1, Math.round(waitMs / 1000));
-  return `~${sec}s`;
+  if (sec < 60) return `${sec}s`;
+  const min = Math.floor(sec / 60);
+  const rem = sec % 60;
+  return rem ? `${min}m ${rem}s` : `${min}m`;
 }
 
 type DevicesResponse = {
@@ -160,13 +164,13 @@ export function App() {
     enabled: false,
     progressMs: 0,
     maxPerSender: 3,
-    maxSenderMs: 30_000,
     starOnly: false,
     paused: false,
     active: null,
     waiting: [],
   });
   const [queueBusy, setQueueBusy] = useState(false);
+  const [queueOpen, setQueueOpen] = useState(false);
   const [myQueueTicket, setMyQueueTicket] = useState<SenderQueueTicket | null>(null);
 
   const token = auth?.accessToken ?? null;
@@ -183,7 +187,6 @@ export function App() {
       enabled: Boolean(data.enabled),
       progressMs: Number(data.progressMs) || 0,
       maxPerSender: Number(data.maxPerSender) || 3,
-      maxSenderMs: Number(data.maxSenderMs) || 0,
       starOnly: Boolean(data.starOnly),
       paused: Boolean(data.paused),
       active: data.active ?? null,
@@ -485,7 +488,6 @@ export function App() {
             enabled: Boolean(event.enabled),
             progressMs: Number(event.progressMs) || 0,
             maxPerSender: Number(event.maxPerSender) || 3,
-            maxSenderMs: Number(event.maxSenderMs) || 0,
             starOnly: Boolean(event.starOnly),
             paused: Boolean(event.paused),
             active: event.active ?? null,
@@ -1119,7 +1121,7 @@ export function App() {
         if (token) void refreshParticipantStatus(token, participants, true).catch(() => undefined);
       } else if (
         err instanceof ApiError &&
-        (err.code === 'QUEUE_SENDER_FULL' || err.code === 'QUEUE_SENDER_TIME' || err.code === 'QUEUE_FULL')
+        (err.code === 'QUEUE_SENDER_FULL' || err.code === 'QUEUE_FULL')
       ) {
         setActionError(err.message);
       } else {
@@ -1142,10 +1144,6 @@ export function App() {
         typeof result.maxPerSender === 'number' && Number.isFinite(result.maxPerSender)
           ? result.maxPerSender
           : prev.maxPerSender,
-      maxSenderMs:
-        typeof result.maxSenderMs === 'number' && Number.isFinite(result.maxSenderMs)
-          ? result.maxSenderMs
-          : prev.maxSenderMs,
       starOnly: typeof result.starOnly === 'boolean' ? result.starOnly : prev.starOnly,
       paused: typeof result.paused === 'boolean' ? result.paused : prev.paused,
       active: result.active !== undefined ? result.active : prev.active,
@@ -2086,24 +2084,25 @@ export function App() {
         </PsDialog>
 
         <div className="official-right-rail">
-          {me.pishockLinked ? (
+          {me.pishockLinked && queueOpen ? (
             <QueuePanel
               settings={{
                 enabled: queueState.enabled,
                 progressMs: queueState.progressMs,
                 maxPerSender: queueState.maxPerSender,
-                maxSenderMs: queueState.maxSenderMs,
                 starOnly: queueState.starOnly,
               }}
               paused={queueState.paused}
               active={queueState.active}
               waiting={queueState.waiting}
               busy={queueBusy}
+              onClose={() => setQueueOpen(false)}
               onSettingsChange={(patch) => void patchQueueSettings(patch)}
               onTogglePaused={(paused) => void setQueuePaused(paused)}
               onSkip={() => void skipQueue()}
               onClear={() => void clearQueue()}
               onRemove={(itemId) => void removeQueueItem(itemId)}
+              onToggleStar={(id, starred) => void toggleQueueStar(id, starred)}
               displayNameFor={(item) => {
                 const fromRoster = participants.find((p) => p.id === item.executorDiscordUserId);
                 return (
@@ -2113,24 +2112,57 @@ export function App() {
                   'Someone'
                 );
               }}
+              avatarUrlFor={(item) => {
+                const fromRoster = participants.find((p) => p.id === item.executorDiscordUserId);
+                return (
+                  fromRoster?.avatarUrl ||
+                  participantAvatarUrl(item.executorDiscordUserId, item.executorAvatar)
+                );
+              }}
             />
           ) : null}
           {myQueueTicket &&
           (myQueueTicket.status === 'queued' || myQueueTicket.status === 'started') ? (
             <div className="queue-ticket-banner text-caption">
-              {myQueueTicket.status === 'started'
-                ? 'Your command is running'
-                : (() => {
-                    const eta = formatQueueEta(myQueueTicket.estimatedWaitMs);
-                    const pos = `#${myQueueTicket.position ?? '?'}`;
-                    if (myQueueTicket.paused) {
-                      return eta ? `Paused · ${pos} · starts in ${eta}` : `Paused · ${pos}`;
-                    }
-                    return eta ? `In queue · ${pos} · arrives in ${eta}` : `In queue · ${pos}`;
-                  })()}
+              {myQueueTicket.status === 'started' ? (
+                <>
+                  <div className="queue-ticket-banner__title">Your command is running</div>
+                </>
+              ) : (
+                <>
+                  <div className="queue-ticket-banner__title">
+                    {myQueueTicket.paused ? 'Queue paused' : 'In queue'}
+                    {myQueueTicket.position != null ? ` · #${myQueueTicket.position}` : ''}
+                  </div>
+                  <div className="queue-ticket-banner__eta">
+                    {(() => {
+                      const eta = formatQueueEta(myQueueTicket.estimatedWaitMs);
+                      if (myQueueTicket.paused) {
+                        return eta && eta !== 'now'
+                          ? `~${eta} after they resume`
+                          : 'Waiting for them to resume';
+                      }
+                      if (!eta) return 'Estimating wait…';
+                      if (eta === 'now') return 'Starting soon';
+                      return `Wait ~${eta}`;
+                    })()}
+                  </div>
+                </>
+              )}
             </div>
           ) : null}
-          <OfficialLogsFab count={officialLogEntries.length} onClick={openOfficialLogs} />
+          <div className="official-right-rail__fabs">
+            {me.pishockLinked ? (
+              <QueueFab
+                count={queueState.waiting.length}
+                enabled={queueState.enabled}
+                paused={queueState.paused}
+                active={Boolean(queueState.active)}
+                onClick={() => setQueueOpen((open) => !open)}
+              />
+            ) : null}
+            <OfficialLogsFab count={officialLogEntries.length} onClick={openOfficialLogs} />
+          </div>
         </div>
         <OfficialLogsPanel
           open={logsOpen || overlay === 'logs'}
