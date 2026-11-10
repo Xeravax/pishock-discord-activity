@@ -57,6 +57,8 @@ export type QueueItemPublic = {
 export type QueueStatePublic = {
   ownerDiscordUserId: string;
   paused: boolean;
+  /** When true, reject new enqueue; existing waiting/active items are kept. */
+  halted: boolean;
   active: QueueItemPublic | null;
   waiting: QueueItemPublic[];
 };
@@ -130,6 +132,7 @@ export type CommandQueueDeps = {
 
 type OwnerQueue = {
   paused: boolean;
+  halted: boolean;
   waiting: QueueItemInternal[];
   active: QueueItemInternal | null;
   /** When the active item began occupying the slot (for ETA). */
@@ -181,6 +184,7 @@ export function createCommandQueue(deps: CommandQueueDeps) {
     if (!q) {
       q = {
         paused: false,
+        halted: false,
         waiting: [],
         active: null,
         activeStartedAt: null,
@@ -241,6 +245,7 @@ export function createCommandQueue(deps: CommandQueueDeps) {
     return {
       ownerDiscordUserId,
       paused: q.paused,
+      halted: q.halted,
       active,
       waiting,
     };
@@ -428,12 +433,21 @@ export function createCommandQueue(deps: CommandQueueDeps) {
     itemId: string;
     position: number;
     paused: boolean;
+    halted: boolean;
     estimatedWaitMs: number;
     estimatedStartAt: number;
     state: QueueStatePublic;
   }> {
     const q = ensure(input.ownerDiscordUserId);
     const limits = await deps.getLimits(input.ownerDiscordUserId);
+
+    if (q.halted) {
+      throw new CommandQueueError(
+        'Their command queue is closed to new entries',
+        423,
+        'QUEUE_HALTED',
+      );
+    }
 
     if (q.waiting.length >= QUEUE_MAX_WAITING_TOTAL) {
       throw new CommandQueueError(
@@ -475,6 +489,7 @@ export function createCommandQueue(deps: CommandQueueDeps) {
       itemId: item.id,
       position,
       paused: q.paused,
+      halted: q.halted,
       estimatedWaitMs,
       estimatedStartAt,
       state,
@@ -485,8 +500,15 @@ export function createCommandQueue(deps: CommandQueueDeps) {
     const q = ensure(ownerDiscordUserId);
     q.paused = paused;
     const state = await emitState(ownerDiscordUserId);
+    await notifyWaitingPositions(ownerDiscordUserId);
     if (!paused) void pump(ownerDiscordUserId);
     return state;
+  }
+
+  async function setHalted(ownerDiscordUserId: string, halted: boolean): Promise<QueueStatePublic> {
+    const q = ensure(ownerDiscordUserId);
+    q.halted = halted;
+    return emitState(ownerDiscordUserId);
   }
 
   async function clearWaiting(ownerDiscordUserId: string): Promise<QueueStatePublic> {
@@ -608,6 +630,10 @@ export function createCommandQueue(deps: CommandQueueDeps) {
     return ensure(ownerDiscordUserId).paused;
   }
 
+  function getHalted(ownerDiscordUserId: string): boolean {
+    return ensure(ownerDiscordUserId).halted;
+  }
+
   /** Test / shutdown helper. */
   function resetAll(): void {
     for (const q of queues.values()) {
@@ -615,6 +641,7 @@ export function createCommandQueue(deps: CommandQueueDeps) {
       q.waiting = [];
       clearActiveSlot(q);
       q.paused = false;
+      q.halted = false;
       q.running = false;
     }
     queues.clear();
@@ -624,6 +651,7 @@ export function createCommandQueue(deps: CommandQueueDeps) {
   return {
     enqueue,
     setPaused,
+    setHalted,
     clearWaiting,
     removeItem,
     skipActive,
@@ -631,6 +659,7 @@ export function createCommandQueue(deps: CommandQueueDeps) {
     handleSenderEnd,
     snapshot,
     getPaused,
+    getHalted,
     resetAll,
   };
 }

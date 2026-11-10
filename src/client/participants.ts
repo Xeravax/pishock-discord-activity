@@ -46,6 +46,10 @@ export type ParticipantStatus = {
     starOnly: boolean;
     starredByThem: boolean;
     canOperate: boolean;
+    /** Processing paused — you can still join the queue */
+    paused: boolean;
+    /** Closed to new entries — waiting items are kept */
+    halted: boolean;
     maxPerSender: number;
     progressMs: number;
   };

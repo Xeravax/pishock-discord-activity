@@ -42,6 +42,7 @@ export type RealtimeEvent =
       maxPerSender: number;
       starOnly: boolean;
       paused: boolean;
+      halted: boolean;
       active: {
         id: string;
         executorDiscordUserId: string;

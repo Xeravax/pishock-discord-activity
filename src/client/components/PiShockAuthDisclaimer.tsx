@@ -23,7 +23,7 @@ export function PiShockAuthDisclaimer({ compact }: Props) {
         <li>
           After you sign in on PiShock&apos;s login page, confirming the link creates a{' '}
           <strong>7-day API key</strong> named <strong>Discord Activity</strong> and stores it
-          encrypted for control.
+          encrypted for control. You can also paste an existing username + API key instead.
         </li>
         <li>
           The short-lived login session token is used only to create that key and is{' '}

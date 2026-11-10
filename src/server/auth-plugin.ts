@@ -4,6 +4,7 @@ import { DiscordAuthError, resolveBearerUser, type DiscordUserInfo } from './dis
 import type { AppEnv } from './env.js';
 import { getConsent, loadPiShockCreds } from './session.js';
 import type { PiShockCreds } from './pishock/client.js';
+import { loadAppVersion } from './app-version.js';
 
 declare module 'fastify' {
   interface FastifyRequest {
@@ -23,10 +24,23 @@ function apiPath(req: FastifyRequest): string {
   return (req.url.split('?')[0] ?? req.url);
 }
 
+function clientVersion(req: FastifyRequest): string {
+  const raw = req.headers['x-client-version'];
+  if (typeof raw === 'string') return raw.trim();
+  if (Array.isArray(raw) && typeof raw[0] === 'string') return raw[0].trim();
+  return '';
+}
+
 const authPluginImpl: FastifyPluginAsync<{ env: AppEnv }> = async (app, opts) => {
+  const appVersion = loadAppVersion();
   app.decorateRequest('discordUser', null as unknown as DiscordUserInfo);
   app.decorateRequest('pishockCreds', null);
   app.decorateRequest('hasConsent', false);
+
+  app.addHook('onSend', async (_req, reply, payload) => {
+    reply.header('X-App-Version', appVersion.label);
+    return payload;
+  });
 
   app.addHook('preHandler', async (req, reply) => {
     const path = apiPath(req);
@@ -38,6 +52,21 @@ const authPluginImpl: FastifyPluginAsync<{ env: AppEnv }> = async (app, opts) =>
     if (path === '/api/ws') return;
     // Discord code exchange has no bearer yet
     if (path === '/api/auth/discord' && req.method === 'POST') return;
+
+    const reported = clientVersion(req);
+    // Reject stale clients immediately. Missing header also counts as outdated once a
+    // real build label is deployed (local `dev` remains permissive).
+    if (
+      appVersion.label !== 'dev' &&
+      (reported !== appVersion.label || !reported)
+    ) {
+      return reply.code(426).send({
+        error: 'This activity build is outdated — close it and relaunch from Discord',
+        code: 'APP_OUTDATED',
+        serverVersion: appVersion.label,
+        clientVersion: reported || null,
+      });
+    }
 
     const token = extractBearer(req);
     if (!token) {

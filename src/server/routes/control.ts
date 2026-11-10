@@ -100,8 +100,15 @@ async function handlePiShockError(
 ) {
   if (err instanceof PiShockApiError) {
     if (err.needsRelogin) {
+      console.warn(
+        `[pishock] clearing session for ${discordUserId} after 401: ${err.body.slice(0, 200)}`,
+      );
       await clearPiShockSession(discordUserId);
-      return reply.code(401).send({ error: 'PiShock API key expired', code: 'PISHOCK_RELOGIN' });
+      return reply.code(401).send({
+        error: 'PiShock API key rejected — link again',
+        code: 'PISHOCK_RELOGIN',
+        body: err.body,
+      });
     }
     return reply.code(err.status).send({ error: err.message, body: err.body });
   }

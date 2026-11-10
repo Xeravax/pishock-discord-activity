@@ -28,33 +28,46 @@ export class PiShockApiError extends Error {
   }
 }
 
-function headers(creds: PiShockCreds, hasJsonBody: boolean): HeadersInit {
+type AuthStyle = 'session' | 'apiKeyHeader' | 'apiKeyAsToken';
+
+function headers(
+  creds: PiShockCreds,
+  hasJsonBody: boolean,
+  style: AuthStyle,
+): HeadersInit {
   const h: Record<string, string> = {
     Accept: 'application/json',
   };
-  if (creds.mode === 'session') {
+  if (style === 'session' || style === 'apiKeyAsToken') {
+    // Session login, or API key presented as Token (older / dual-accepted form)
     h['X-PiShock-UserId'] = String(creds.userId);
     h['X-PiShock-Token'] = creds.token;
   } else {
-    // Official public API auth for API keys (swagger: APIKey / X-PiShock-Api-Key)
+    // Saerich: X-PiShock-Api-Key OR Token+UserId — not mixed with UserId alone
     h['X-PiShock-Api-Key'] = creds.token;
-    if (creds.userId) h['X-PiShock-UserId'] = String(creds.userId);
   }
   // Never send Content-Type on GETs — api.pishock.com rejects empty JSON bodies with 400 SerializerErrors
   if (hasJsonBody) h['Content-Type'] = 'application/json';
   return h;
 }
 
-async function request<T = unknown>(
+function authStylesFor(creds: PiShockCreds): AuthStyle[] {
+  if (creds.mode === 'session') return ['session'];
+  // Prefer official Api-Key header; fall back to UserId+Token=<apiKey> if rejected
+  return ['apiKeyHeader', 'apiKeyAsToken'];
+}
+
+async function requestOnce<T = unknown>(
   creds: PiShockCreds,
   method: string,
   url: string,
+  style: AuthStyle,
   body?: unknown,
 ): Promise<{ status: number; data: T | null; raw: string }> {
   const hasJsonBody = body !== undefined;
   const res = await fetch(url, {
     method,
-    headers: headers(creds, hasJsonBody),
+    headers: headers(creds, hasJsonBody, style),
     body: hasJsonBody ? JSON.stringify(body) : undefined,
   });
   const raw = await res.text();
@@ -75,6 +88,32 @@ async function request<T = unknown>(
   } catch {
     return { status: res.status, data: raw as unknown as T, raw };
   }
+}
+
+async function request<T = unknown>(
+  creds: PiShockCreds,
+  method: string,
+  url: string,
+  body?: unknown,
+): Promise<{ status: number; data: T | null; raw: string }> {
+  const styles = authStylesFor(creds);
+  let last401: PiShockApiError | null = null;
+  for (let i = 0; i < styles.length; i++) {
+    const style = styles[i]!;
+    try {
+      return await requestOnce<T>(creds, method, url, style, body);
+    } catch (err) {
+      if (err instanceof PiShockApiError && err.needsRelogin && i + 1 < styles.length) {
+        last401 = err;
+        console.warn(
+          `[pishock] ${method} ${url} 401 with ${style}; retrying next auth style`,
+        );
+        continue;
+      }
+      throw err;
+    }
+  }
+  throw last401 ?? new PiShockApiError(401, 'Unauthorized');
 }
 
 export async function getHubs(creds: PiShockCreds) {
@@ -193,8 +232,8 @@ async function softList(
       return [];
     } catch (err) {
       lastErr = err;
-      // Retry transient 4xx/5xx once; still throw hard auth failures
-      if (err instanceof PiShockApiError && err.needsRelogin) throw err;
+      // Do not wipe the whole link from one soft list 401 (parallel Hub/Links races).
+      // Hard auth failures are handled by operate routes / confirm-time validateApiKey.
       if (i + 1 < attempts) {
         await new Promise((r) => setTimeout(r, 250));
         continue;

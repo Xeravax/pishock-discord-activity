@@ -638,6 +638,119 @@ html.pip-mode #root > * {
   background: rgba(18, 36, 42, 0.92);
 }
 
+.access-banner--star-blocked,
+.access-banner--queue-halted,
+.access-banner--queue-paused {
+  border-color: rgba(244, 214, 0, 0.4);
+  background: rgba(40, 34, 8, 0.88);
+}
+
+.official-control-surface {
+  max-width: 720px;
+  margin: 0 auto;
+  padding-left: 18px !important;
+  padding-right: 18px !important;
+  box-sizing: border-box;
+}
+
+.official-control-column {
+  width: 100%;
+}
+
+.official-control-column--starred {
+  position: relative;
+  border: 1px solid rgba(244, 214, 0, 0.55);
+  border-radius: 12px;
+  padding: 12px 12px 14px;
+  box-sizing: border-box;
+  background:
+    linear-gradient(180deg, rgba(244, 214, 0, 0.07) 0%, rgba(18, 18, 18, 0.35) 42%, rgba(18, 18, 18, 0.15) 100%);
+  box-shadow:
+    0 0 0 1px rgba(244, 214, 0, 0.12),
+    0 0 28px rgba(244, 214, 0, 0.18),
+    inset 0 1px 0 rgba(255, 236, 150, 0.12);
+}
+
+.official-starred-caption {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin-bottom: 10px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid rgba(244, 214, 0, 0.28);
+  background: rgba(32, 26, 8, 0.55);
+}
+
+.official-starred-caption__icon {
+  color: #f4d600;
+  font-size: 18px;
+  line-height: 1.2;
+  margin-top: 1px;
+}
+
+.official-starred-caption__title {
+  font-family: Oxanium, geo, sans-serif;
+  font-size: 0.92rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: #f4d600;
+}
+
+.official-starred-caption__hint {
+  margin-top: 2px;
+  font-size: 0.78rem;
+  line-height: 1.35;
+  color: #d8c98a;
+}
+
+.official-hub-status-row {
+  gap: 8px;
+  align-items: flex-start;
+}
+
+.official-hub-status {
+  min-width: 0;
+  flex: 1;
+  text-align: left;
+}
+
+.official-hub-status__name {
+  display: block;
+  line-height: 1.25;
+}
+
+.official-hub-status__meta {
+  margin-top: 4px;
+}
+
+.official-hub-ping {
+  flex-shrink: 0;
+  min-width: 28px !important;
+  min-height: 28px !important;
+}
+
+.queue-panel-status-row {
+  margin-top: 4px;
+}
+
+.queue-fab.is-halted {
+  box-shadow: 0 0 0 1px rgba(244, 214, 0, 0.55);
+}
+
+.official-friend-btn.star-blocked,
+.official-friend-btn.queue-halted {
+  opacity: 0.88;
+  border-color: rgba(244, 214, 0, 0.4);
+}
+
+.official-friend-btn.active.star-blocked,
+.official-friend-btn.active.queue-halted {
+  background: #2a2410;
+  border-color: rgba(244, 214, 0, 0.55);
+  color: #ffe9a8;
+}
+
 .official-friend-btn.not-logged-in {
   opacity: 0.72;
   border-style: dashed;
@@ -873,6 +986,10 @@ html.pip-mode #root > * {
 
 .app-restart-overlay--outdated .app-restart-overlay__title {
   color: #f4d600;
+}
+
+.app-restart-overlay--outdated .app-restart-overlay__glow {
+  background: radial-gradient(circle, rgba(244, 214, 0, 0.16) 0%, transparent 70%);
 }
 
 /* Still force-update in PIP — hide chrome only for soft reconnect waits */
@@ -1337,8 +1454,20 @@ html.pip-mode .app-restart-overlay:not(.app-restart-overlay--outdated) {
 
 .fixed-bottom-left {
   position: fixed;
-  left: 12px;
-  bottom: 12px;
+  left: 16px;
+  bottom: 16px;
+}
+
+@media (max-width: 520px) {
+  .fixed-bottom-left {
+    left: 12px;
+    bottom: 12px;
+  }
+
+  .official-control-surface {
+    padding-left: 14px !important;
+    padding-right: 14px !important;
+  }
 }
 
 .bg-transparent {
@@ -2230,6 +2359,12 @@ html.pip-mode .app-restart-overlay:not(.app-restart-overlay--outdated) {
 
 .pishock-auth-disclaimer__list strong {
   color: #fff;
+}
+
+.pishock-link-panel__manual {
+  margin-top: 18px;
+  padding-top: 16px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
 }
 
 .pishock-link-panel .pishock-auth-disclaimer {

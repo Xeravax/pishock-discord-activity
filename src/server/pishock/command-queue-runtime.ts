@@ -327,6 +327,7 @@ async function emitQueueState(state: QueueStatePublic): Promise<void> {
       maxPerSender: settings.maxPerSender,
       starOnly: settings.starOnly,
       paused: state.paused,
+      halted: state.halted,
       active: state.active,
       waiting: state.waiting,
       at: Date.now(),

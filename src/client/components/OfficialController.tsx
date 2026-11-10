@@ -62,6 +62,12 @@ type Props = {
   safetyBanner?: ReactNode;
   /** Shown above controls (e.g. blocked / e-stop notices) */
   accessBanner?: ReactNode;
+  /** Force-disable operate buttons (star-only / queue halted / etc.) */
+  forceControlsLocked?: boolean;
+  /** Gold border glow when the selected friend has starred you */
+  starredPanel?: boolean;
+  /** Whether their queue is stars-only (copy for the starred panel caption) */
+  starredPanelStarOnly?: boolean;
   /** Empty-state copy when there are no shockers to show */
   emptyMessage?: string;
   /** Show header CTA when the user has not linked PiShock yet */
@@ -287,6 +293,9 @@ export function OfficialController({
   friendsPanel,
   safetyBanner,
   accessBanner,
+  forceControlsLocked = false,
+  starredPanel = false,
+  starredPanelStarOnly = false,
   emptyMessage = 'No shockers',
   showLinkAccount = false,
   showOwnMode = true,
@@ -541,7 +550,7 @@ export function OfficialController({
   const shockEditCap =
     individualIntensity && multiShock && active ? shockerUsableInt(active) : maxInt;
   const eStop = selectedShockers.some((s) => s.emergencyStop);
-  const controlsLocked = eStop;
+  const controlsLocked = eStop || forceControlsLocked;
 
   const setActiveShockIntensity = (n: number) => {
     const next = clamp(n, 0, shockEditCap);
@@ -952,18 +961,35 @@ export function OfficialController({
 
       <div className="q-page-container">
         <main className="q-page flex column items-center justify-start">
-          <div className="text-h4 flex q-pa-sm col-md-8 col-xs-12 full-height full-width">
+          <div className="text-h4 flex q-pa-sm col-md-8 col-xs-12 full-height full-width official-control-surface">
             <div className="full-width">
-              <div className="column">
-                <div className="row justify-between items-start">
-                  <div className="column">
-                    <span className="text-secondary">{hub.name}</span>
-                    <div className="flex row q-gutter-xs items-center">
+              <div
+                className={`column official-control-column${
+                  starredPanel ? ' official-control-column--starred' : ''
+                }`}
+              >
+                {starredPanel ? (
+                  <div className="official-starred-caption" role="status">
+                    <i className="q-icon mdi mdi-star official-starred-caption__icon" aria-hidden />
+                    <div className="official-starred-caption__copy">
+                      <div className="official-starred-caption__title">You’re starred</div>
+                      <div className="official-starred-caption__hint">
+                        {starredPanelStarOnly
+                          ? 'Stars-only queue is on — you can control them, and your commands also get priority.'
+                          : 'Your commands get queue priority. If they turn on stars-only, you stay allowed.'}
+                      </div>
+                    </div>
+                  </div>
+                ) : null}
+                <div className="row justify-between items-start official-hub-status-row">
+                  <div className="column official-hub-status">
+                    <span className="text-secondary official-hub-status__name">{hub.name}</span>
+                    <div className="flex row q-gutter-xs items-center official-hub-status__meta">
                       <button
                         type="button"
                         title="Ping hub"
                         disabled={pinging || !onPingHub}
-                        className="q-btn q-btn-item non-selectable no-outline q-btn--outline q-btn--rectangle text-secondary q-btn--actionable q-focusable q-hoverable q-btn--wrap q-btn--dense"
+                        className="q-btn q-btn-item non-selectable no-outline q-btn--outline q-btn--rectangle text-secondary q-btn--actionable q-focusable q-hoverable q-btn--wrap q-btn--dense official-hub-ping"
                         style={{ fontSize: 8 }}
                         onClick={() => onPingHub?.()}
                       >

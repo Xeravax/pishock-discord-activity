@@ -1,5 +1,4 @@
 import { useSyncExternalStore } from 'react';
-import { apiBase } from '../api';
 
 export type ServerHealthInfo = {
   ok: boolean;
@@ -20,18 +19,19 @@ type HealthState = {
   lastOkAt: number | null;
   /** When the client first noticed serverVersion !== bootVersion while healthy. */
   outdatedSince: number | null;
-  /** Epoch ms when a forced reload will fire (outdated grace end). */
+  /** Kept for badge/UI compatibility — outdated blocks immediately (no grace). */
   forceReloadAt: number | null;
 };
 
 const BOOT_VERSION = String(import.meta.env.VITE_APP_VERSION || 'dev');
-const POLL_ONLINE_MS = 60_000;
+const POLL_ONLINE_MS = 30_000;
 const POLL_OFFLINE_MS = 5_000;
-const POLL_OUTDATED_MS = 10_000;
-/** How long a stale client may keep running before a forced reload. */
-export const OUTDATED_GRACE_MS = 3 * 60_000;
-const RELOAD_COOLDOWN_MS = 20_000;
-const RELOAD_FLAG_KEY = 'pishock.forcedReloadAt';
+const POLL_OUTDATED_MS = 15_000;
+
+function healthUrl(): string {
+  const embedded = new URLSearchParams(window.location.search).has('frame_id');
+  return `${embedded ? '/.proxy/api' : '/api'}/health`;
+}
 
 let state: HealthState = {
   status: 'unknown',
@@ -43,10 +43,8 @@ let state: HealthState = {
 
 const listeners = new Set<() => void>();
 let pollTimer: number | null = null;
-let forceReloadTimer: number | null = null;
 let inFlight = false;
 let started = false;
-let reloadArmed = false;
 
 function emit() {
   for (const listener of listeners) listener();
@@ -58,43 +56,12 @@ function versionsDiffer(serverVersion: string | null | undefined): boolean {
   return serverVersion !== BOOT_VERSION;
 }
 
-function recentlyForcedReload(): boolean {
-  try {
-    const at = Number(sessionStorage.getItem(RELOAD_FLAG_KEY) || 0);
-    return Number.isFinite(at) && Date.now() - at < RELOAD_COOLDOWN_MS;
-  } catch {
-    return false;
-  }
-}
-
-/** Hard refresh so Discord Activity / browser pick up the new bundle. */
+/**
+ * Soft reload only helps for non-embedded browsers. Discord Activities often cannot
+ * re-auth after reload — prefer closing and relaunching the activity.
+ */
 export function reloadApp(_reason = 'version'): void {
-  if (reloadArmed) return;
-  reloadArmed = true;
-  try {
-    sessionStorage.setItem(RELOAD_FLAG_KEY, String(Date.now()));
-  } catch {
-    // ignore
-  }
   window.location.reload();
-}
-
-function clearForceReloadTimer() {
-  if (forceReloadTimer != null) {
-    window.clearTimeout(forceReloadTimer);
-    forceReloadTimer = null;
-  }
-}
-
-function scheduleForceReload(at: number) {
-  clearForceReloadTimer();
-  const delay = Math.max(0, at - Date.now());
-  forceReloadTimer = window.setTimeout(() => {
-    forceReloadTimer = null;
-    if (state.status !== 'outdated') return;
-    if (recentlyForcedReload()) return;
-    reloadApp('outdated-grace');
-  }, delay);
 }
 
 function setState(patch: Partial<HealthState>) {
@@ -103,9 +70,24 @@ function setState(patch: Partial<HealthState>) {
   restartPollLoop();
 }
 
+/** Mark the client outdated immediately (e.g. API returned 426). */
+export function markClientOutdated(serverVersion?: string | null) {
+  const now = Date.now();
+  setState({
+    status: 'outdated',
+    serverVersion: serverVersion ?? state.serverVersion,
+    lastOkAt: now,
+    outdatedSince: state.outdatedSince ?? now,
+    forceReloadAt: now,
+  });
+}
+
 async function fetchHealth(): Promise<ServerHealthInfo | null> {
   try {
-    const res = await fetch(`${apiBase()}/health`, { cache: 'no-store' });
+    const res = await fetch(healthUrl(), {
+      cache: 'no-store',
+      headers: { 'X-Client-Version': BOOT_VERSION },
+    });
     const body = (await res.json().catch(() => null)) as ServerHealthInfo | null;
     if (!body) return null;
     if (!res.ok) return { ...body, ok: false };
@@ -121,7 +103,6 @@ async function tick() {
   try {
     const info = await fetchHealth();
     if (!info) {
-      clearForceReloadTimer();
       setState({
         status: state.status === 'restarting' ? 'restarting' : 'down',
         outdatedSince: null,
@@ -131,7 +112,6 @@ async function tick() {
     }
 
     if (info.shuttingDown || info.ok === false) {
-      clearForceReloadTimer();
       setState({
         status: 'restarting',
         serverVersion: info.version ?? state.serverVersion,
@@ -142,41 +122,20 @@ async function tick() {
     }
 
     const serverVersion = info.version ?? null;
-    const wasRestarting = state.status === 'restarting' || state.status === 'down';
     const mismatch = versionsDiffer(serverVersion);
 
-    // Server came back on a different build — reload immediately so the iframe gets new assets.
-    if (wasRestarting && mismatch && !recentlyForcedReload()) {
-      setState({
-        status: 'outdated',
-        serverVersion,
-        lastOkAt: Date.now(),
-        outdatedSince: Date.now(),
-        forceReloadAt: Date.now(),
-      });
-      reloadApp('post-restart-version-bump');
-      return;
-    }
-
     if (mismatch) {
-      const since = state.outdatedSince ?? Date.now();
-      const forceAt = since + OUTDATED_GRACE_MS;
+      const now = Date.now();
       setState({
         status: 'outdated',
         serverVersion,
-        lastOkAt: Date.now(),
-        outdatedSince: since,
-        forceReloadAt: forceAt,
+        lastOkAt: now,
+        outdatedSince: state.outdatedSince ?? now,
+        forceReloadAt: now,
       });
-      if (Date.now() >= forceAt && !recentlyForcedReload()) {
-        reloadApp('outdated-grace');
-        return;
-      }
-      scheduleForceReload(forceAt);
       return;
     }
 
-    clearForceReloadTimer();
     setState({
       status: 'ok',
       serverVersion,
@@ -232,7 +191,6 @@ function getSnapshot() {
 
 /** Called when the realtime channel reports the server is going down. */
 export function markServerShuttingDown() {
-  clearForceReloadTimer();
   setState({
     status: 'restarting',
     outdatedSince: null,

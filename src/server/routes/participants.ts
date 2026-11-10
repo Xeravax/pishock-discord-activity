@@ -169,6 +169,8 @@ export const participantRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app
           getCommandQueueSettings(id),
           isQueueStarred(id, req.discordUser.id),
         ]);
+      const theirPaused = theirSettings.enabled ? commandQueue.getPaused(id) : false;
+      const theirHalted = theirSettings.enabled ? commandQueue.getHalted(id) : false;
       const eStops = new Set(await getEmergencyStopShockerIds(id));
       const active = shares.filter(
         (s: { enabled: boolean; paused: boolean }) => s.enabled && !s.paused,
@@ -230,7 +232,11 @@ export const participantRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app
           enabled: theirSettings.enabled,
           starOnly: theirSettings.starOnly,
           starredByThem: theyStarredMe,
-          canOperate: !theirSettings.starOnly || theyStarredMe,
+          canOperate:
+            (!theirSettings.starOnly || theyStarredMe) &&
+            !(theirSettings.enabled && theirHalted),
+          paused: Boolean(theirPaused),
+          halted: Boolean(theirHalted),
           maxPerSender: theirSettings.maxPerSender,
           progressMs: theirSettings.progressMs,
         },

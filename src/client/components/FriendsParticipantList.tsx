@@ -90,12 +90,17 @@ export function FriendsParticipantList({
             status?.emergencyStop || status?.shockers?.some((s) => s.emergencyStop),
           );
           const notLoggedIn = Boolean(status && !status.linked);
-          const starBlocked = Boolean(status?.queue?.starOnly && !status.queue.canOperate);
+          const starBlocked = Boolean(status?.queue?.starOnly && !status.queue.starredByThem);
+          const queueHalted = Boolean(status?.queue?.enabled && status.queue.halted);
           const selectable =
             Boolean(status) &&
             !notLoggedIn &&
-            !starBlocked &&
-            (banned || eStop || status?.available || (status?.shockers?.length ?? 0) > 0);
+            (banned ||
+              eStop ||
+              starBlocked ||
+              queueHalted ||
+              status?.available ||
+              (status?.shockers?.length ?? 0) > 0);
           const active = selectedSet.has(p.id);
           const label = statusLabel(status);
           const detail = statusDetail(status);
@@ -125,6 +130,8 @@ export function FriendsParticipantList({
                 className={`official-friend-btn ${active && !multiSelect ? 'active' : ''} ${
                   selectable ? '' : 'disabled'
                 } ${banned ? 'blocked' : ''} ${eStop && !banned ? 'estop' : ''} ${
+                  starBlocked && !banned && !eStop ? 'star-blocked' : ''
+                } ${queueHalted && !banned && !eStop && !starBlocked ? 'queue-halted' : ''} ${
                   notLoggedIn ? 'not-logged-in' : ''
                 }`}
                 style={
@@ -204,9 +211,14 @@ function statusLabel(status?: ParticipantStatus): string {
   if (status.bannedYou) return 'Blocked';
   if (status.emergencyStop || status.shockers?.some((s) => s.emergencyStop)) return 'E-STOP';
   if (!status.linked) return 'Not logged in · Disabled';
-  if (status.queue?.starOnly && !status.queue.canOperate) return 'Stars only';
+  if (status.queue?.starOnly && !status.queue.starredByThem) return 'Stars only';
+  if (status.queue?.enabled && status.queue.halted) return 'Queue closed';
   if (status.available) {
-    if (status.queue?.enabled) return 'Available · Queue';
+    if (status.queue?.enabled) {
+      if (status.queue.paused) return 'Available · Queue paused';
+      if (status.queue.starredByThem) return 'Available · Starred';
+      return 'Available · Queue';
+    }
     return 'Available';
   }
   if (status.paused) return 'Paused';
@@ -228,13 +240,18 @@ function statusDetail(status?: ParticipantStatus): string | null {
   if (!status.consent) {
     return 'They have not consented — control is disabled';
   }
-  if (status.queue?.starOnly && !status.queue.canOperate) {
+  if (status.queue?.starOnly && !status.queue.starredByThem) {
     return 'They only accept commands from starred people — ask them to star you';
+  }
+  if (status.queue?.enabled && status.queue.halted) {
+    return 'Their queue is closed to new commands — waiting items are still kept';
   }
   if (status.queue?.enabled) {
     const parts = [
       `Queue on · ${status.queue.maxPerSender} ahead`,
       status.queue.starOnly ? 'stars only' : null,
+      status.queue.starredByThem ? 'you are starred' : null,
+      status.queue.paused ? 'paused' : null,
       'wait time shown when you send',
     ].filter(Boolean);
     return parts.join(' · ');

@@ -4,7 +4,7 @@ import {
   PISHOCK_API_KEY_TTL_MS,
 } from '../../shared/constants.js';
 import type { AppEnv } from '../env.js';
-import { createApiKey, getAccount } from '../pishock/auth-api.js';
+import { createApiKey, getAccount, validateApiKey } from '../pishock/auth-api.js';
 import { getHubs, PiShockApiError } from '../pishock/client.js';
 import {
   clearPendingConfirm,
@@ -14,6 +14,15 @@ import {
 } from '../pishock/pending-confirm.js';
 import { awaitRelayLogin, getPendingLogin, startRelayLogin } from '../pishock/relay.js';
 import { clearPiShockSession, savePiShockSession } from '../session.js';
+
+function parseManualApiKeyBody(body: unknown): { username: string; apiKey: string } | null {
+  if (!body || typeof body !== 'object') return null;
+  const row = body as Record<string, unknown>;
+  const username = String(row.username ?? row.Username ?? '').trim();
+  const apiKey = String(row.apiKey ?? row.ApiKey ?? row.token ?? row.Token ?? '').trim();
+  if (!username || !apiKey) return null;
+  return { username, apiKey };
+}
 
 export const pishockSessionRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app, opts) => {
   app.post('/api/pishock/login/start', async (req, reply) => {
@@ -129,6 +138,12 @@ export const pishockSessionRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (
         expiry: expiresAt,
       });
 
+      await validateApiKey({
+        userId: pending.userId,
+        username,
+        apiKey: created.apiKey,
+      });
+
       await savePiShockSession(opts.env, req.discordUser.id, {
         userId: pending.userId,
         username,
@@ -170,6 +185,56 @@ export const pishockSessionRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (
   app.post('/api/pishock/login/cancel', async (req) => {
     clearPendingConfirm(req.discordUser.id);
     return { ok: true };
+  });
+
+  /** Manual link with an existing PiShock username + API key (no browser login). */
+  app.post('/api/pishock/session/api-key', async (req, reply) => {
+    if (!req.hasConsent) {
+      return reply.code(403).send({ error: 'Consent required' });
+    }
+    const parsed = parseManualApiKeyBody(req.body);
+    if (!parsed) {
+      return reply.code(400).send({
+        error: 'username and apiKey are required',
+        code: 'PISHOCK_API_KEY_REQUIRED',
+      });
+    }
+
+    const expiresAt = new Date(Date.now() + PISHOCK_API_KEY_TTL_MS);
+    try {
+      const account = await validateApiKey({
+        username: parsed.username,
+        apiKey: parsed.apiKey,
+      });
+
+      clearPendingConfirm(req.discordUser.id);
+      await savePiShockSession(opts.env, req.discordUser.id, {
+        userId: account.userId,
+        username: account.username,
+        apiKey: parsed.apiKey,
+        expiresAt,
+        apiKeyId: null,
+      });
+
+      return {
+        ok: true,
+        pishockUserId: account.userId,
+        pishockUsername: account.username,
+        expiresAt: expiresAt.toISOString(),
+        manual: true,
+      };
+    } catch (err) {
+      if (err instanceof PiShockApiError) {
+        return reply.code(err.status >= 400 && err.status < 600 ? err.status : 502).send({
+          error: err.body || err.message,
+          code: err.needsRelogin ? 'PISHOCK_RELOGIN' : 'PISHOCK_API_KEY_INVALID',
+        });
+      }
+      return reply.code(502).send({
+        error: err instanceof Error ? err.message : 'Failed to validate PiShock API key',
+        code: 'PISHOCK_API_KEY_INVALID',
+      });
+    }
   });
 
   app.delete('/api/pishock/session', async (req) => {

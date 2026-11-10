@@ -68,6 +68,7 @@ type MeResponse = {
 
 type QueueState = QueuePanelSettings & {
   paused: boolean;
+  halted: boolean;
   active: QueuePanelItem | null;
   waiting: QueuePanelItem[];
 };
@@ -148,6 +149,8 @@ export function App() {
   const [linkConfirm, setLinkConfirm] = useState<PendingLinkConfirm | null>(null);
   const [apiKeyReveal, setApiKeyReveal] = useState<PendingApiKeyReveal | null>(null);
   const [confirmBusy, setConfirmBusy] = useState(false);
+  const [manualLinkBusy, setManualLinkBusy] = useState(false);
+  const [manualLinkError, setManualLinkError] = useState<string | null>(null);
   const [setupPhase, setSetupPhase] = useState(false);
   const [setupSharePhase, setSetupSharePhase] = useState(false);
   const [setupDevicesReady, setSetupDevicesReady] = useState(false);
@@ -176,6 +179,7 @@ export function App() {
     maxPerSender: 3,
     starOnly: false,
     paused: false,
+    halted: false,
     active: null,
     waiting: [],
   });
@@ -199,6 +203,7 @@ export function App() {
       maxPerSender: Number(data.maxPerSender) || 3,
       starOnly: Boolean(data.starOnly),
       paused: Boolean(data.paused),
+      halted: Boolean(data.halted),
       active: data.active ?? null,
       waiting: data.waiting ?? [],
     });
@@ -409,6 +414,8 @@ export function App() {
   useEffect(() => {
     if (!isEmbedded || !token || !bootReady || !me?.consent) return;
 
+    let invalidateTimer: number | null = null;
+
     const applyEmergencyStop = (event: Extract<RealtimeEvent, { type: 'emergency_stop' }>) => {
       const selfId = selfIdRef.current;
       if (selfId && event.ownerDiscordUserId === selfId) {
@@ -502,6 +509,7 @@ export function App() {
             maxPerSender: Number(event.maxPerSender) || 3,
             starOnly: Boolean(event.starOnly),
             paused: Boolean(event.paused),
+            halted: Boolean(event.halted),
             active: event.active ?? null,
             waiting: event.waiting ?? [],
           });
@@ -537,7 +545,13 @@ export function App() {
       }
       if (event.type === 'activity_share_changed' || event.type === 'participants_invalidate') {
         participantStatusCache = { key: '', fetchedAt: 0, map: {} };
-        void refreshParticipantStatus(token, participantsRef.current, true).catch(() => undefined);
+        if (invalidateTimer != null) window.clearTimeout(invalidateTimer);
+        invalidateTimer = window.setTimeout(() => {
+          invalidateTimer = null;
+          void refreshParticipantStatus(token, participantsRef.current, true).catch(() => undefined);
+          void refreshLogs(token).catch(() => undefined);
+          void refreshQueue(token).catch(() => undefined);
+        }, 150);
         if (
           event.type === 'activity_share_changed' &&
           selfIdRef.current === event.ownerDiscordUserId
@@ -547,9 +561,26 @@ export function App() {
       }
     };
 
-    const handle = connectRealtime(token, handleEvent);
-    return () => handle.close();
-  }, [token, bootReady, me?.consent, refreshMe, refreshParticipantStatus, refreshLogs]);
+    const handle = connectRealtime(token, (event) => {
+      try {
+        handleEvent(event);
+      } catch (err) {
+        console.warn('[realtime] handler failed', event.type, err);
+      }
+    });
+    return () => {
+      if (invalidateTimer != null) window.clearTimeout(invalidateTimer);
+      handle.close();
+    };
+  }, [
+    token,
+    bootReady,
+    me?.consent,
+    refreshMe,
+    refreshParticipantStatus,
+    refreshLogs,
+    refreshQueue,
+  ]);
 
   const refreshOnlineStatus = useCallback(
     async (accessToken: string, clientIds: string[], waitMs = 2500) => {
@@ -847,6 +878,42 @@ export function App() {
       !friendBlocked &&
       (selectedFriendStatus?.emergencyStop || friendShockers.some((s) => s.emergencyStop)),
   );
+  const friendQueue = selectedFriendStatus?.queue;
+  const friendStarBlocked = Boolean(
+    friendsMode &&
+      selectedTargetId &&
+      !friendBlocked &&
+      !friendEStop &&
+      friendQueue?.starOnly &&
+      !friendQueue.starredByThem,
+  );
+  const friendStarred = Boolean(
+    friendsMode &&
+      selectedTargetId &&
+      !friendBlocked &&
+      friendQueue?.starredByThem,
+  );
+  const friendQueueHalted = Boolean(
+    friendsMode &&
+      selectedTargetId &&
+      !friendBlocked &&
+      !friendEStop &&
+      !friendStarBlocked &&
+      friendQueue?.enabled &&
+      friendQueue.halted,
+  );
+  const friendQueuePaused = Boolean(
+    friendsMode &&
+      selectedTargetId &&
+      !friendBlocked &&
+      !friendEStop &&
+      !friendStarBlocked &&
+      !friendQueueHalted &&
+      friendQueue?.enabled &&
+      friendQueue.paused,
+  );
+  const friendControlsLocked =
+    friendBlocked || friendEStop || friendStarBlocked || friendQueueHalted;
 
   useEffect(() => {
     // Unlinked users only use Discord Shockers — Claim / My Shockers stay hidden
@@ -1045,6 +1112,7 @@ export function App() {
   const openLinkFlow = () => {
     if (!me) return;
     setLinkError(null);
+    setManualLinkError(null);
     const prefs = loadSetupPrefs(me.user.id);
     if (!prefs.seen) {
       setSetupPhase(true);
@@ -1081,6 +1149,29 @@ export function App() {
       setLinking(false);
       setLoginUrl(null);
       setLinkError(null);
+    }
+  };
+
+  const submitManualApiKey = async (input: { username: string; apiKey: string }) => {
+    if (!token) return;
+    abortLinkPoll();
+    setManualLinkBusy(true);
+    setManualLinkError(null);
+    setLinkError(null);
+    try {
+      await apiFetch('/pishock/session/api-key', token, {
+        method: 'POST',
+        body: JSON.stringify(input),
+      });
+      setOverlay(null);
+      setLoginUrl(null);
+      setLinking(false);
+      setLinkConfirm(null);
+      await continueAfterApiKeyReveal(token);
+    } catch (err) {
+      setManualLinkError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setManualLinkBusy(false);
     }
   };
 
@@ -1156,6 +1247,9 @@ export function App() {
       } else if (err instanceof ApiError && err.code === 'STAR_ONLY') {
         setActionError('They only accept commands from starred people');
         if (token) void refreshParticipantStatus(token, participants, true).catch(() => undefined);
+      } else if (err instanceof ApiError && err.code === 'QUEUE_HALTED') {
+        setActionError('Their queue is closed to new commands');
+        if (token) void refreshParticipantStatus(token, participants, true).catch(() => undefined);
       } else if (
         err instanceof ApiError &&
         (err.code === 'QUEUE_SENDER_FULL' || err.code === 'QUEUE_FULL')
@@ -1183,6 +1277,7 @@ export function App() {
           : prev.maxPerSender,
       starOnly: typeof result.starOnly === 'boolean' ? result.starOnly : prev.starOnly,
       paused: typeof result.paused === 'boolean' ? result.paused : prev.paused,
+      halted: typeof result.halted === 'boolean' ? result.halted : prev.halted,
       active: result.active !== undefined ? result.active : prev.active,
       waiting: result.waiting !== undefined ? result.waiting : prev.waiting,
     }));
@@ -1216,6 +1311,23 @@ export function App() {
       const result = await apiFetch<QueueState & { ok: boolean }>('/queue/pause', token, {
         method: 'POST',
         body: JSON.stringify({ paused }),
+      });
+      applyQueueState({ ...result, enabled: true });
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setQueueBusy(false);
+    }
+  };
+
+  const setQueueHalted = async (halted: boolean) => {
+    if (!token) return;
+    setQueueBusy(true);
+    setActionError(null);
+    try {
+      const result = await apiFetch<QueueState & { ok: boolean }>('/queue/halt', token, {
+        method: 'POST',
+        body: JSON.stringify({ halted }),
       });
       applyQueueState({ ...result, enabled: true });
     } catch (err) {
@@ -1518,11 +1630,19 @@ export function App() {
           ? 'You are blocked'
           : friendEStop
             ? 'Emergency stop armed'
-            : friendShockers.length > 0
-              ? 'Activity share'
-              : selectedTargetId
-                ? 'No shockers shared'
-                : 'Select a participant',
+            : friendStarBlocked
+              ? 'Stars only — ask them to star you'
+              : friendQueueHalted
+                ? 'Queue closed to new commands'
+                : friendQueuePaused
+                  ? 'Queue paused — you can still join'
+                  : friendStarred
+                    ? 'You are starred'
+                    : friendShockers.length > 0
+                      ? 'Activity share'
+                      : selectedTargetId
+                        ? 'No shockers shared'
+                        : 'Select a participant',
       };
     }
     if (!me?.pishockLinked) {
@@ -1742,8 +1862,35 @@ export function App() {
                   disabled until they release it.
                 </div>
               </div>
+            ) : friendStarBlocked ? (
+              <div className="access-banner access-banner--star-blocked q-mt-sm q-pa-sm">
+                <div className="text-warning text-subtitle2">Stars only</div>
+                <div className="text-grey-4 text-body2">
+                  They only accept commands from starred people. Ask them to star you — controls
+                  stay locked until then.
+                </div>
+              </div>
+            ) : friendQueueHalted ? (
+              <div className="access-banner access-banner--queue-halted q-mt-sm q-pa-sm">
+                <div className="text-warning text-subtitle2">Queue closed</div>
+                <div className="text-grey-4 text-body2">
+                  They halted new queue entries. Existing waiting commands are kept, but you
+                  cannot send anything new until they open the queue again.
+                </div>
+              </div>
+            ) : friendQueuePaused ? (
+              <div className="access-banner access-banner--queue-paused q-mt-sm q-pa-sm">
+                <div className="text-warning text-subtitle2">Queue paused</div>
+                <div className="text-grey-4 text-body2">
+                  Processing is paused, but you can still send commands into their queue. They’ll
+                  run when the owner resumes.
+                </div>
+              </div>
             ) : null
           }
+          starredPanel={friendStarred}
+          starredPanelStarOnly={Boolean(friendQueue?.starOnly)}
+          forceControlsLocked={friendControlsLocked}
           safetyBanner={!pip ? <SafetyNoticeBar /> : null}
           friendsPanel={({
             multiShock,
@@ -2005,6 +2152,9 @@ export function App() {
             onStart={startPiShockLogin}
             onOpen={() => undefined}
             onRefresh={() => undefined}
+            onManualSubmit={submitManualApiKey}
+            manualBusy={manualLinkBusy}
+            manualError={manualLinkError}
           />
         </PsDialog>
 
@@ -2149,12 +2299,14 @@ export function App() {
                 starOnly: queueState.starOnly,
               }}
               paused={queueState.paused}
+              halted={queueState.halted}
               active={queueState.active}
               waiting={queueState.waiting}
               busy={queueBusy}
               onClose={() => setQueueOpen(false)}
               onSettingsChange={(patch) => void patchQueueSettings(patch)}
               onTogglePaused={(paused) => void setQueuePaused(paused)}
+              onToggleHalted={(halted) => void setQueueHalted(halted)}
               onSkip={() => void skipQueue()}
               onClear={() => void clearQueue()}
               onRemove={(itemId) => void removeQueueItem(itemId)}
@@ -2213,6 +2365,7 @@ export function App() {
                 count={queueState.waiting.length}
                 enabled={queueState.enabled}
                 paused={queueState.paused}
+                halted={queueState.halted}
                 active={Boolean(queueState.active)}
                 onClick={() => setQueueOpen((open) => !open)}
               />
