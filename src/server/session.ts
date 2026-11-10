@@ -231,6 +231,76 @@ export async function setEmergencyStop(
   };
 }
 
+export async function getCommandQueueEnabled(discordUserId: string): Promise<boolean> {
+  const user = await prisma.discordUser.findUnique({
+    where: { id: discordUserId },
+    select: { commandQueueEnabled: true },
+  });
+  return Boolean(user?.commandQueueEnabled);
+}
+
+export async function setCommandQueueEnabled(
+  discordUserId: string,
+  enabled: boolean,
+): Promise<boolean> {
+  const user = await prisma.discordUser.update({
+    where: { id: discordUserId },
+    data: { commandQueueEnabled: enabled },
+    select: { commandQueueEnabled: true },
+  });
+  return user.commandQueueEnabled;
+}
+
+export async function listQueueStars(ownerDiscordUserId: string): Promise<string[]> {
+  const rows = await prisma.activityQueueStar.findMany({
+    where: { ownerDiscordUserId },
+    select: { starredDiscordUserId: true },
+  });
+  return rows.map((r) => r.starredDiscordUserId);
+}
+
+export async function isQueueStarred(
+  ownerDiscordUserId: string,
+  starredDiscordUserId: string,
+): Promise<boolean> {
+  const row = await prisma.activityQueueStar.findUnique({
+    where: {
+      ownerDiscordUserId_starredDiscordUserId: { ownerDiscordUserId, starredDiscordUserId },
+    },
+    select: { id: true },
+  });
+  return Boolean(row);
+}
+
+export async function setQueueStar(
+  ownerDiscordUserId: string,
+  starredDiscordUserId: string,
+  starred: boolean,
+): Promise<boolean> {
+  if (ownerDiscordUserId === starredDiscordUserId) {
+    return false;
+  }
+  if (starred) {
+    await prisma.discordUser.upsert({
+      where: { id: starredDiscordUserId },
+      create: { id: starredDiscordUserId },
+      update: {},
+    });
+    await prisma.activityQueueStar.upsert({
+      where: {
+        ownerDiscordUserId_starredDiscordUserId: { ownerDiscordUserId, starredDiscordUserId },
+      },
+      create: { ownerDiscordUserId, starredDiscordUserId },
+      update: {},
+    });
+    return true;
+  }
+  await prisma.activityQueueStar.deleteMany({
+    where: { ownerDiscordUserId, starredDiscordUserId },
+  });
+  return false;
+}
+
 export async function setPersonalActivityLimits(
   discordUserId: string,
   input: { activityMaxIntensity?: number; activityMaxDurationMs?: number },

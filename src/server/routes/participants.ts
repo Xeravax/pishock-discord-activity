@@ -24,11 +24,13 @@ import {
   scheduleHoldAutoEnd,
 } from '../operate-policy.js';
 import {
+  getCommandQueueEnabled,
   getConsent,
   getEmergencyStopShockerIds,
   isEmergencyStopped,
   isExecutorBanned,
   listEnabledActivityShares,
+  listQueueStars,
   loadPiShockCreds,
   logCommand,
 } from '../session.js';
@@ -39,6 +41,8 @@ import {
   type ActivityLocationContext,
   type ClientLocationHint,
 } from '../discord-location.js';
+import { commandQueue } from '../pishock/command-queue-runtime.js';
+import { CommandQueueError, type QueuedOperation } from '../pishock/command-queue.js';
 
 function executorLabel(user: { id: string; username?: string | null; global_name?: string | null }) {
   const name = user.global_name || user.username || 'unknown';
@@ -150,6 +154,7 @@ export const participantRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app
     }
 
     const ids = [...new Set((body.discordUserIds ?? []).map(String).filter(Boolean))].slice(0, 50);
+    const myStars = new Set(await listQueueStars(req.discordUser.id));
     const participants = [];
     for (const id of ids) {
       const [user, shares, bannedYou, hasSession, hasConsent] = await Promise.all([
@@ -213,6 +218,8 @@ export const participantRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app
           shares.every((s: { paused: boolean; enabled: boolean }) => s.paused || !s.enabled),
         emergencyStop: !bannedYou && allEStopped,
         bannedYou,
+        /** Caller's star — this person's commands to the caller get queue priority. */
+        priority: myStars.has(id),
         shockers: visibleShockers,
       });
     }
@@ -317,6 +324,36 @@ export const participantRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app
     const useSharePath = Boolean(shareCode && executorCreds);
 
     if (operation === 'end') {
+      if (await getCommandQueueEnabled(targetDiscordUserId)) {
+        const handled = await commandQueue.handleSenderEnd(
+          targetDiscordUserId,
+          req.discordUser.id,
+          shockerId,
+        );
+        if (handled.handled) {
+          await auditParticipantCommand({
+            executorDiscordUserId: req.discordUser.id,
+            executorUsername: req.discordUser.username,
+            executorGlobalName: req.discordUser.global_name ?? null,
+            executorAvatar: req.discordUser.avatar ?? null,
+            targetDiscordUserId,
+            action: 'participant_end',
+            shockerId,
+            shareCode,
+            intensity: 0,
+            durationMs: 0,
+            success: true,
+            location,
+            detail: JSON.stringify({
+              via: 'queue',
+              path: 'queue_end',
+              agent,
+              instanceId,
+            }),
+          });
+          return { ok: true, via: 'queue', ended: true };
+        }
+      }
       if (clientId == null) {
         return reply.code(400).send({ error: 'end requires a stored hub client id on the share' });
       }
@@ -391,6 +428,54 @@ export const participantRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app
 
     const intensity = clampIntensity(body.intensity, maxIntensity);
     const durationMs = clampDurationMs(body.durationMs, maxDurationMs);
+
+    if (await getCommandQueueEnabled(targetDiscordUserId)) {
+      const queuedOp: QueuedOperation =
+        operation === 'shock' || operation === 'hold'
+          ? operation === 'hold'
+            ? 'hold'
+            : 'shock'
+          : operation === 'vibrate' || operation === 'warning'
+            ? operation === 'warning'
+              ? 'warning'
+              : 'vibrate'
+            : 'beep';
+      try {
+        const queued = await commandQueue.enqueue({
+          ownerDiscordUserId: targetDiscordUserId,
+          executorDiscordUserId: req.discordUser.id,
+          executorUsername: req.discordUser.username ?? null,
+          executorGlobalName: req.discordUser.global_name ?? null,
+          executorAvatar: req.discordUser.avatar ?? null,
+          operation: queuedOp,
+          intensity,
+          durationMs,
+          hold,
+          warning,
+          shockerId,
+          shareCode,
+          hubClientId: clientId ?? null,
+          instanceId,
+          payload: {
+            env: opts.env,
+            location,
+            executorHadSession: Boolean(executorCreds),
+          },
+        });
+        return {
+          ok: true,
+          queued: true,
+          itemId: queued.itemId,
+          position: queued.position,
+          paused: queued.paused,
+        };
+      } catch (err) {
+        if (err instanceof CommandQueueError) {
+          return reply.code(err.status).send({ error: err.message, code: err.code });
+        }
+        throw err;
+      }
+    }
 
     const op =
       operation === 'shock' || operation === 'hold'

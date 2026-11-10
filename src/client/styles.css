@@ -416,7 +416,113 @@ html.pip-mode #root > * {
   border: 1px solid hsla(0, 0%, 100%, 0.12);
   padding: 4px;
   border-radius: 14px;
-  max-width: 168px;
+  max-width: 196px;
+}
+
+.official-friend-row {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  width: 100%;
+}
+
+.official-friend-row .official-friend-btn {
+  flex: 1;
+  min-width: 0;
+}
+
+.official-friend-star {
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: #6b7280;
+  cursor: pointer;
+  padding: 2px;
+  min-width: 22px;
+  min-height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.official-friend-star.active {
+  color: #f4d600;
+}
+
+.queue-panel {
+  background: rgba(30, 30, 30, 0.96);
+  border: 1px solid hsla(0, 0%, 100%, 0.12);
+  padding: 6px 8px;
+  border-radius: 14px;
+  max-width: 196px;
+}
+
+.queue-panel-title {
+  font-size: 9px;
+  letter-spacing: 0.04em;
+  font-weight: 600;
+}
+
+.queue-panel-toggle input {
+  accent-color: #79c6db;
+}
+
+.queue-panel-hint {
+  line-height: 1.25;
+  margin-top: 4px;
+}
+
+.queue-panel-actions {
+  margin-top: 6px;
+  flex-wrap: wrap;
+}
+
+.queue-panel-actions .q-btn {
+  font-size: 10px;
+  min-height: 22px;
+  padding: 0 6px;
+}
+
+.queue-panel-section {
+  margin-top: 6px;
+}
+
+.queue-panel-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  background: #121212;
+  border: 1px solid hsla(0, 0%, 100%, 0.12);
+  border-radius: 8px;
+  padding: 4px 6px;
+  margin-top: 3px;
+}
+
+.queue-panel-item.active {
+  border-color: #79c6db;
+}
+
+.queue-panel-item.priority {
+  border-color: rgba(244, 214, 0, 0.45);
+}
+
+.queue-panel-item-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  font-size: 11px;
+  line-height: 1.2;
+}
+
+.queue-ticket-banner {
+  background: rgba(121, 198, 219, 0.12);
+  border: 1px solid rgba(121, 198, 219, 0.35);
+  color: #79c6db;
+  border-radius: 8px;
+  padding: 4px 8px;
+  max-width: 196px;
 }
 
 .official-friends-header {

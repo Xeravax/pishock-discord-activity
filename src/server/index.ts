@@ -10,6 +10,7 @@ import { pishockSessionRoutes } from './routes/pishock-session.js';
 import { controlRoutes } from './routes/control.js';
 import { activityShareRoutes } from './routes/activity-share.js';
 import { participantRoutes } from './routes/participants.js';
+import { queueRoutes } from './routes/queue.js';
 import { announcementRoutes } from './routes/announcements.js';
 import { attachRealtime, broadcastRealtimeAll } from './realtime.js';
 import { loadAppVersion } from './app-version.js';
@@ -70,6 +71,7 @@ async function main() {
   await app.register(controlRoutes, { env });
   await app.register(activityShareRoutes, { env });
   await app.register(participantRoutes, { env });
+  await app.register(queueRoutes, { env });
   await app.register(announcementRoutes);
 
   const clientDist = resolveClientDist();

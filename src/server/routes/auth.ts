@@ -8,6 +8,7 @@ import {
 } from '../consent.js';
 import {
   clearConsent,
+  getCommandQueueEnabled,
   getEmergencyStopShockerIds,
   getPersonalActivityLimits,
   setConsent,
@@ -41,9 +42,10 @@ export const authRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app, opts)
   });
 
   app.get('/api/me', async (req) => {
-    const [personal, emergencyStopShockerIds] = await Promise.all([
+    const [personal, emergencyStopShockerIds, commandQueueEnabled] = await Promise.all([
       getPersonalActivityLimits(req.discordUser.id),
       getEmergencyStopShockerIds(req.discordUser.id),
+      getCommandQueueEnabled(req.discordUser.id),
     ]);
     return {
       user: {
@@ -59,6 +61,7 @@ export const authRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app, opts)
       pishockUserId: req.pishockCreds?.userId ?? null,
       personal,
       emergencyStopShockerIds,
+      commandQueueEnabled,
     };
   });
 

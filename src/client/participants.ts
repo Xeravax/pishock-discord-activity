@@ -38,6 +38,8 @@ export type ParticipantStatus = {
   /** True when every shared shocker is under emergency stop */
   emergencyStop?: boolean;
   bannedYou: boolean;
+  /** Caller's star — this person's commands to the caller get queue priority */
+  priority?: boolean;
   shockers: ParticipantShockerStatus[];
 };
 

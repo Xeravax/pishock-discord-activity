@@ -37,6 +37,55 @@ export type RealtimeEvent =
       at: number;
     }
   | {
+      /** Wearer's own command queue snapshot (never broadcast to the whole activity). */
+      type: 'queue_state';
+      ownerDiscordUserId: string;
+      enabled: boolean;
+      paused: boolean;
+      active: {
+        id: string;
+        executorDiscordUserId: string;
+        executorUsername: string | null;
+        executorGlobalName: string | null;
+        executorAvatar: string | null;
+        operation: string;
+        intensity: number;
+        durationMs: number;
+        hold: boolean;
+        warning: boolean;
+        shockerId: number;
+        enqueuedAt: number;
+        priority: boolean;
+      } | null;
+      waiting: Array<{
+        id: string;
+        executorDiscordUserId: string;
+        executorUsername: string | null;
+        executorGlobalName: string | null;
+        executorAvatar: string | null;
+        operation: string;
+        intensity: number;
+        durationMs: number;
+        hold: boolean;
+        warning: boolean;
+        shockerId: number;
+        enqueuedAt: number;
+        priority: boolean;
+      }>;
+      at: number;
+    }
+  | {
+      /** Sender's place in a wearer's queue. */
+      type: 'queue_ticket';
+      ownerDiscordUserId: string;
+      executorDiscordUserId: string;
+      itemId: string;
+      status: 'queued' | 'started' | 'done' | 'removed' | 'failed';
+      position: number | null;
+      paused: boolean;
+      at: number;
+    }
+  | {
       type: 'hello_ok';
       discordUserId: string;
       at: number;

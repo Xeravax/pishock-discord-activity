@@ -17,6 +17,8 @@ model DiscordUser {
   activityMaxDurationMs Int @default(15000)
   /// Owner kill-switch: shocker ids with emergency stop latched in. Blocks all commands until released.
   emergencyStopShockerIds Int[] @default([])
+  /// When true, incoming participant commands line up one-at-a-time for this wearer.
+  commandQueueEnabled Boolean @default(false)
   createdAt      DateTime        @default(now())
   updatedAt      DateTime        @updatedAt
   pishockSession PiShockSession?
@@ -24,6 +26,8 @@ model DiscordUser {
   activityShares ActivityShare[]
   activityBans   ActivityBan[]   @relation("BanOwner")
   bannedBy       ActivityBan[]   @relation("BannedUser")
+  queueStarsGiven ActivityQueueStar[] @relation("QueueStarOwner")
+  queueStarsReceived ActivityQueueStar[] @relation("QueueStarStarred")
 }
 
 model PiShockSession {
@@ -76,6 +80,19 @@ model ActivityBan {
   createdAt          DateTime    @default(now())
 
   @@unique([ownerDiscordUserId, bannedDiscordUserId])
+  @@index([ownerDiscordUserId])
+}
+
+/// Wearer-marked priority senders — their commands jump ahead in that wearer's queue.
+model ActivityQueueStar {
+  id                   String      @id @default(cuid())
+  ownerDiscordUserId   String
+  owner                DiscordUser @relation("QueueStarOwner", fields: [ownerDiscordUserId], references: [id], onDelete: Cascade)
+  starredDiscordUserId String
+  starred              DiscordUser @relation("QueueStarStarred", fields: [starredDiscordUserId], references: [id], onDelete: Cascade)
+  createdAt            DateTime    @default(now())
+
+  @@unique([ownerDiscordUserId, starredDiscordUserId])
   @@index([ownerDiscordUserId])
 }
 

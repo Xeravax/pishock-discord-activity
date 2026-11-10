@@ -16,6 +16,8 @@ type Props = {
   onToggleIndividualIntensity?: () => void;
   onSelect: (discordUserId: string | null) => void;
   onRefresh?: () => void;
+  /** Star someone so their commands to you get queue priority */
+  onTogglePriority?: (discordUserId: string, starred: boolean) => void;
 };
 
 /** Discord Shockers roster styled like the official PISHOCKS FAB list */
@@ -31,6 +33,7 @@ export function FriendsParticipantList({
   onToggleIndividualIntensity,
   onSelect,
   onRefresh,
+  onTogglePriority,
 }: Props) {
   const others = participants.filter((p) => p.id !== currentUserId);
   const selectedIds = selectedTargetIds ?? (selectedTargetId ? [selectedTargetId] : []);
@@ -107,56 +110,86 @@ export function FriendsParticipantList({
             : null;
           const multiColor = multiSelect && active ? colorForUser(`u:${p.id}`) : undefined;
 
+          const starred = Boolean(status?.priority);
+
           return (
-            <button
+            <div
               key={p.id}
-              type="button"
-              disabled={!selectable}
-              className={`official-friend-btn ${active && !multiSelect ? 'active' : ''} ${
-                selectable ? '' : 'disabled'
-              } ${banned ? 'blocked' : ''} ${eStop && !banned ? 'estop' : ''} ${
-                notLoggedIn ? 'not-logged-in' : ''
-              }`}
-              style={
-                multiSelect && multiColor
-                  ? {
-                      background: multiColor,
-                      borderColor: multiColor,
-                      color: '#121212',
-                    }
-                  : undefined
-              }
-              onClick={() => {
-                if (!selectable) return;
-                if (multiSelect) {
-                  onSelect(p.id);
-                  return;
-                }
-                onSelect(active ? null : p.id);
-              }}
+              className={`official-friend-row ${starred ? 'starred' : ''}`}
             >
-              <img src={p.avatarUrl} alt="" className="official-friend-avatar" />
-              <span className="official-friend-meta">
-                <span className="official-friend-name ellipsis">{p.displayName}</span>
-                <span
-                  className={`official-friend-status ${
-                    banned || eStop || notLoggedIn || !status?.available ? 'bad' : 'ok'
-                  }`}
-                >
-                  {label}
-                </span>
-                {detail ? (
-                  <span className="official-friend-limits ellipsis">{detail}</span>
-                ) : primary ? (
-                  <span className="official-friend-limits ellipsis">
-                    {primary.shockerName}
-                    {limits ? ` · ${limits}` : ''}
-                    {flags ? ` · ${flags}` : ''}
-                    {primary.emergencyStop ? ' · E-STOP' : ''}
+              <button
+                type="button"
+                disabled={!selectable}
+                className={`official-friend-btn ${active && !multiSelect ? 'active' : ''} ${
+                  selectable ? '' : 'disabled'
+                } ${banned ? 'blocked' : ''} ${eStop && !banned ? 'estop' : ''} ${
+                  notLoggedIn ? 'not-logged-in' : ''
+                }`}
+                style={
+                  multiSelect && multiColor
+                    ? {
+                        background: multiColor,
+                        borderColor: multiColor,
+                        color: '#121212',
+                      }
+                    : undefined
+                }
+                onClick={() => {
+                  if (!selectable) return;
+                  if (multiSelect) {
+                    onSelect(p.id);
+                    return;
+                  }
+                  onSelect(active ? null : p.id);
+                }}
+              >
+                <img src={p.avatarUrl} alt="" className="official-friend-avatar" />
+                <span className="official-friend-meta">
+                  <span className="official-friend-name ellipsis">{p.displayName}</span>
+                  <span
+                    className={`official-friend-status ${
+                      banned || eStop || notLoggedIn || !status?.available ? 'bad' : 'ok'
+                    }`}
+                  >
+                    {label}
                   </span>
-                ) : null}
-              </span>
-            </button>
+                  {detail ? (
+                    <span className="official-friend-limits ellipsis">{detail}</span>
+                  ) : primary ? (
+                    <span className="official-friend-limits ellipsis">
+                      {primary.shockerName}
+                      {limits ? ` · ${limits}` : ''}
+                      {flags ? ` · ${flags}` : ''}
+                      {primary.emergencyStop ? ' · E-STOP' : ''}
+                    </span>
+                  ) : null}
+                </span>
+              </button>
+              {onTogglePriority ? (
+                <button
+                  type="button"
+                  className={`official-friend-star ${starred ? 'active' : ''}`}
+                  title={
+                    starred
+                      ? 'Remove queue priority'
+                      : 'Star for queue priority on your shockers'
+                  }
+                  aria-label={starred ? 'Unstar for priority' : 'Star for priority'}
+                  aria-pressed={starred}
+                  onClick={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    onTogglePriority(p.id, !starred);
+                  }}
+                >
+                  <i
+                    className={`q-icon mdi ${starred ? 'mdi-star' : 'mdi-star-outline'}`}
+                    style={{ fontSize: 16 }}
+                    aria-hidden
+                  />
+                </button>
+              ) : null}
+            </div>
           );
         })
       )}

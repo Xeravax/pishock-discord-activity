@@ -16,6 +16,7 @@ import {
   pauseShare,
 } from '../pishock/client.js';
 import { getOnlineMap, probeOnlineStatus, publishOperate } from '../pishock/broker.js';
+import { commandQueue } from '../pishock/command-queue-runtime.js';
 import {
   assertModeAllowed,
   assertOperateRateLimit,
@@ -172,6 +173,10 @@ export const controlRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app, op
     }
 
     const result = await setEmergencyStop(req.discordUser.id, shockerId, body.engaged);
+    if (body.engaged) {
+      // Device already cut above; drop waiting + active queue slots for this wearer.
+      await commandQueue.hardClear(req.discordUser.id, { endActiveDevice: false });
+    }
     await logCommand({
       discordUserId: req.discordUser.id,
       action: body.engaged ? 'emergency_stop_on' : 'emergency_stop_off',
