@@ -1,9 +1,16 @@
-# Local build + run
-#   cp .env.example .env   # fill secrets
-#   docker compose up --build -d
+# PiShock Activity (.NET 10) — published GHCR image plus Postgres.
 #
-# Required in .env: DISCORD_CLIENT_ID, DISCORD_CLIENT_SECRET, TOKEN_KEY, PUBLIC_URL
-# DATABASE_URL is set below for the compose network (override in .env if needed).
+#   cp .env.example .env
+#   # fill DISCORD_CLIENT_SECRET, TOKEN_KEY, PUBLIC_URL
+#   # DISCORD_CLIENT_ID must match the id baked into this image
+#   docker compose pull
+#   docker compose up -d
+#
+# App:    http://localhost:3000
+# Health: http://localhost:3000/api/health
+# Demo:   http://localhost:3000/?demo
+#
+# DATABASE_URL inside the app container is always the Compose hostname `db`.
 
 services:
   db:
@@ -25,15 +32,7 @@ services:
       - internal
 
   app:
-    build:
-      context: .
-      args:
-        # Baked into WASM wwwroot/appsettings.json — must match DISCORD_CLIENT_ID
-        DISCORD_CLIENT_ID: ${DISCORD_CLIENT_ID:?Set DISCORD_CLIENT_ID in .env}
-        GIT_SHA: ${GIT_SHA:-local}
-        GIT_REF_NAME: ${GIT_REF_NAME:-local}
-        GIT_REF_TYPE: ${GIT_REF_TYPE:-branch}
-    image: pishock-activity:local
+    image: ghcr.io/xeravax/pishock-discord-activity:feature-dnet10
     restart: unless-stopped
     stop_grace_period: 10s
     ports:
@@ -41,10 +40,17 @@ services:
     env_file:
       - .env
     environment:
-      # Compose network hostname; wins over env_file if both set
-      DATABASE_URL: ${DATABASE_URL:-postgresql://pishock:pishock@db:5432/pishock?schema=public}
-      PORT: "3000"
       ASPNETCORE_ENVIRONMENT: Production
+      ASPNETCORE_URLS: http://0.0.0.0:3000
+      PORT: "3000"
+      DATABASE_URL: postgresql://pishock:pishock@db:5432/pishock
+      DISCORD_CLIENT_ID: ${DISCORD_CLIENT_ID:?Set DISCORD_CLIENT_ID in .env}
+      DISCORD_CLIENT_SECRET: ${DISCORD_CLIENT_SECRET:?Set DISCORD_CLIENT_SECRET in .env}
+      TOKEN_KEY: ${TOKEN_KEY:?Set TOKEN_KEY in .env}
+      PUBLIC_URL: ${PUBLIC_URL:-http://localhost:3000}
+      DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN:-}
+      DISCORD_PUBLIC_KEY: ${DISCORD_PUBLIC_KEY:-}
+      REQUIRE_DISCORD_PROXY_AUTH: ${REQUIRE_DISCORD_PROXY_AUTH:-0}
     depends_on:
       db:
         condition: service_healthy

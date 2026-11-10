@@ -3,7 +3,7 @@
 #   docker compose -f docker-compose.ghcr.yml --env-file .env up -d
 #
 # Override image tag / port via .env:
-#   PISHOCK_IMAGE=ghcr.io/xeravax/pishock-discord-activity:develop
+#   PISHOCK_IMAGE=ghcr.io/xeravax/pishock-discord-activity:feature-dnet10
 #   PORT=3001
 
 services:
@@ -30,7 +30,7 @@ services:
       - internal
 
   app:
-    image: ${PISHOCK_IMAGE:-ghcr.io/xeravax/pishock-discord-activity:develop}
+    image: ${PISHOCK_IMAGE:-ghcr.io/xeravax/pishock-discord-activity:feature-dnet10}
     restart: unless-stopped
     stop_grace_period: 10s
     ports:

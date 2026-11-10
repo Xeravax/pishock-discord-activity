@@ -50,6 +50,25 @@ catch (Exception ex)
     app.Logger.LogWarning(ex, "Database migrate skipped or failed at startup");
 }
 
+// Registered first so this OnStarting callback runs last and overwrites any
+// Cache-Control set by static files or endpoint results.
+app.Use(async (ctx, next) =>
+{
+    ctx.Response.OnStarting(() =>
+    {
+        var headers = ctx.Response.Headers;
+        headers.CacheControl = "no-store, no-cache, must-revalidate, max-age=0";
+        headers.Pragma = "no-cache";
+        headers.Expires = "0";
+        // Cloudflare and other CDNs honor these even when a cache rule would otherwise keep the URL.
+        headers["CDN-Cache-Control"] = "no-store";
+        headers["Cloudflare-CDN-Cache-Control"] = "no-store";
+        headers["Surrogate-Control"] = "no-store";
+        return Task.CompletedTask;
+    });
+    await next();
+});
+
 // Rewrite Discord's /.proxy/... prefix before endpoint routing selects a match.
 app.Use(async (ctx, next) =>
 {
@@ -63,20 +82,7 @@ app.UseRouting();
 app.UseWebSockets();
 
 app.UseBlazorFrameworkFiles();
-app.UseStaticFiles(new StaticFileOptions
-{
-    OnPrepareResponse = ctx =>
-    {
-        var path = ctx.Context.Request.Path.Value ?? "";
-        // Unhashed activity scripts were cached for hours at the edge (old importScripts bundle).
-        if (path.StartsWith("/js/", StringComparison.OrdinalIgnoreCase)
-            || path.EndsWith("/index.html", StringComparison.OrdinalIgnoreCase)
-            || path.Equals("/", StringComparison.Ordinal))
-        {
-            ctx.Context.Response.Headers.CacheControl = "no-cache, no-store, must-revalidate";
-        }
-    }
-});
+app.UseStaticFiles();
 
 app.MapOpenApi();
 app.MapGet("/api/health", () =>
