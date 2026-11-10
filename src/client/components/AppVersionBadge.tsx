@@ -1,28 +1,55 @@
-import { getBootAppVersion, useAppVersionCheck } from '../hooks/useAppVersionCheck';
+import { useAppHealth } from '../hooks/useAppHealth';
 
 type BadgeProps = {
   /** Hide during PIP so the last-hit UI stays clean */
   hidden?: boolean;
 };
 
-/** Inline build identity — place next to the app name in headers / brand blocks. */
+/** Centered build identity + live health indicator. */
 export function AppVersionBadge({ hidden }: BadgeProps) {
+  const { bootVersion, status, serverVersion } = useAppHealth();
+
   if (hidden) return null;
-  const version = getBootAppVersion();
+
+  const label = serverVersion || bootVersion;
+  const statusLabel =
+    status === 'ok'
+      ? 'Online'
+      : status === 'restarting'
+        ? 'Restarting'
+        : status === 'down'
+          ? 'Unreachable'
+          : 'Checking';
+
   return (
-    <span className="app-version-badge" title={`Build ${version}`}>
-      {version}
+    <span
+      className={`app-version-badge app-version-badge--${status}`}
+      title={`Build ${label} · ${statusLabel}`}
+    >
+      <span className="app-version-badge__dot" aria-hidden />
+      <span className="app-version-badge__text">{label}</span>
     </span>
   );
 }
 
-/** Single root mount: poll deploy version and reload when the running server changes. */
+/** Full-screen wait while the API is down or the server announced shutdown. */
 export function AppVersionWatch() {
-  const { outdated } = useAppVersionCheck();
-  if (!outdated) return null;
+  const { restarting, status } = useAppHealth();
+
+  if (!restarting) return null;
+
   return (
-    <div className="app-version-outdated" role="status">
-      New version available — reloading…
+    <div className="app-restart-overlay" role="status" aria-live="polite" aria-busy="true">
+      <div className="app-restart-overlay__glow" aria-hidden />
+      <div className="app-restart-overlay__panel">
+        <div className="app-restart-overlay__spinner" aria-hidden />
+        <div className="app-restart-overlay__title">
+          {status === 'restarting' ? 'App is restarting…' : 'Reconnecting…'}
+        </div>
+        <p className="app-restart-overlay__hint">
+          Waiting for the server to come back online. Checking every 5 seconds.
+        </p>
+      </div>
     </div>
   );
 }

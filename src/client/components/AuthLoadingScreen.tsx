@@ -17,7 +17,7 @@ export function AuthLoadingScreen({ progress, label, error }: Props) {
         <div className="auth-boot__mark" aria-hidden>
           <i className="q-icon mdi mdi-flash auth-boot__bolt" />
         </div>
-        <h1 className="auth-boot__brand auth-boot__brand-row">
+        <h1 className="auth-boot__brand auth-boot__brand-stack">
           <span className="auth-boot__brand-name">
             Pi<span>Shock</span>
           </span>

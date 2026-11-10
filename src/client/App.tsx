@@ -17,6 +17,7 @@ import { LoginPanel } from './components/LoginPanel';
 import { PiShockLinkingScreen } from './components/PiShockLinkingScreen';
 import { OfficialController } from './components/OfficialController';
 import { AppVersionBadge } from './components/AppVersionBadge';
+import { markServerShuttingDown } from './hooks/useAppHealth';
 import type { ShockerView } from './components/ShockerCard';
 import { SharesPanel } from './components/SharesPanel';
 import {
@@ -385,6 +386,10 @@ export function App() {
 
     const handleEvent = (event: RealtimeEvent) => {
       if (event.type === 'ping' || event.type === 'hello_ok') return;
+      if (event.type === 'server_shutting_down') {
+        markServerShuttingDown();
+        return;
+      }
       if (event.type === 'emergency_stop') {
         applyEmergencyStop(event);
         return;
@@ -1741,7 +1746,7 @@ export function App() {
   return (
     <div className={`app-shell official-preflight consent-shell ${pip ? 'pip' : ''}`}>
       <div className="consent-shell__brand">
-        <h1 className="auth-boot__brand auth-boot__brand-row">
+        <h1 className="auth-boot__brand auth-boot__brand-stack">
           <span className="auth-boot__brand-name">
             Pi<span>Shock</span>
           </span>

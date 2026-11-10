@@ -48,6 +48,10 @@ export type RealtimeEvent =
   | {
       type: 'ping';
       at: number;
+    }
+  | {
+      type: 'server_shutting_down';
+      at: number;
     };
 
 type RealtimeClient = {
@@ -152,10 +156,14 @@ function attachAuthenticatedClient(ws: WebSocket, discordUserId: string) {
   });
 }
 
-export function attachRealtime(server: HttpServer) {
+export function attachRealtime(server: HttpServer): () => void {
   const wss = new WebSocketServer({ noServer: true });
 
-  server.on('upgrade', (req, socket, head) => {
+  const onUpgrade = (
+    req: IncomingMessage,
+    socket: import('node:stream').Duplex,
+    head: Buffer,
+  ) => {
     const pathname = pathOnly(req.url);
     if (!isRealtimePath(pathname)) {
       return;
@@ -237,7 +245,9 @@ export function attachRealtime(server: HttpServer) {
         });
       });
     })();
-  });
+  };
+
+  server.on('upgrade', onUpgrade);
 
   const pingTimer = setInterval(() => {
     const at = Date.now();
@@ -249,8 +259,28 @@ export function attachRealtime(server: HttpServer) {
   }, 25_000);
   pingTimer.unref?.();
 
-  server.on('close', () => {
+  const onHttpClose = () => {
     clearInterval(pingTimer);
     wss.close();
-  });
+  };
+  server.on('close', onHttpClose);
+
+  return () => {
+    clearInterval(pingTimer);
+    server.off('upgrade', onUpgrade);
+    server.off('close', onHttpClose);
+    for (const client of [...clients]) {
+      try {
+        client.ws.close(1001, 'server shutting down');
+      } catch {
+        // ignore
+      }
+    }
+    clients.clear();
+    try {
+      wss.close();
+    } catch {
+      // ignore
+    }
+  };
 }

@@ -25,7 +25,7 @@ export function PiShockLinkingScreen({
         <div className={`auth-boot__mark${error ? '' : ' auth-boot__mark--pulse'}`} aria-hidden>
           <i className="q-icon mdi mdi-flash auth-boot__bolt" />
         </div>
-        <h1 className="auth-boot__brand auth-boot__brand-row">
+        <h1 className="auth-boot__brand auth-boot__brand-stack">
           <span className="auth-boot__brand-name">
             Pi<span>Shock</span>
           </span>

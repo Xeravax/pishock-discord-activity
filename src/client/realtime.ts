@@ -46,6 +46,10 @@ export type RealtimeEvent =
   | {
       type: 'ping';
       at: number;
+    }
+  | {
+      type: 'server_shutting_down';
+      at: number;
     };
 
 function wsUrl(): string {

@@ -470,3 +470,10 @@ function teardown(discordUserId: string) {
   }
   sessions.delete(discordUserId);
 }
+
+/** Close every PiShock broker socket so the process can exit on SIGTERM. */
+export function closeAllBrokerSessions() {
+  for (const id of [...sessions.keys()]) {
+    teardown(id);
+  }
+}

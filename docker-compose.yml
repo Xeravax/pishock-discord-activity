@@ -35,6 +35,7 @@ services:
         GIT_REF_TYPE: ${GIT_REF_TYPE:-branch}
     image: pishock-activity:local
     restart: unless-stopped
+    stop_grace_period: 10s
     ports:
       - "${PORT:-3000}:3000"
     env_file:
