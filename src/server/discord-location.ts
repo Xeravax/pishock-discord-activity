@@ -46,24 +46,69 @@ async function botGetJson(
   }
 }
 
+export type ClientLocationHint = {
+  guildId?: string | null;
+  channelId?: string | null;
+  locationKind?: string | null;
+  locationName?: string | null;
+  locationIconUrl?: string | null;
+};
+
+function sanitizeClientHint(
+  hint: ClientLocationHint | null | undefined,
+  trustedGuildId: string | null,
+  trustedChannelId: string | null,
+): Pick<ActivityLocationContext, 'locationName' | 'locationIconUrl' | 'locationKind'> | null {
+  if (!hint) return null;
+  const hintGuild = hint.guildId != null ? String(hint.guildId) : null;
+  const hintChannel = hint.channelId != null ? String(hint.channelId) : null;
+
+  // Only accept name/icon when IDs match the activity instance (or instance had no IDs yet)
+  if (trustedGuildId && hintGuild && hintGuild !== trustedGuildId) return null;
+  if (trustedChannelId && hintChannel && hintChannel !== trustedChannelId) return null;
+  if (trustedGuildId && hintGuild == null && hintChannel == null) return null;
+
+  const name = hint.locationName != null ? String(hint.locationName).trim().slice(0, 120) : '';
+  let iconUrl = hint.locationIconUrl != null ? String(hint.locationIconUrl).trim() : '';
+  // Only allow Discord CDN icon URLs
+  if (
+    iconUrl &&
+    !/^https:\/\/cdn\.discordapp\.com\/(icons|channel-icons)\//i.test(iconUrl)
+  ) {
+    iconUrl = '';
+  }
+
+  if (!name && !iconUrl) return null;
+  return {
+    locationKind: hint.locationKind != null ? String(hint.locationKind).slice(0, 32) : null,
+    locationName: name || null,
+    locationIconUrl: iconUrl || null,
+  };
+}
+
 /**
  * Resolve a human-readable Discord location (guild or DM/group) for an activity instance.
+ * Prefers a client hint (user OAuth guilds list) when IDs match; falls back to bot API.
  */
 export async function resolveActivityLocation(
   env: AppEnv,
   instanceId: string | null | undefined,
   prefetched?: ActivityInstanceInfo | null,
+  clientHint?: ClientLocationHint | null,
 ): Promise<ActivityLocationContext> {
   const id = instanceId ? String(instanceId).trim() : '';
-  if (!id) return { ...EMPTY };
+  if (!id && !clientHint) return { ...EMPTY };
 
-  const cached = locationCache.get(id);
-  if (cached && Date.now() - cached.at < CACHE_TTL_MS) {
-    return cached.value;
+  const cacheKey = id || `hint:${clientHint?.guildId ?? ''}:${clientHint?.channelId ?? ''}`;
+  if (!clientHint) {
+    const cached = locationCache.get(cacheKey);
+    if (cached && Date.now() - cached.at < CACHE_TTL_MS) {
+      return cached.value;
+    }
   }
 
   let instance = prefetched ?? null;
-  if (!instance) {
+  if (!instance && id) {
     try {
       instance = await verifyActivityInstance(env, id, {
         allowMissingBot: true,
@@ -74,21 +119,41 @@ export async function resolveActivityLocation(
   }
 
   const location = instance?.location;
-  const guildId = location?.guild_id ? String(location.guild_id) : null;
-  const channelId = location?.channel_id ? String(location.channel_id) : null;
-  const locationKind = location?.kind ? String(location.kind) : guildId ? 'gc' : null;
+  const guildId =
+    (location?.guild_id ? String(location.guild_id) : null) ||
+    (clientHint?.guildId ? String(clientHint.guildId) : null);
+  const channelId =
+    (location?.channel_id ? String(location.channel_id) : null) ||
+    (clientHint?.channelId ? String(clientHint.channelId) : null);
+  let locationKind = location?.kind
+    ? String(location.kind)
+    : guildId
+      ? 'gc'
+      : channelId
+        ? 'dm'
+        : null;
 
   let locationName: string | null = null;
   let locationIconUrl: string | null = null;
 
-  if (guildId) {
+  const fromClient = sanitizeClientHint(clientHint, guildId, channelId);
+  if (fromClient) {
+    locationName = fromClient.locationName;
+    locationIconUrl = fromClient.locationIconUrl;
+    if (fromClient.locationKind) locationKind = fromClient.locationKind;
+  }
+
+  if ((!locationName || !locationIconUrl) && guildId) {
     const guild = await botGetJson(env, `/guilds/${encodeURIComponent(guildId)}`);
     if (guild) {
-      locationName = guild.name != null ? String(guild.name) : null;
-      locationIconUrl = guildIconUrl(guildId, guild.icon != null ? String(guild.icon) : null);
+      if (!locationName && guild.name != null) locationName = String(guild.name);
+      if (!locationIconUrl) {
+        locationIconUrl = guildIconUrl(guildId, guild.icon != null ? String(guild.icon) : null);
+      }
     }
-    if (!locationName) locationName = 'Discord Server';
-  } else if (channelId) {
+  }
+
+  if (!locationName && !guildId && channelId) {
     const channel = await botGetJson(env, `/channels/${encodeURIComponent(channelId)}`);
     if (channel) {
       const type = Number(channel.type);
@@ -102,24 +167,25 @@ export async function resolveActivityLocation(
       } else {
         locationName = 'Private Channel';
       }
-      // Group DMs sometimes expose an icon hash
       const icon = channel.icon != null ? String(channel.icon) : null;
-      if (icon) {
+      if (icon && !locationIconUrl) {
         locationIconUrl = `https://cdn.discordapp.com/channel-icons/${channelId}/${icon}.png?size=64`;
       }
-    } else {
+    } else if (!locationName) {
       locationName = 'Direct Message';
     }
   }
 
+  if (!locationName && guildId) locationName = 'Discord Server';
+
   const value: ActivityLocationContext = {
-    instanceId: id,
+    instanceId: id || null,
     guildId,
     channelId,
     locationKind,
     locationName,
     locationIconUrl,
   };
-  locationCache.set(id, { at: Date.now(), value });
+  locationCache.set(cacheKey, { at: Date.now(), value });
   return value;
 }

@@ -5,6 +5,7 @@ import {
   fetchInstanceParticipants,
   getActivityInstanceId,
   openExternal,
+  resolveActivityLocationHint,
   subscribeParticipants,
   type AuthState,
 } from './discord';
@@ -888,11 +889,12 @@ export function App() {
           : selectedTargetId && friendsMode
             ? selectedTargetId
             : null;
+      const instanceId = getActivityInstanceId();
+      const locationHint = await resolveActivityLocationHint(token).catch(() => null);
       if (targetId) {
-        const instanceId = getActivityInstanceId();
         await apiFetch(`/participants/${targetId}/operate`, token, {
           method: 'POST',
-          body: JSON.stringify({ ...input, instanceId }),
+          body: JSON.stringify({ ...input, instanceId, locationHint }),
         });
       } else if (!me?.pishockLinked) {
         requirePiShockLink(
@@ -900,10 +902,9 @@ export function App() {
         );
         return;
       } else {
-        const instanceId = getActivityInstanceId();
         await apiFetch('/operate', token, {
           method: 'POST',
-          body: JSON.stringify({ ...input, instanceId }),
+          body: JSON.stringify({ ...input, instanceId, locationHint }),
         });
       }
       await refreshLogs(token).catch(() => undefined);

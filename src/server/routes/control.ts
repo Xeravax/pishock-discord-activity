@@ -37,7 +37,11 @@ import {
   syncWebsiteDeviceLogs,
 } from '../session.js';
 import { broadcastRealtimeAll } from '../realtime.js';
-import { resolveActivityLocation, type ActivityLocationContext } from '../discord-location.js';
+import {
+  resolveActivityLocation,
+  type ActivityLocationContext,
+  type ClientLocationHint,
+} from '../discord-location.js';
 
 /** Activity feed row: always attribute to the device owner so the public log can dedupe. */
 async function logOperateEvent(input: {
@@ -217,6 +221,7 @@ export const controlRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app, op
       hold?: boolean;
       warning?: { Active: boolean; Min: number; Max: number } | null;
       instanceId?: string;
+      locationHint?: ClientLocationHint | null;
     };
 
     const operation = body.operation;
@@ -237,6 +242,8 @@ export const controlRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app, op
     const location = await resolveActivityLocation(
       opts.env,
       body.instanceId ? String(body.instanceId) : null,
+      null,
+      body.locationHint ?? null,
     );
     let policy;
     try {

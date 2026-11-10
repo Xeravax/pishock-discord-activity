@@ -37,6 +37,7 @@ import { broadcastRealtime } from '../realtime.js';
 import {
   resolveActivityLocation,
   type ActivityLocationContext,
+  type ClientLocationHint,
 } from '../discord-location.js';
 
 function executorLabel(user: { id: string; username?: string | null; global_name?: string | null }) {
@@ -237,6 +238,7 @@ export const participantRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app
     );
     const body = req.body as {
       instanceId?: string;
+      locationHint?: ClientLocationHint | null;
       shockerId?: number;
       operation?: 'shock' | 'vibrate' | 'beep' | 'hold' | 'warning' | 'stop' | 'end';
       intensity?: number;
@@ -260,7 +262,12 @@ export const participantRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app
       }
       throw err;
     }
-    const location = await resolveActivityLocation(opts.env, instanceId, instanceInfo);
+    const location = await resolveActivityLocation(
+      opts.env,
+      instanceId,
+      instanceInfo,
+      body.locationHint ?? null,
+    );
 
     if (await isExecutorBanned(targetDiscordUserId, req.discordUser.id)) {
       return reply.code(403).send({

@@ -45,6 +45,107 @@ export function getActivityInstanceId(): string | null {
   }
 }
 
+export type ActivityLocationHint = {
+  guildId: string | null;
+  channelId: string | null;
+  locationKind: string | null;
+  locationName: string | null;
+  locationIconUrl: string | null;
+};
+
+type DiscordGuildSummary = {
+  id: string;
+  name?: string;
+  icon?: string | null;
+};
+
+function guildIconUrl(guildId: string, icon: string | null | undefined): string | null {
+  if (!icon) return null;
+  const ext = icon.startsWith('a_') ? 'gif' : 'png';
+  return `https://cdn.discordapp.com/icons/${guildId}/${icon}.${ext}?size=64`;
+}
+
+let locationHintCache: { key: string; at: number; value: ActivityLocationHint } | null = null;
+const LOCATION_HINT_TTL_MS = 5 * 60_000;
+
+/**
+ * Resolve the current activity's guild/DM name + icon via the user's OAuth token
+ * and Embedded App SDK (more reliable than bot GET /guilds when the bot isn't in-server).
+ */
+export async function resolveActivityLocationHint(
+  accessToken: string,
+): Promise<ActivityLocationHint | null> {
+  if (!isEmbedded || !accessToken || accessToken === 'dev-token') return null;
+
+  try {
+    const sdk = getDiscordSdk();
+    const guildId = sdk.guildId ? String(sdk.guildId) : null;
+    const channelId = sdk.channelId ? String(sdk.channelId) : null;
+    const cacheKey = `${guildId ?? ''}:${channelId ?? ''}`;
+    if (
+      locationHintCache &&
+      locationHintCache.key === cacheKey &&
+      Date.now() - locationHintCache.at < LOCATION_HINT_TTL_MS
+    ) {
+      return locationHintCache.value;
+    }
+
+    let locationName: string | null = null;
+    let locationIconUrl: string | null = null;
+    let locationKind: string | null = guildId ? 'gc' : channelId ? 'dm' : null;
+
+    if (guildId) {
+      const res = await fetch('https://discord.com/api/users/@me/guilds', {
+        headers: { Authorization: `Bearer ${accessToken}` },
+      });
+      if (res.ok) {
+        const guilds = (await res.json()) as DiscordGuildSummary[];
+        const guild = Array.isArray(guilds) ? guilds.find((g) => String(g.id) === guildId) : null;
+        if (guild) {
+          locationName = guild.name ? String(guild.name) : null;
+          locationIconUrl = guildIconUrl(guildId, guild.icon);
+        }
+      }
+    }
+
+    if (channelId && guildId) {
+      try {
+        const channel = await sdk.commands.getChannel({ channel_id: channelId });
+        if (!locationName && channel?.name) {
+          locationName = String(channel.name);
+        }
+      } catch {
+        // optional — guild name from /users/@me/guilds is enough
+      }
+    } else if (channelId && !guildId) {
+      locationKind = 'dm';
+      try {
+        const channel = await sdk.commands.getChannel({ channel_id: channelId });
+        const name = channel?.name ? String(channel.name).trim() : '';
+        if (name) locationName = name;
+        else if (channel?.type === 3) locationName = 'Group DM';
+        else locationName = 'Direct Message';
+      } catch {
+        locationName = locationName ?? 'Direct Message';
+      }
+    }
+
+    if (!locationName && guildId) locationName = 'Discord Server';
+
+    const value: ActivityLocationHint = {
+      guildId,
+      channelId,
+      locationKind,
+      locationName,
+      locationIconUrl,
+    };
+    locationHintCache = { key: cacheKey, at: Date.now(), value };
+    return value;
+  } catch {
+    return null;
+  }
+}
+
 export type BootstrapProgress = {
   progress: number;
   label: string;
