@@ -14,7 +14,9 @@ import { SafetyNoticeBar } from './components/SafetyNoticeBar';
 import { TermsOfService } from './components/TermsOfService';
 import { PrivacyPolicy } from './components/PrivacyPolicy';
 import { LoginPanel } from './components/LoginPanel';
+import { PiShockLinkingScreen } from './components/PiShockLinkingScreen';
 import { OfficialController } from './components/OfficialController';
+import { AppVersionBadge } from './components/AppVersionBadge';
 import type { ShockerView } from './components/ShockerCard';
 import { SharesPanel } from './components/SharesPanel';
 import {
@@ -126,6 +128,7 @@ export function App() {
   const selfIdRef = useRef(me?.user?.id ?? null);
   selfIdRef.current = me?.user?.id ?? null;
   const operateInflightRef = useRef(0);
+  const linkPollGenRef = useRef(0);
 
   const refreshMe = useCallback(async (accessToken: string) => {
     const data = await apiFetch<MeResponse>('/me', accessToken);
@@ -732,10 +735,17 @@ export function App() {
     }
   };
 
+  const abortLinkPoll = () => {
+    linkPollGenRef.current += 1;
+  };
+
   const startPiShockLogin = async () => {
     if (!token) return;
+    abortLinkPoll();
     setLinking(true);
     setLinkError(null);
+    setOverlay(null);
+    setSetupPhase(false);
     try {
       const result = await apiFetch<{ loginUrl: string }>('/pishock/login/start', token, {
         method: 'POST',
@@ -751,8 +761,10 @@ export function App() {
   };
 
   const pollLogin = (accessToken: string) => {
+    const gen = ++linkPollGenRef.current;
     const started = Date.now();
     const tick = async () => {
+      if (linkPollGenRef.current !== gen) return;
       try {
         const status = await apiFetch<{
           status: string;
@@ -760,6 +772,7 @@ export function App() {
           pishockUserId?: number;
           hubNames?: string[];
         }>('/pishock/login/status', accessToken);
+        if (linkPollGenRef.current !== gen) return;
         if (status.status === 'confirm' && status.pishockUserId != null) {
           setLinking(false);
           setLoginUrl(null);
@@ -775,6 +788,7 @@ export function App() {
         if (status.status === 'linked') {
           // Already confirmed/linked earlier — just refresh.
           const meData = await refreshMe(accessToken);
+          if (linkPollGenRef.current !== gen) return;
           if (meData.pishockLinked) {
             setLinking(false);
             setLoginUrl(null);
@@ -792,11 +806,13 @@ export function App() {
           return;
         }
       } catch (err) {
+        if (linkPollGenRef.current !== gen) return;
         setLinkError(err instanceof Error ? err.message : String(err));
         setLinking(false);
         return;
       }
       if (Date.now() - started > 5 * 60 * 1000) {
+        if (linkPollGenRef.current !== gen) return;
         setLinkError('Login timed out');
         setLinking(false);
         return;
@@ -804,6 +820,19 @@ export function App() {
       window.setTimeout(tick, 2000);
     };
     void tick();
+  };
+
+  const cancelPiShockLoginWait = async () => {
+    abortLinkPoll();
+    setLinking(false);
+    setLoginUrl(null);
+    setLinkError(null);
+    if (!token) return;
+    try {
+      await apiFetch('/pishock/login/cancel', token, { method: 'POST', body: '{}' });
+    } catch {
+      // ignore
+    }
   };
 
   const confirmPiShockLink = async () => {
@@ -830,6 +859,7 @@ export function App() {
 
   const openLinkFlow = () => {
     if (!me) return;
+    setLinkError(null);
     const prefs = loadSetupPrefs(me.user.id);
     setSetupChoices({ wantsDiscordShare: prefs.wantsDiscordShare });
     if (!prefs.seen) {
@@ -846,11 +876,15 @@ export function App() {
     saveSetupPrefs(me.user.id, choices);
     setSetupChoices(choices);
     setSetupPhase(false);
+    void startPiShockLogin();
   };
 
   const cancelPiShockLink = async () => {
+    abortLinkPoll();
     if (!token) {
       setLinkConfirm(null);
+      setLinking(false);
+      setLoginUrl(null);
       return;
     }
     setConfirmBusy(true);
@@ -863,6 +897,7 @@ export function App() {
       setLinkConfirm(null);
       setLinking(false);
       setLoginUrl(null);
+      setLinkError(null);
     }
   };
 
@@ -1137,31 +1172,29 @@ export function App() {
 
   if (linkConfirm) {
     return (
-      <div className="app-shell official-preflight link-confirm-screen">
-        <div className="brand-bar">
-          <h1 className="brand">
-            Pi<span>Shock</span> Activity
-          </h1>
-        </div>
-        <div
-          className="q-card q-card--dark q-dark q-pa-md"
-          style={{ border: '1px solid rgba(121,198,219,.35)', maxWidth: 560, width: '100%', margin: '24px auto' }}
-        >
-          {linkError ? (
-            <div className="bg-negative text-white q-pa-sm q-mb-md" style={{ borderRadius: 4 }}>
-              {linkError}
-            </div>
-          ) : null}
-          <LinkConfirmPanel
-            pishockUserId={linkConfirm.pishockUserId}
-            hubNames={linkConfirm.hubNames}
-            discordName={me.user.global_name || me.user.username}
-            busy={confirmBusy}
-            onConfirm={confirmPiShockLink}
-            onCancel={cancelPiShockLink}
-          />
-        </div>
-      </div>
+      <LinkConfirmPanel
+        pishockUserId={linkConfirm.pishockUserId}
+        hubNames={linkConfirm.hubNames}
+        discordName={me.user.global_name || me.user.username}
+        busy={confirmBusy}
+        error={linkError}
+        onConfirm={confirmPiShockLink}
+        onCancel={cancelPiShockLink}
+      />
+    );
+  }
+
+  // Waiting on browser PiShock login — same boot aesthetic as Discord auth
+  if (linking || linkError) {
+    return (
+      <PiShockLinkingScreen
+        label={loginUrl ? 'Waiting for PiShock login…' : 'Opening PiShock login…'}
+        error={linkError}
+        canReopen={Boolean(loginUrl)}
+        onReopen={() => loginUrl && openExternal(loginUrl)}
+        onCancel={() => void cancelPiShockLoginWait()}
+        onRetry={() => void startPiShockLogin()}
+      />
     );
   }
 
@@ -1548,21 +1581,14 @@ export function App() {
                 }}
               />
             ) : (
-              <>
-                <div className="text-grey-5 text-body2">
-                  A browser window will open for PiShock login. After you sign in there, return here
-                  — we will ask you to confirm the account before linking. Discord Shockers can be
-                  controlled without linking; link only to receive shocks or use your own devices.
-                </div>
-                <LoginPanel
-                  linking={linking}
-                  loginUrl={loginUrl}
-                  error={linkError}
-                  onStart={startPiShockLogin}
-                  onOpen={() => loginUrl && openExternal(loginUrl)}
-                  onRefresh={() => token && pollLogin(token)}
-                />
-              </>
+              <LoginPanel
+                linking={linking}
+                loginUrl={null}
+                error={null}
+                onStart={startPiShockLogin}
+                onOpen={() => undefined}
+                onRefresh={() => undefined}
+              />
             )}
           </div>
         </PsDialog>
@@ -1714,8 +1740,11 @@ export function App() {
   return (
     <div className={`app-shell official-preflight consent-shell ${pip ? 'pip' : ''}`}>
       <div className="consent-shell__brand">
-        <h1 className="auth-boot__brand">
-          Pi<span>Shock</span>
+        <h1 className="auth-boot__brand auth-boot__brand-row">
+          <span className="auth-boot__brand-name">
+            Pi<span>Shock</span>
+          </span>
+          <AppVersionBadge />
         </h1>
         <p className="auth-boot__sub">Discord Activity</p>
         <span className="status-pill consent-shell__user">

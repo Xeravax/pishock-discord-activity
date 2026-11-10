@@ -7,25 +7,21 @@ type Props = {
   onRefresh: () => void;
 };
 
+/** Compact start CTA for the link dialog (waiting state uses PiShockLinkingScreen). */
 export function LoginPanel({ linking, loginUrl, error, onStart, onOpen, onRefresh }: Props) {
   return (
-    <section
-      className={`q-card q-card--dark q-dark q-pa-md ${linking ? 'linking' : ''}`}
-      style={{ border: '1px solid rgba(121,198,219,.35)' }}
-    >
-      <div className="text-secondary text-h6 q-mb-sm" style={{ fontFamily: 'geo, Oxanium, sans-serif' }}>
-        Link PiShock
-      </div>
-      <p className="text-grey-5 text-body2">
-        Sign in through PiShock&apos;s login page. Your PiShock password never enters this activity.
-        We store only the session PiShock returns, encrypted on the server.
+    <section className="pishock-link-panel">
+      <p className="text-grey-5 text-body2" style={{ marginTop: 0 }}>
+        Sign in through PiShock&apos;s login page. Your password never enters this activity — we only
+        store the encrypted session PiShock returns.
       </p>
       {error ? (
-        <div className="bg-negative text-white q-pa-sm q-mb-md" style={{ borderRadius: 4 }}>
-          {error}
+        <div className="auth-boot__error" style={{ marginBottom: 12 }}>
+          <div className="auth-boot__error-title">Couldn’t start login</div>
+          <p>{error}</p>
         </div>
       ) : null}
-      <div className="row q-gutter-sm q-mt-md" style={{ flexWrap: 'wrap' }}>
+      <div className="row q-gutter-sm" style={{ flexWrap: 'wrap' }}>
         {!loginUrl ? (
           <button
             type="button"
@@ -34,8 +30,13 @@ export function LoginPanel({ linking, loginUrl, error, onStart, onOpen, onRefres
             onClick={onStart}
           >
             <span className="q-btn__wrapper col row q-anchor--skip">
-              <span className="q-btn__content text-center col items-center q-anchor--skip justify-center row">
-                <span className="block">{linking ? 'Starting…' : 'Connect PiShock'}</span>
+              <span className="q-btn__content text-center col items-center q-anchor--skip justify-center row no-wrap">
+                {linking ? (
+                  <i className="q-icon on-left mdi mdi-loading mdi-spin" aria-hidden />
+                ) : (
+                  <i className="q-icon on-left mdi mdi-open-in-new" aria-hidden />
+                )}
+                <span className="block">{linking ? 'Opening browser…' : 'Connect PiShock'}</span>
               </span>
             </span>
           </button>

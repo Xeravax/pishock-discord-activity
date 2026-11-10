@@ -8,6 +8,7 @@ import {
 } from 'react';
 import type { ShockerView } from './ShockerCard';
 import { AnnouncementBanner } from './AnnouncementBanner';
+import { AppVersionBadge } from './AppVersionBadge';
 
 export type OfficialOperateInput = {
   shockerId: number;
@@ -753,8 +754,12 @@ export function OfficialController({
           <div style={{ width: 88 }} aria-hidden />
           <div className="official-header-brand">
             <div className="text-dark text-h3 q-toolbar__title" style={{ margin: 0 }}>
-              <div style={{ fontFamily: 'geo, Oxanium, sans-serif' }}>
+              <div
+                className="official-header-brand__row"
+                style={{ fontFamily: 'geo, Oxanium, sans-serif' }}
+              >
                 <span className="text-grey-3">PiShock</span>
+                <AppVersionBadge />
               </div>
             </div>
           </div>
