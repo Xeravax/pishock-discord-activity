@@ -7,8 +7,8 @@ namespace PiShock.Activity.Server.Data.Migrations;
 /// <summary>
 /// Empty baseline for existing Prisma/Postgres volumes. Tables already exist from
 /// <c>_prisma_migrations</c>; this migration only records a row in
-/// <c>__EFMigrationsHistory</c>. Fresh databases must apply <c>prisma/migrations</c>
-/// SQL (see Docker entrypoint) before <c>Database.MigrateAsync()</c>.
+/// <c>__EFMigrationsHistory</c>. Fresh databases get that SQL from
+/// <c>PrismaSchemaBootstrap</c> before <c>Database.MigrateAsync()</c>.
 /// </summary>
 public partial class Baseline : Migration
 {

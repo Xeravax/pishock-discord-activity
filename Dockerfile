@@ -48,11 +48,10 @@ ENV ASPNETCORE_URLS=http://0.0.0.0:3000 \
     ASPNETCORE_ENVIRONMENT=Production \
     PORT=3000
 COPY --from=build /app/publish .
-COPY --from=build /src/prisma /app/prisma
 COPY docker-entrypoint.sh /app/docker-entrypoint.sh
 RUN chmod +x /app/docker-entrypoint.sh \
  && apt-get update \
- && apt-get install -y --no-install-recommends curl postgresql-client \
+ && apt-get install -y --no-install-recommends curl \
  && rm -rf /var/lib/apt/lists/* \
  && chown -R app:app /app
 USER app

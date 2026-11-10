@@ -43,6 +43,7 @@ try
 {
     using var scope = app.Services.CreateScope();
     var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+    await PrismaSchemaBootstrap.ApplyIfNeededAsync(db, app.Logger);
     await db.Database.MigrateAsync();
 }
 catch (Exception ex)

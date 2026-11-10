@@ -17,7 +17,7 @@ namespace PiShock.Activity.Server.Data;
 ///     2. Empty the Up()/Down() bodies of the generated Baseline migration (the tables already exist).
 ///     3. Run the app / `dotnet ef database update`; this creates only "__EFMigrationsHistory" and records
 ///        the Baseline row, leaving all Prisma-created tables untouched.
-///   Fresh databases must first have prisma/migrations/*/migration.sql applied (in folder order).
+///   Fresh databases get prisma/migrations/*/migration.sql from PrismaSchemaBootstrap before MigrateAsync.
 ///
 /// Prisma semantics replicated here: <c>@default(cuid())</c> ids (see <see cref="Cuid"/>),
 /// <c>@default(now())</c> createdAt and <c>@updatedAt</c> updatedAt (both maintained in SaveChanges, since
