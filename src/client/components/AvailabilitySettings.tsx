@@ -1,11 +1,8 @@
 import { useEffect, useState } from 'react';
 import type { ShockerView } from './ShockerCard';
 import type { DiscordParticipant } from '../participants';
-import {
-  LimitSlider,
-  formatDurationMs,
-  formatIntensityPct,
-} from './LimitSlider';
+import { ModeLimitsEditor, type ModeLimitsValue } from './ModeLimitsEditor';
+import { normalizeWarningLevel } from '../../shared/warning';
 
 export type ActivityShareConfig = {
   shockerId: number;
@@ -15,12 +12,23 @@ export type ActivityShareConfig = {
   paused: boolean;
   deviceMaxIntensity?: number;
   deviceMaxDurationMs?: number;
+  minIntensity: number;
   maxIntensity: number;
+  minDurationMs: number;
   maxDurationMs: number;
+  vibMinIntensity: number;
+  vibMaxIntensity: number;
+  vibMinDurationMs: number;
+  vibMaxDurationMs: number;
+  beepMinIntensity: number;
+  beepMaxIntensity: number;
+  beepMinDurationMs: number;
+  beepMaxDurationMs: number;
   canShock: boolean;
   canVibrate: boolean;
   canBeep: boolean;
   canHold: boolean;
+  requiredWarningLevel: 'none' | 'small' | 'mid' | 'long';
 };
 
 type Props = {
@@ -59,7 +67,43 @@ export function AvailabilitySettings({
       try {
         const data = await onLoad();
         if (cancelled) return;
-        setShares(data.shares);
+        setShares(
+          data.shares.map((s) => ({
+            ...s,
+            minIntensity: Math.max(1, Math.min(s.maxIntensity, s.minIntensity ?? 1)),
+            minDurationMs: Math.max(16, Math.min(s.maxDurationMs, s.minDurationMs ?? 16)),
+            vibMinIntensity: Math.max(
+              1,
+              Math.min(s.vibMaxIntensity ?? s.maxIntensity, s.vibMinIntensity ?? s.minIntensity ?? 1),
+            ),
+            vibMaxIntensity: s.vibMaxIntensity ?? s.maxIntensity,
+            vibMinDurationMs: Math.max(
+              16,
+              Math.min(
+                s.vibMaxDurationMs ?? s.maxDurationMs,
+                s.vibMinDurationMs ?? s.minDurationMs ?? 16,
+              ),
+            ),
+            vibMaxDurationMs: s.vibMaxDurationMs ?? s.maxDurationMs,
+            beepMinIntensity: Math.max(
+              1,
+              Math.min(
+                s.beepMaxIntensity ?? s.maxIntensity,
+                s.beepMinIntensity ?? s.minIntensity ?? 1,
+              ),
+            ),
+            beepMaxIntensity: s.beepMaxIntensity ?? s.maxIntensity,
+            beepMinDurationMs: Math.max(
+              16,
+              Math.min(
+                s.beepMaxDurationMs ?? s.maxDurationMs,
+                s.beepMinDurationMs ?? s.minDurationMs ?? 16,
+              ),
+            ),
+            beepMaxDurationMs: s.beepMaxDurationMs ?? s.maxDurationMs,
+            requiredWarningLevel: normalizeWarningLevel(s.requiredWarningLevel),
+          })),
+        );
         setBanned(data.bannedDiscordUserIds);
         setLoaded(true);
       } catch (err) {
@@ -83,6 +127,10 @@ export function AvailabilitySettings({
     }
     const deviceMaxI = Math.min(100, s.deviceMaxIntensity ?? s.maxIntensity ?? 100);
     const deviceMaxD = Math.min(15_000, s.deviceMaxDuration ?? s.maxDuration ?? 15_000);
+    const maxIntensity = Math.min(deviceMaxI, s.activityMaxIntensity ?? s.maxIntensity ?? deviceMaxI);
+    const maxDurationMs = Math.min(deviceMaxD, s.activityMaxDuration ?? s.maxDuration ?? deviceMaxD);
+    const minIntensity = Math.min(maxIntensity, s.activityMinIntensity ?? 1);
+    const minDurationMs = Math.min(maxDurationMs, s.activityMinDuration ?? 16);
     setShares((prev) => [
       ...prev,
       {
@@ -93,14 +141,73 @@ export function AvailabilitySettings({
         paused: false,
         deviceMaxIntensity: deviceMaxI,
         deviceMaxDurationMs: deviceMaxD,
-        maxIntensity: Math.min(deviceMaxI, s.activityMaxIntensity ?? s.maxIntensity ?? deviceMaxI),
-        maxDurationMs: Math.min(deviceMaxD, s.activityMaxDuration ?? s.maxDuration ?? deviceMaxD),
+        minIntensity,
+        maxIntensity,
+        minDurationMs,
+        maxDurationMs,
+        vibMinIntensity: minIntensity,
+        vibMaxIntensity: maxIntensity,
+        vibMinDurationMs: minDurationMs,
+        vibMaxDurationMs: maxDurationMs,
+        beepMinIntensity: minIntensity,
+        beepMaxIntensity: maxIntensity,
+        beepMinDurationMs: minDurationMs,
+        beepMaxDurationMs: maxDurationMs,
         canShock: s.canShock,
         canVibrate: s.canVibrate,
         canBeep: s.canBeep,
         canHold: s.canHold,
+        requiredWarningLevel: 'none',
       },
     ]);
+  };
+
+  const shareToMode = (cfg: ActivityShareConfig): ModeLimitsValue => ({
+    canShock: cfg.canShock,
+    canVibrate: cfg.canVibrate,
+    canBeep: cfg.canBeep,
+    canHold: cfg.canHold,
+    shock: {
+      minIntensity: cfg.minIntensity,
+      maxIntensity: cfg.maxIntensity,
+      minDurationMs: cfg.minDurationMs,
+      maxDurationMs: cfg.maxDurationMs,
+    },
+    vibrate: {
+      minIntensity: cfg.vibMinIntensity ?? cfg.minIntensity,
+      maxIntensity: cfg.vibMaxIntensity ?? cfg.maxIntensity,
+      minDurationMs: cfg.vibMinDurationMs ?? cfg.minDurationMs,
+      maxDurationMs: cfg.vibMaxDurationMs ?? cfg.maxDurationMs,
+    },
+    beep: {
+      minIntensity: cfg.beepMinIntensity ?? cfg.minIntensity,
+      maxIntensity: cfg.beepMaxIntensity ?? cfg.maxIntensity,
+      minDurationMs: cfg.beepMinDurationMs ?? cfg.minDurationMs,
+      maxDurationMs: cfg.beepMaxDurationMs ?? cfg.maxDurationMs,
+    },
+    requiredWarningLevel: normalizeWarningLevel(cfg.requiredWarningLevel),
+  });
+
+  const applyMode = (shockerId: number, m: ModeLimitsValue) => {
+    updateShare(shockerId, {
+      canShock: m.canShock,
+      canVibrate: m.canVibrate,
+      canBeep: m.canBeep,
+      canHold: m.canHold,
+      minIntensity: m.shock.minIntensity,
+      maxIntensity: m.shock.maxIntensity,
+      minDurationMs: m.shock.minDurationMs,
+      maxDurationMs: m.shock.maxDurationMs,
+      vibMinIntensity: m.vibrate.minIntensity,
+      vibMaxIntensity: m.vibrate.maxIntensity,
+      vibMinDurationMs: m.vibrate.minDurationMs,
+      vibMaxDurationMs: m.vibrate.maxDurationMs,
+      beepMinIntensity: m.beep.minIntensity,
+      beepMaxIntensity: m.beep.maxIntensity,
+      beepMinDurationMs: m.beep.minDurationMs,
+      beepMaxDurationMs: m.beep.maxDurationMs,
+      requiredWarningLevel: m.requiredWarningLevel,
+    });
   };
 
   const updateShare = (shockerId: number, patch: Partial<ActivityShareConfig>) => {
@@ -175,22 +282,12 @@ export function AvailabilitySettings({
                   </label>
                   {cfg ? (
                     <div className="column q-gutter-sm q-mt-sm">
-                      <LimitSlider
-                        label="Max intensity"
-                        value={cfg.maxIntensity}
-                        min={1}
-                        max={Math.min(100, cfg.deviceMaxIntensity ?? 100)}
-                        formatValue={formatIntensityPct}
-                        onChange={(maxIntensity) => updateShare(s.id, { maxIntensity })}
-                      />
-                      <LimitSlider
-                        label="Max duration"
-                        value={cfg.maxDurationMs}
-                        min={16}
-                        max={Math.min(15_000, cfg.deviceMaxDurationMs ?? 15_000)}
-                        step={100}
-                        formatValue={formatDurationMs}
-                        onChange={(maxDurationMs) => updateShare(s.id, { maxDurationMs })}
+                      <ModeLimitsEditor
+                        value={shareToMode(cfg)}
+                        deviceMaxIntensity={cfg.deviceMaxIntensity ?? 100}
+                        deviceMaxDurationMs={cfg.deviceMaxDurationMs ?? 15_000}
+                        disabled={busy || saving}
+                        onChange={(m) => applyMode(s.id, m)}
                       />
                       <label className="row items-center text-caption text-grey-5 cursor-pointer">
                         <input

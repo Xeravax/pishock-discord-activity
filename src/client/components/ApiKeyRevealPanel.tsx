@@ -4,14 +4,15 @@ import { AppVersionBadge } from './AppVersionBadge';
 type Props = {
   apiKey: string;
   apiKeyName: string;
-  expiresAt: string;
+  expiresAt?: string | null;
   pishockUsername?: string | null;
   onContinue: () => void;
 };
 
-function formatExpiry(iso: string): string {
+function formatExpiry(iso: string | null | undefined): string | null {
+  if (!iso) return null;
   const d = new Date(iso);
-  if (!Number.isFinite(d.getTime())) return 'in 7 days';
+  if (!Number.isFinite(d.getTime())) return null;
   return d.toLocaleString(undefined, {
     dateStyle: 'medium',
     timeStyle: 'short',
@@ -27,6 +28,7 @@ export function ApiKeyRevealPanel({
   onContinue,
 }: Props) {
   const [copied, setCopied] = useState(false);
+  const expiryLabel = formatExpiry(expiresAt);
 
   const copyKey = async () => {
     try {
@@ -57,7 +59,7 @@ export function ApiKeyRevealPanel({
           Save this key — shown once
         </h2>
         <p className="auth-boot__hint">
-          A <strong>7-day</strong> PiShock API key named <strong>{apiKeyName}</strong>
+          A PiShock API key named <strong>{apiKeyName}</strong>
           {pishockUsername ? (
             <>
               {' '}
@@ -65,8 +67,8 @@ export function ApiKeyRevealPanel({
             </>
           ) : null}{' '}
           was created and stored encrypted for this activity. Copy it now if you want a backup —
-          we will not show it again. After it expires ({formatExpiry(expiresAt)}), you must
-          reauthenticate.
+          we will not show it again. It stays valid until you unlink or PiShock rejects it
+          {expiryLabel ? <> (PiShock reports expiry {expiryLabel})</> : null}.
         </p>
 
         <div className="auth-boot__account auth-boot__api-key-box">
@@ -81,8 +83,7 @@ export function ApiKeyRevealPanel({
             onClick={() => void copyKey()}
           >
             <span className="q-btn__wrapper col row q-anchor--skip">
-              <span className="q-btn__content text-center col items-center q-anchor--skip justify-center row no-wrap">
-                <i className={`q-icon on-left mdi ${copied ? 'mdi-check' : 'mdi-content-copy'}`} aria-hidden />
+              <span className="q-btn__content text-center col items-center q-anchor--skip justify-center row">
                 <span className="block">{copied ? 'Copied' : 'Copy key'}</span>
               </span>
             </span>
@@ -94,7 +95,7 @@ export function ApiKeyRevealPanel({
           >
             <span className="q-btn__wrapper col row q-anchor--skip">
               <span className="q-btn__content text-center col items-center q-anchor--skip justify-center row">
-                <span className="block">I’ve saved it — continue</span>
+                <span className="block">Continue</span>
               </span>
             </span>
           </button>

@@ -1,8 +1,5 @@
 import type { FastifyPluginAsync } from 'fastify';
-import {
-  PISHOCK_API_KEY_NAME,
-  PISHOCK_API_KEY_TTL_MS,
-} from '../../shared/constants.js';
+import { PISHOCK_API_KEY_NAME } from '../../shared/constants.js';
 import type { AppEnv } from '../env.js';
 import { createApiKey, getAccount, validateApiKey } from '../pishock/auth-api.js';
 import { getHubs, PiShockApiError } from '../pishock/client.js';
@@ -122,7 +119,6 @@ export const pishockSessionRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (
     }
 
     const session = { userId: pending.userId, token: pending.token };
-    const expiresAt = new Date(Date.now() + PISHOCK_API_KEY_TTL_MS);
 
     try {
       let username = pending.username.trim();
@@ -133,10 +129,8 @@ export const pishockSessionRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (
         return reply.code(502).send({ error: 'PiShock account username unavailable' });
       }
 
-      const created = await createApiKey(session, {
-        name: PISHOCK_API_KEY_NAME,
-        expiry: expiresAt,
-      });
+      // No forced Expiry — key lasts until revoked or PiShock rejects it.
+      const created = await createApiKey(session, { name: PISHOCK_API_KEY_NAME });
 
       await validateApiKey({
         userId: pending.userId,
@@ -148,7 +142,7 @@ export const pishockSessionRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (
         userId: pending.userId,
         username,
         apiKey: created.apiKey,
-        expiresAt,
+        expiresAt: created.expiry,
         apiKeyId: created.apiKeyId,
       });
 
@@ -159,7 +153,7 @@ export const pishockSessionRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (
         hubNames: pending.hubNames,
         apiKey: created.apiKey,
         apiKeyName: PISHOCK_API_KEY_NAME,
-        expiresAt: expiresAt.toISOString(),
+        expiresAt: created.expiry ? created.expiry.toISOString() : null,
       };
     } catch (err) {
       // Put pending back so the user can retry confirm without re-logging in.
@@ -200,7 +194,6 @@ export const pishockSessionRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (
       });
     }
 
-    const expiresAt = new Date(Date.now() + PISHOCK_API_KEY_TTL_MS);
     try {
       const account = await validateApiKey({
         username: parsed.username,
@@ -212,7 +205,7 @@ export const pishockSessionRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (
         userId: account.userId,
         username: account.username,
         apiKey: parsed.apiKey,
-        expiresAt,
+        expiresAt: null,
         apiKeyId: null,
       });
 
@@ -220,7 +213,7 @@ export const pishockSessionRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (
         ok: true,
         pishockUserId: account.userId,
         pishockUsername: account.username,
-        expiresAt: expiresAt.toISOString(),
+        expiresAt: null,
         manual: true,
       };
     } catch (err) {

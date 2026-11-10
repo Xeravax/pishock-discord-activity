@@ -8,6 +8,8 @@ import {
   QUEUE_PROGRESS_MIN_MS,
   clampQueueMaxPerSender,
 } from './pishock/command-queue.js';
+import { personalBandsFromUser, shareBandsFromRow } from './limit-bands.js';
+import { normalizeWarningLevel } from '../shared/warning.js';
 
 export async function savePiShockSession(
   env: AppEnv,
@@ -16,7 +18,8 @@ export async function savePiShockSession(
     userId: number;
     username: string;
     apiKey: string;
-    expiresAt: Date;
+    /** Soft hint only — null means keep until PiShock rejects the key. */
+    expiresAt?: Date | null;
     apiKeyId?: number | null;
   },
 ) {
@@ -30,7 +33,7 @@ export async function savePiShockSession(
       encryptedToken: enc.encryptedToken,
       tokenIv: enc.tokenIv,
       tokenAuthTag: enc.tokenAuthTag,
-      expiresAt: input.expiresAt,
+      expiresAt: input.expiresAt ?? null,
       apiKeyId: input.apiKeyId ?? null,
     },
     update: {
@@ -39,7 +42,7 @@ export async function savePiShockSession(
       encryptedToken: enc.encryptedToken,
       tokenIv: enc.tokenIv,
       tokenAuthTag: enc.tokenAuthTag,
-      expiresAt: input.expiresAt,
+      expiresAt: input.expiresAt ?? null,
       apiKeyId: input.apiKeyId ?? null,
     },
   });
@@ -51,11 +54,7 @@ export async function loadPiShockCreds(
 ): Promise<PiShockCreds | null> {
   const row = await prisma.piShockSession.findUnique({ where: { discordUserId } });
   if (!row) return null;
-  if (row.expiresAt.getTime() <= Date.now()) {
-    stopLogCapture(discordUserId);
-    await prisma.piShockSession.deleteMany({ where: { discordUserId } });
-    return null;
-  }
+  // No clock wipe — keys stay until PiShock rejects them (401 → clearPiShockSession).
   const token = decryptToken(env.tokenKey, row.encryptedToken, row.tokenIv, row.tokenAuthTag);
   return {
     userId: row.pishockUserId,
@@ -177,12 +176,23 @@ export async function replaceActivityShares(
     deviceMaxDurationMs?: number;
     enabled?: boolean;
     paused?: boolean;
+    minIntensity?: number;
     maxIntensity?: number;
+    minDurationMs?: number;
     maxDurationMs?: number;
+    vibMinIntensity?: number;
+    vibMaxIntensity?: number;
+    vibMinDurationMs?: number;
+    vibMaxDurationMs?: number;
+    beepMinIntensity?: number;
+    beepMaxIntensity?: number;
+    beepMinDurationMs?: number;
+    beepMaxDurationMs?: number;
     canShock?: boolean;
     canVibrate?: boolean;
     canBeep?: boolean;
     canHold?: boolean;
+    requiredWarningLevel?: string | null;
   }>,
 ) {
   await prisma.$transaction(async (tx) => {
@@ -192,6 +202,23 @@ export async function replaceActivityShares(
       data: shares.map((s) => {
         const deviceMaxIntensity = Math.max(1, Math.min(100, s.deviceMaxIntensity ?? 100));
         const deviceMaxDurationMs = Math.max(16, Math.min(15_000, s.deviceMaxDurationMs ?? 15_000));
+        const bands = shareBandsFromRow({
+          deviceMaxIntensity,
+          deviceMaxDurationMs,
+          minIntensity: s.minIntensity,
+          maxIntensity: s.maxIntensity,
+          minDurationMs: s.minDurationMs,
+          maxDurationMs: s.maxDurationMs,
+          vibMinIntensity: s.vibMinIntensity,
+          vibMaxIntensity: s.vibMaxIntensity,
+          vibMinDurationMs: s.vibMinDurationMs,
+          vibMaxDurationMs: s.vibMaxDurationMs,
+          beepMinIntensity: s.beepMinIntensity,
+          beepMaxIntensity: s.beepMaxIntensity,
+          beepMinDurationMs: s.beepMinDurationMs,
+          beepMaxDurationMs: s.beepMaxDurationMs,
+          requiredWarningLevel: s.requiredWarningLevel,
+        });
         return {
           discordUserId,
           shockerId: s.shockerId,
@@ -202,12 +229,23 @@ export async function replaceActivityShares(
           deviceMaxDurationMs,
           enabled: s.enabled !== false,
           paused: Boolean(s.paused),
-          maxIntensity: Math.max(1, Math.min(deviceMaxIntensity, s.maxIntensity ?? deviceMaxIntensity)),
-          maxDurationMs: Math.max(16, Math.min(deviceMaxDurationMs, s.maxDurationMs ?? deviceMaxDurationMs)),
+          minIntensity: bands.shock.minIntensity,
+          maxIntensity: bands.shock.maxIntensity,
+          minDurationMs: bands.shock.minDurationMs,
+          maxDurationMs: bands.shock.maxDurationMs,
+          vibMinIntensity: bands.vibrate.minIntensity,
+          vibMaxIntensity: bands.vibrate.maxIntensity,
+          vibMinDurationMs: bands.vibrate.minDurationMs,
+          vibMaxDurationMs: bands.vibrate.maxDurationMs,
+          beepMinIntensity: bands.beep.minIntensity,
+          beepMaxIntensity: bands.beep.maxIntensity,
+          beepMinDurationMs: bands.beep.minDurationMs,
+          beepMaxDurationMs: bands.beep.maxDurationMs,
           canShock: s.canShock !== false,
           canVibrate: s.canVibrate !== false,
           canBeep: s.canBeep !== false,
           canHold: s.canHold !== false,
+          requiredWarningLevel: bands.requiredWarningLevel,
         };
       }),
     });
@@ -217,9 +255,21 @@ export async function replaceActivityShares(
 
 export async function getPersonalActivityLimits(discordUserId: string) {
   const user = await prisma.discordUser.findUnique({ where: { id: discordUserId } });
+  const bands = personalBandsFromUser(user);
   return {
-    activityMaxIntensity: user?.activityMaxIntensity ?? 100,
-    activityMaxDurationMs: user?.activityMaxDurationMs ?? 15_000,
+    activityMinIntensity: bands.shock.minIntensity,
+    activityMaxIntensity: bands.shock.maxIntensity,
+    activityMinDurationMs: bands.shock.minDurationMs,
+    activityMaxDurationMs: bands.shock.maxDurationMs,
+    activityVibMinIntensity: bands.vibrate.minIntensity,
+    activityVibMaxIntensity: bands.vibrate.maxIntensity,
+    activityVibMinDurationMs: bands.vibrate.minDurationMs,
+    activityVibMaxDurationMs: bands.vibrate.maxDurationMs,
+    activityBeepMinIntensity: bands.beep.minIntensity,
+    activityBeepMaxIntensity: bands.beep.maxIntensity,
+    activityBeepMinDurationMs: bands.beep.minDurationMs,
+    activityBeepMaxDurationMs: bands.beep.maxDurationMs,
+    activityRequiredWarningLevel: bands.requiredWarningLevel,
   };
 }
 
@@ -422,13 +472,55 @@ export async function setQueueStar(
 
 export async function setPersonalActivityLimits(
   discordUserId: string,
-  input: { activityMaxIntensity?: number; activityMaxDurationMs?: number },
+  input: {
+    activityMinIntensity?: number;
+    activityMaxIntensity?: number;
+    activityMinDurationMs?: number;
+    activityMaxDurationMs?: number;
+    activityVibMinIntensity?: number;
+    activityVibMaxIntensity?: number;
+    activityVibMinDurationMs?: number;
+    activityVibMaxDurationMs?: number;
+    activityBeepMinIntensity?: number;
+    activityBeepMaxIntensity?: number;
+    activityBeepMinDurationMs?: number;
+    activityBeepMaxDurationMs?: number;
+    activityRequiredWarningLevel?: string | null;
+  },
 ) {
+  const bands = personalBandsFromUser({
+    activityMinIntensity: input.activityMinIntensity,
+    activityMaxIntensity: input.activityMaxIntensity,
+    activityMinDurationMs: input.activityMinDurationMs,
+    activityMaxDurationMs: input.activityMaxDurationMs,
+    activityVibMinIntensity: input.activityVibMinIntensity,
+    activityVibMaxIntensity: input.activityVibMaxIntensity,
+    activityVibMinDurationMs: input.activityVibMinDurationMs,
+    activityVibMaxDurationMs: input.activityVibMaxDurationMs,
+    activityBeepMinIntensity: input.activityBeepMinIntensity,
+    activityBeepMaxIntensity: input.activityBeepMaxIntensity,
+    activityBeepMinDurationMs: input.activityBeepMinDurationMs,
+    activityBeepMaxDurationMs: input.activityBeepMaxDurationMs,
+    activityRequiredWarningLevel: input.activityRequiredWarningLevel,
+  });
   return prisma.discordUser.update({
     where: { id: discordUserId },
     data: {
-      activityMaxIntensity: Math.max(1, Math.min(100, input.activityMaxIntensity ?? 100)),
-      activityMaxDurationMs: Math.max(16, Math.min(15_000, input.activityMaxDurationMs ?? 15_000)),
+      activityMinIntensity: bands.shock.minIntensity,
+      activityMaxIntensity: bands.shock.maxIntensity,
+      activityMinDurationMs: bands.shock.minDurationMs,
+      activityMaxDurationMs: bands.shock.maxDurationMs,
+      activityVibMinIntensity: bands.vibrate.minIntensity,
+      activityVibMaxIntensity: bands.vibrate.maxIntensity,
+      activityVibMinDurationMs: bands.vibrate.minDurationMs,
+      activityVibMaxDurationMs: bands.vibrate.maxDurationMs,
+      activityBeepMinIntensity: bands.beep.minIntensity,
+      activityBeepMaxIntensity: bands.beep.maxIntensity,
+      activityBeepMinDurationMs: bands.beep.minDurationMs,
+      activityBeepMaxDurationMs: bands.beep.maxDurationMs,
+      activityRequiredWarningLevel: normalizeWarningLevel(
+        input.activityRequiredWarningLevel ?? bands.requiredWarningLevel,
+      ),
     },
   });
 }

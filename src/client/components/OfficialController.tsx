@@ -11,6 +11,15 @@ import { AnnouncementBanner } from './AnnouncementBanner';
 import { AppVersionBadge } from './AppVersionBadge';
 import { IndividualIntensityToggle, MultiShockToggle } from './MultiShockToggle';
 import { colorForShocker } from '../multiColors';
+import {
+  WARNING_PRESETS,
+  WARNING_SHOCK_GAP_MS,
+  atLeastWarning,
+  cycleWarningLevel,
+  normalizeWarningLevel,
+  warningButtonLabel,
+  type WarningLevel,
+} from '../../shared/warning';
 
 export type OfficialOperateInput = {
   shockerId: number;
@@ -113,18 +122,50 @@ function multiColorForShocker(s: ShockerView): string {
   return colorForShocker(multiUserKey(s), s.id);
 }
 
-function shockerUsableInt(s: ShockerView): number {
-  return Math.min(
-    s.deviceMaxIntensity ?? s.maxIntensity ?? 100,
-    s.activityMaxIntensity ?? s.maxIntensity ?? 100,
-  );
+type ModeBandOp = 'shock' | 'vibrate' | 'beep';
+
+function shockerUsableInt(s: ShockerView, mode: ModeBandOp = 'shock'): number {
+  const device = s.deviceMaxIntensity ?? s.maxIntensity ?? 100;
+  if (mode === 'vibrate') {
+    return Math.min(device, s.vibMaxIntensity ?? s.activityMaxIntensity ?? s.maxIntensity ?? 100);
+  }
+  if (mode === 'beep') {
+    return Math.min(device, s.beepMaxIntensity ?? s.activityMaxIntensity ?? s.maxIntensity ?? 100);
+  }
+  return Math.min(device, s.activityMaxIntensity ?? s.maxIntensity ?? 100);
 }
 
-function shockerUsableDur(s: ShockerView): number {
-  return Math.min(
-    s.deviceMaxDuration ?? s.maxDuration ?? 15_000,
-    s.activityMaxDuration ?? s.maxDuration ?? 15_000,
-  );
+function shockerUsableMinInt(s: ShockerView, mode: ModeBandOp = 'shock'): number {
+  const max = shockerUsableInt(s, mode);
+  if (mode === 'vibrate') {
+    return Math.max(1, Math.min(max, s.vibMinIntensity ?? s.minIntensity ?? s.activityMinIntensity ?? 1));
+  }
+  if (mode === 'beep') {
+    return Math.max(1, Math.min(max, s.beepMinIntensity ?? s.minIntensity ?? s.activityMinIntensity ?? 1));
+  }
+  return Math.max(1, Math.min(max, s.minIntensity ?? s.activityMinIntensity ?? 1));
+}
+
+function shockerUsableDur(s: ShockerView, mode: ModeBandOp = 'shock'): number {
+  const device = s.deviceMaxDuration ?? s.maxDuration ?? 15_000;
+  if (mode === 'vibrate') {
+    return Math.min(device, s.vibMaxDuration ?? s.activityMaxDuration ?? s.maxDuration ?? 15_000);
+  }
+  if (mode === 'beep') {
+    return Math.min(device, s.beepMaxDuration ?? s.activityMaxDuration ?? s.maxDuration ?? 15_000);
+  }
+  return Math.min(device, s.activityMaxDuration ?? s.maxDuration ?? 15_000);
+}
+
+function shockerUsableMinDur(s: ShockerView, mode: ModeBandOp = 'shock'): number {
+  const max = shockerUsableDur(s, mode);
+  if (mode === 'vibrate') {
+    return Math.max(16, Math.min(max, s.vibMinDuration ?? s.minDuration ?? s.activityMinDuration ?? 16));
+  }
+  if (mode === 'beep') {
+    return Math.max(16, Math.min(max, s.beepMinDuration ?? s.minDuration ?? s.activityMinDuration ?? 16));
+  }
+  return Math.max(16, Math.min(max, s.minDuration ?? s.activityMinDuration ?? 16));
 }
 
 function formatDurationSec(ms: number) {
@@ -145,36 +186,6 @@ function rollIntensity(min: number, max: number) {
 function intensityLabel(random: boolean, value: number, min: number, max: number) {
   if (!random) return String(value);
   return `${Math.min(min, max)}-${Math.max(min, max)}`;
-}
-
-/** Warning cycles before a shock: vibrate, then shock. */
-type WarningLevel = 'none' | 'small' | 'mid' | 'long';
-
-const WARNING_ORDER: WarningLevel[] = ['none', 'small', 'mid', 'long'];
-
-const WARNING_PRESETS: Record<
-  Exclude<WarningLevel, 'none'>,
-  { intensity: number; durationMs: number; label: string }
-> = {
-  small: { intensity: 25, durationMs: 500, label: 'SMALL' },
-  mid: { intensity: 50, durationMs: 500, label: 'MID' },
-  long: { intensity: 50, durationMs: 1000, label: 'LONG' },
-};
-
-/**
- * Extra settle time after the warning vibe ends before the shock is sent.
- * Too short and the shock can collide with / cancel the still-playing vibe
- * (especially with broker/network latency).
- */
-const WARNING_SHOCK_GAP_MS = 350;
-
-function nextWarningLevel(current: WarningLevel): WarningLevel {
-  const i = WARNING_ORDER.indexOf(current);
-  return WARNING_ORDER[(i + 1) % WARNING_ORDER.length]!;
-}
-
-function warningButtonLabel(level: WarningLevel): string {
-  return level === 'none' ? 'None' : WARNING_PRESETS[level].label;
 }
 
 function nudgeIntensity(input: {
@@ -546,13 +557,39 @@ export function OfficialController({
     : 15_000;
   const maxInt = Math.min(deviceMaxInt, activityMaxInt);
   const maxDur = Math.min(deviceMaxDur, activityMaxDur);
+  const minInt = limitPool.length
+    ? Math.max(...limitPool.map((s) => shockerUsableMinInt(s)))
+    : 1;
+  const minDur = limitPool.length
+    ? Math.max(...limitPool.map((s) => shockerUsableMinDur(s)))
+    : 16;
+  const vibMaxInt = limitPool.length
+    ? Math.max(...limitPool.map((s) => shockerUsableInt(s, 'vibrate')))
+    : maxInt;
+  const vibMinInt = limitPool.length
+    ? Math.max(...limitPool.map((s) => shockerUsableMinInt(s, 'vibrate')))
+    : minInt;
+  const vibMaxDur = limitPool.length
+    ? Math.max(...limitPool.map((s) => shockerUsableDur(s, 'vibrate')))
+    : maxDur;
+  const vibMinDur = limitPool.length
+    ? Math.max(...limitPool.map((s) => shockerUsableMinDur(s, 'vibrate')))
+    : minDur;
   /** While editing per-person, the shock slider is capped to the focused person. */
   const shockEditCap =
     individualIntensity && multiShock && active ? shockerUsableInt(active) : maxInt;
+  const shockEditFloor =
+    individualIntensity && multiShock && active ? shockerUsableMinInt(active) : minInt;
+  const requiredWarningFloor = limitPool.reduce<WarningLevel>(
+    (floor, s) => atLeastWarning(floor, normalizeWarningLevel(s.requiredWarningLevel)),
+    'none',
+  );
+  const effectiveWarningLevel = atLeastWarning(warningLevel, requiredWarningFloor);
   const eStop = selectedShockers.some((s) => s.emergencyStop);
   const controlsLocked = eStop || forceControlsLocked;
 
   const setActiveShockIntensity = (n: number) => {
+    // Thumb moves freely up to the activity ceiling; mins are enforced on fire.
     const next = clamp(n, 0, shockEditCap);
     setShockIntensity(next);
     if (individualIntensity && multiShock && active) {
@@ -563,12 +600,17 @@ export function OfficialController({
 
   useEffect(() => {
     setShockIntensity((v) => clamp(v, 0, shockEditCap));
-    setVibIntensity((v) => clamp(v, 0, maxInt));
+    setVibIntensity((v) => clamp(v, 0, vibMaxInt));
     setShockMin((v) => clamp(v, 0, shockEditCap));
     setShockMax((v) => clamp(v, 0, shockEditCap));
-    setShockDurationMs((v) => clamp(v, 16, maxDur));
-    setVibDurationMs((v) => clamp(v, 16, maxDur));
-  }, [maxInt, maxDur, shockEditCap, activeId]);
+    // Duration chips stay inside the allowed band (no free-drag analog).
+    setShockDurationMs((v) => clamp(v, minDur, maxDur));
+    setVibDurationMs((v) => clamp(v, vibMinDur, vibMaxDur));
+  }, [maxInt, maxDur, minDur, vibMaxInt, vibMaxDur, vibMinDur, shockEditCap, activeId]);
+
+  useEffect(() => {
+    setWarningLevel((level) => atLeastWarning(level, requiredWarningFloor));
+  }, [requiredWarningFloor]);
 
   useEffect(() => {
     if (!individualIntensity || !multiShock) return;
@@ -736,9 +778,13 @@ export function OfficialController({
       dur: number,
       warning: OfficialOperateInput['warning'] = null,
     ) => {
+      const mode: ModeBandOp =
+        op === 'vibrate' ? 'vibrate' : op === 'beep' ? 'beep' : 'shock';
       // Per-person / per-shocker caps — never raise someone past their own limit
-      const sMaxInt = shockerUsableInt(shocker);
-      const sMaxDur = shockerUsableDur(shocker);
+      const sMaxInt = shockerUsableInt(shocker, mode);
+      const sMinInt = shockerUsableMinInt(shocker, mode);
+      const sMaxDur = shockerUsableDur(shocker, mode);
+      const sMinDur = shockerUsableMinDur(shocker, mode);
       onOperate({
         shockerId: shocker.id,
         shareCode: shocker.shareCode,
@@ -753,8 +799,8 @@ export function OfficialController({
         hold: Boolean(opts?.hold),
         warning,
         operation: op,
-        intensity: clamp(inten, 0, sMaxInt),
-        durationMs: clamp(dur, 16, sMaxDur),
+        intensity: clamp(inten, sMinInt, sMaxInt),
+        durationMs: clamp(dur, sMinDur, sMaxDur),
       });
     };
 
@@ -763,16 +809,18 @@ export function OfficialController({
       operation === 'shock' &&
       !opts?.skipWarning &&
       !opts?.hold &&
-      warningLevel !== 'none'
+      effectiveWarningLevel !== 'none'
     ) {
-      const preset = WARNING_PRESETS[warningLevel];
+      const preset = WARNING_PRESETS[effectiveWarningLevel];
       let warnWaitMs = preset.durationMs;
       for (const shocker of targets) {
         if (shocker.emergencyStop || shocker.paused || !shocker.canVibrate) continue;
-        const sMaxInt = shockerUsableInt(shocker);
-        const sMaxDur = shockerUsableDur(shocker);
-        const warnIntensity = clamp(preset.intensity, 1, sMaxInt);
-        const warnDuration = clamp(preset.durationMs, 16, sMaxDur);
+        const sMaxInt = shockerUsableInt(shocker, 'vibrate');
+        const sMinInt = shockerUsableMinInt(shocker, 'vibrate');
+        const sMaxDur = shockerUsableDur(shocker, 'vibrate');
+        const sMinDur = shockerUsableMinDur(shocker, 'vibrate');
+        const warnIntensity = clamp(preset.intensity, sMinInt, sMaxInt);
+        const warnDuration = clamp(preset.durationMs, sMinDur, sMaxDur);
         warnWaitMs = Math.max(warnWaitMs, warnDuration);
         dispatch(shocker, 'vibrate', warnIntensity, warnDuration, {
           Active: true,
@@ -852,14 +900,19 @@ export function OfficialController({
     // Warn vibrate, then start continuous shock hold
     if (
       operation === 'shock' &&
-      warningLevel !== 'none' &&
+      effectiveWarningLevel !== 'none' &&
       active.canVibrate
     ) {
-      const preset = WARNING_PRESETS[warningLevel];
-      fire('vibrate', clamp(preset.intensity, 1, maxInt), clamp(preset.durationMs, 16, maxDur), {
-        skipWarning: true,
-        target: holdTargetRef.current,
-      });
+      const preset = WARNING_PRESETS[effectiveWarningLevel];
+      fire(
+        'vibrate',
+        clamp(preset.intensity, 1, vibMaxInt),
+        clamp(preset.durationMs, vibMinDur, vibMaxDur),
+        {
+          skipWarning: true,
+          target: holdTargetRef.current,
+        },
+      );
       if (warningTimerRef.current) clearTimeout(warningTimerRef.current);
       warningTimerRef.current = setTimeout(() => {
         warningTimerRef.current = null;
@@ -1377,6 +1430,7 @@ export function OfficialController({
                                             />
                                             <DurationMetric
                                               valueMs={shockDurationMs}
+                                              minMs={minDur}
                                               maxMs={maxDur}
                                               open={durationMenu === 'shock'}
                                               disabled={tapMode}
@@ -1388,7 +1442,7 @@ export function OfficialController({
                                                 )
                                               }
                                               onSelect={(ms) => {
-                                                setShockDurationMs(ms);
+                                                setShockDurationMs(clamp(ms, minDur, maxDur));
                                                 setDurationMenu(null);
                                               }}
                                             />
@@ -1398,9 +1452,15 @@ export function OfficialController({
                                               type="button"
                                               className="q-btn q-btn-item non-selectable no-outline q-btn--push q-btn--round text-accent q-btn--actionable q-focusable q-hoverable q-btn--wrap"
                                               disabled={controlsLocked}
-                                              title="Vibrate before shock: None → SMALL → MID → LONG"
+                                              title={
+                                                requiredWarningFloor === 'none'
+                                                  ? 'Vibrate before shock: None → SMALL → MID → LONG'
+                                                  : `Wearer requires at least ${warningButtonLabel(requiredWarningFloor)} warning`
+                                              }
                                               onClick={() =>
-                                                setWarningLevel((level) => nextWarningLevel(level))
+                                                setWarningLevel((level) =>
+                                                  cycleWarningLevel(level, requiredWarningFloor),
+                                                )
                                               }
                                             >
                                               <span className="q-btn__wrapper col row q-anchor--skip">
@@ -1410,7 +1470,7 @@ export function OfficialController({
                                                     aria-hidden
                                                   />
                                                   <span className="block">
-                                                    {warningButtonLabel(warningLevel)}
+                                                    {warningButtonLabel(effectiveWarningLevel)}
                                                   </span>
                                                 </span>
                                               </span>
@@ -1436,6 +1496,7 @@ export function OfficialController({
                                             !(individualIntensity && multiShock)
                                           }
                                           deviceMax={deviceMaxInt}
+                                          activityMin={shockEditFloor}
                                           activityMax={shockEditCap}
                                           limitMarkers={multiLimitMarkers}
                                           onChange={setActiveShockIntensity}
@@ -1533,7 +1594,7 @@ export function OfficialController({
                                       disabled={busy || !onEmergencyStop}
                                       onClick={() => {
                                         if (!active || !onEmergencyStop) return;
-                                        setWarningLevel('none');
+                                        setWarningLevel(requiredWarningFloor);
                                         if (warningTimerRef.current) {
                                           clearTimeout(warningTimerRef.current);
                                           warningTimerRef.current = null;
@@ -1600,7 +1661,7 @@ export function OfficialController({
                                           value: vibIntensity,
                                           min: 0,
                                           max: vibIntensity,
-                                          cap: maxInt,
+                                          cap: vibMaxInt,
                                           delta: 1,
                                           setValue: setVibIntensity,
                                         })
@@ -1611,7 +1672,7 @@ export function OfficialController({
                                           value: vibIntensity,
                                           min: 0,
                                           max: vibIntensity,
-                                          cap: maxInt,
+                                          cap: vibMaxInt,
                                           delta: -1,
                                           setValue: setVibIntensity,
                                         })
@@ -1625,7 +1686,8 @@ export function OfficialController({
                                         <VerticalQuasarSlider
                                           value={vibIntensity}
                                           deviceMax={deviceMaxInt}
-                                          activityMax={maxInt}
+                                          activityMin={vibMinInt}
+                                          activityMax={vibMaxInt}
                                           limitMarkers={multiLimitMarkers}
                                           onChange={setVibIntensity}
                                           disabled={controlsLocked || !active.canVibrate}
@@ -1671,7 +1733,8 @@ export function OfficialController({
                                             />
                                             <DurationMetric
                                               valueMs={vibDurationMs}
-                                              maxMs={maxDur}
+                                              minMs={vibMinDur}
+                                              maxMs={vibMaxDur}
                                               open={durationMenu === 'vibrate'}
                                               disabled={tapMode}
                                               side="left"
@@ -1682,7 +1745,7 @@ export function OfficialController({
                                                 )
                                               }
                                               onSelect={(ms) => {
-                                                setVibDurationMs(ms);
+                                                setVibDurationMs(clamp(ms, vibMinDur, vibMaxDur));
                                                 setDurationMenu(null);
                                               }}
                                             />
@@ -1844,6 +1907,7 @@ export function OfficialController({
 
 function DurationMetric({
   valueMs,
+  minMs = 16,
   maxMs,
   open,
   disabled,
@@ -1853,6 +1917,7 @@ function DurationMetric({
   onSelect,
 }: {
   valueMs: number;
+  minMs?: number;
   maxMs: number;
   open: boolean;
   disabled?: boolean;
@@ -1866,7 +1931,11 @@ function DurationMetric({
   onToggle: () => void;
   onSelect: (ms: number) => void;
 }) {
-  const presets = DURATION_PRESETS_SEC.filter((sec) => Math.round(sec * 1000) <= maxMs);
+  const floor = Math.max(16, Math.min(maxMs, minMs));
+  const presets = DURATION_PRESETS_SEC.filter((sec) => {
+    const ms = Math.round(sec * 1000);
+    return ms >= floor && ms <= maxMs;
+  });
   const showLimits = limitMarkers.length > 1 && maxMs > 0;
   return (
     <div className="official-duration-wrap">
@@ -2193,6 +2262,7 @@ function VerticalQuasarSlider({
   maxValue = 0,
   random = false,
   deviceMax,
+  activityMin = 1,
   activityMax,
   limitMarkers = [],
   onChange,
@@ -2206,6 +2276,8 @@ function VerticalQuasarSlider({
   random?: boolean;
   /** PiShock hard ceiling — red zone above this (scale 0–100) */
   deviceMax: number;
+  /** Activity floor — shown as usable-band start; thumb may still sit below */
+  activityMin?: number;
   /** Highest usable Activity Limit among the selection — thumb may reach this */
   activityMax: number;
   /** Multishock: per-person limit ticks (color-coded); optional value = set intensity */
@@ -2226,12 +2298,18 @@ function VerticalQuasarSlider({
   const scaleMax = 100;
   const device = clamp(deviceMax, 1, scaleMax);
   const activity = clamp(activityMax, 1, device);
+  // Keep floor ≤ activity even if settings briefly invert.
+  const floor = Math.min(activity, Math.max(1, activityMin || 1));
+  // Thumb moves freely from 0..activity; operate path still clamps into [floor, activity].
   const usable = clamp(value, 0, activity);
   const lo = clamp(Math.min(minValue, maxValue), 0, activity);
   const hi = clamp(Math.max(minValue, maxValue), 0, activity);
   const pct = (usable / scaleMax) * 100;
   const loPct = (lo / scaleMax) * 100;
   const hiPct = (hi / scaleMax) * 100;
+  const floorPct = (floor / scaleMax) * 100;
+  const bandHeight = Math.max(0, (activity / scaleMax) * 100 - floorPct);
+  const belowFloor = !random && usable < floor;
   const redFrom = device;
   const redHeight = Math.max(0, 100 - redFrom);
   const activityCapBottom = activity;
@@ -2316,7 +2394,13 @@ function VerticalQuasarSlider({
           aria-valuemax={activity}
           aria-orientation="vertical"
           aria-valuenow={random ? hi : usable}
-          aria-valuetext={random ? `${lo}-${hi}` : String(usable)}
+          aria-valuetext={
+            random
+              ? `${lo}-${hi}`
+              : belowFloor
+                ? `${usable} (min ${floor})`
+                : String(usable)
+          }
           className="q-slider q-slider--v q-slider--inactive inline no-wrap row q-slider--enabled q-slider--editable q-slider--label q-slider--dark q-slider--dense q-slider--dense--v"
         >
           <div
@@ -2344,6 +2428,35 @@ function VerticalQuasarSlider({
               style={{ width: limitMarkers.length > 1 ? Math.min(4 + limitMarkers.length * 4, 22) : 5 }}
             >
               <div className="q-slider__inner absolute" style={{ bottom: '0%', height: '100%' }} />
+              {floor > 1 ? (
+                <div
+                  className="absolute"
+                  title={`Below activity minimum (${floor}%)`}
+                  style={{
+                    left: 0,
+                    right: 0,
+                    bottom: '0%',
+                    height: `${floorPct}%`,
+                    background: 'rgba(255, 255, 255, 0.06)',
+                    pointerEvents: 'none',
+                  }}
+                />
+              ) : null}
+              {bandHeight > 0 ? (
+                <div
+                  className="absolute official-slider-band"
+                  title={`Activity band ${floor}% – ${activity}%`}
+                  style={{
+                    left: 0,
+                    right: 0,
+                    bottom: `${floorPct}%`,
+                    height: `${bandHeight}%`,
+                    background: 'rgba(121, 198, 219, 0.22)',
+                    boxShadow: 'inset 0 0 0 1px rgba(121, 198, 219, 0.45)',
+                    pointerEvents: 'none',
+                  }}
+                />
+              ) : null}
               {activity < device ? (
                 <div
                   className="absolute"
@@ -2435,9 +2548,29 @@ function VerticalQuasarSlider({
               ) : (
                 <div
                   className="q-slider__selection absolute text-secondary"
-                  style={{ bottom: '0%', height: `${pct}%` }}
+                  style={{
+                    bottom: '0%',
+                    height: `${pct}%`,
+                    opacity: belowFloor ? 0.45 : 1,
+                  }}
                 />
               )}
+              {floor > 1 ? (
+                <div
+                  className="absolute"
+                  title={`Activity minimum ${floor}%`}
+                  style={{
+                    left: -3,
+                    right: -3,
+                    bottom: `calc(${floorPct}% - 1px)`,
+                    height: 2,
+                    background: '#79c6db',
+                    boxShadow: '0 0 0 1px rgba(0,0,0,.4)',
+                    pointerEvents: 'none',
+                    zIndex: 2,
+                  }}
+                />
+              ) : null}
               <div
                 className="q-slider__markers q-slider__markers--v absolute overflow-hidden"
                 style={{ bottom: '0%', height: '100%', backgroundSize: '2px 10%' }}
@@ -2463,7 +2596,9 @@ function VerticalQuasarSlider({
                 </>
               ) : (
                 <div
-                  className="q-slider__thumb q-slider__thumb--v q-slider__thumb--v-rtl absolute non-selectable text-secondary"
+                  className={`q-slider__thumb q-slider__thumb--v q-slider__thumb--v-rtl absolute non-selectable ${
+                    belowFloor ? 'text-grey-5' : 'text-secondary'
+                  }`}
                   style={{ width: 20, height: 20, bottom: `${pct}%` }}
                 >
                   <svg viewBox="0 0 20 20" aria-hidden className="q-slider__thumb-shape absolute-full">

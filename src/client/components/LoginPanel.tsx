@@ -102,7 +102,7 @@ export function LoginPanel({
           <div className="text-secondary text-subtitle2">Or paste an existing API key</div>
           <p className="text-grey-5 text-body2" style={{ marginTop: 4, marginBottom: 10 }}>
             Use your PiShock username and a named API key from the website. We store it encrypted
-            for 7 days (same as auto-created keys).
+            until it stops working (same as auto-created keys).
           </p>
           {manualError ? (
             <div className="auth-boot__error" style={{ marginBottom: 12 }}>

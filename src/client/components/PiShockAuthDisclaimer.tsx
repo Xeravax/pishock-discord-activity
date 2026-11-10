@@ -4,7 +4,7 @@ type Props = {
 };
 
 /**
- * Explicit notice: named 7-day API key, encrypted at rest.
+ * Explicit notice: named API key, encrypted at rest.
  * Shown before / during PiShock linking so users are not surprised.
  */
 export function PiShockAuthDisclaimer({ compact }: Props) {
@@ -22,12 +22,12 @@ export function PiShockAuthDisclaimer({ compact }: Props) {
       <ul className="pishock-auth-disclaimer__list">
         <li>
           After you sign in on PiShock&apos;s login page, confirming the link creates a{' '}
-          <strong>7-day API key</strong> named <strong>Discord Activity</strong> and stores it
+          <strong>named API key</strong> (<strong>Discord Activity</strong>) and stores it
           encrypted for control. You can also paste an existing username + API key instead.
         </li>
         <li>
           The short-lived login session token is used only to create that key and is{' '}
-          <strong>not</strong> persisted. After 7 days you must reauthenticate.
+          <strong>not</strong> persisted. The API key stays until you unlink or PiShock rejects it.
         </li>
         <li>
           Other people&apos;s devices are only controllable when{' '}

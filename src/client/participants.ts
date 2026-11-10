@@ -14,9 +14,20 @@ export type ParticipantShockerStatus = {
   /** PiShock device/API ceiling (red zone above this) */
   deviceMaxIntensity: number;
   deviceMaxDurationMs: number;
-  /** Discord Activity Limit (usable ceiling) */
+  /** Discord Activity Limit usable band (shock) */
+  minIntensity: number;
   maxIntensity: number;
+  minDurationMs: number;
   maxDurationMs: number;
+  vibMinIntensity?: number;
+  vibMaxIntensity?: number;
+  vibMinDurationMs?: number;
+  vibMaxDurationMs?: number;
+  beepMinIntensity?: number;
+  beepMaxIntensity?: number;
+  beepMinDurationMs?: number;
+  beepMaxDurationMs?: number;
+  requiredWarningLevel?: 'none' | 'small' | 'mid' | 'long';
   canShock: boolean;
   canVibrate: boolean;
   canBeep: boolean;

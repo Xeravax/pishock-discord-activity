@@ -6,14 +6,18 @@ type Props = {
   onClose: () => void;
   children: ReactNode;
   wide?: boolean;
+  /** Use nearly all of the Discord activity viewport */
+  fill?: boolean;
 };
 
 /** Quasar dialog shell matching pishock.com dark cards */
-export function PsDialog({ open, title, onClose, children, wide }: Props) {
+export function PsDialog({ open, title, onClose, children, wide, fill }: Props) {
   if (!open) return null;
 
+  const sizeClass = fill ? ' is-fill' : wide ? ' is-wide' : '';
+
   return (
-    <div className="ps-dialog-root">
+    <div className={`ps-dialog-root${fill ? ' is-fill' : ''}`}>
       <div
         className="ps-dialog-backdrop"
         onClick={onClose}
@@ -22,14 +26,14 @@ export function PsDialog({ open, title, onClose, children, wide }: Props) {
         }}
       />
       <div
-        className="ps-dialog-inner"
+        className={`ps-dialog-inner${sizeClass}`}
         role="dialog"
         aria-modal="true"
         aria-label={title}
         onClick={(e) => e.stopPropagation()}
         onMouseDown={(e) => e.stopPropagation()}
       >
-        <div className={`ps-dialog-card q-card q-card--dark q-dark bg-dark${wide ? ' is-wide' : ''}`}>
+        <div className={`ps-dialog-card q-card q-card--dark q-dark bg-dark${sizeClass}`}>
           <div className="ps-dialog-header q-card__section q-card__section--vert row items-center justify-between no-wrap">
             <div className="text-h6 text-secondary" style={{ fontFamily: 'geo, Oxanium, sans-serif' }}>
               {title}

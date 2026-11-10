@@ -48,8 +48,8 @@ export function PiShockLinkingScreen({
             </div>
             <p className="auth-boot__hint">
               Finish signing in in your browser, then return here — we&apos;ll detect it
-              automatically. After you confirm the account, we create a <strong>7-day API key</strong>{' '}
-              (shown once) and store it encrypted.
+              automatically. After you confirm the account, we create a <strong>named API key</strong>{' '}
+              (shown once) and store it encrypted until you unlink or PiShock rejects it.
             </p>
           </>
         )}

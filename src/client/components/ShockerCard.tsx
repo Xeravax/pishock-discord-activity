@@ -19,18 +19,35 @@ export type ShockerView = {
   /** Effective usable max = min(device, activity) */
   maxIntensity: number;
   maxDuration: number;
+  /** Effective usable min = max(abs, activity/share mins) */
+  minIntensity?: number;
+  minDuration?: number;
+  vibMinIntensity?: number;
+  vibMaxIntensity?: number;
+  vibMinDuration?: number;
+  vibMaxDuration?: number;
+  beepMinIntensity?: number;
+  beepMaxIntensity?: number;
+  beepMinDuration?: number;
+  beepMaxDuration?: number;
+  /** Owner-enforced warning floor for guests shocking this share */
+  requiredWarningLevel?: 'none' | 'small' | 'mid' | 'long';
   /** PiShock device/API hard ceiling — slider red zone above this */
   deviceMaxIntensity?: number;
   deviceMaxDuration?: number;
-  /** Discord Activity Limit ceiling */
+  /** Discord Activity Limit floor / ceiling */
+  activityMinIntensity?: number;
   activityMaxIntensity?: number;
+  activityMinDuration?: number;
   activityMaxDuration?: number;
   /**
    * Limits applied to Discord guests when this owned shocker is shared.
    * Personal My Shockers control may exceed these (bypass).
    */
   discordShareEnabled?: boolean;
+  discordShareMinIntensity?: number;
   discordShareMaxIntensity?: number;
+  discordShareMinDuration?: number;
   discordShareMaxDuration?: number;
   isV3?: boolean;
   online?: boolean;

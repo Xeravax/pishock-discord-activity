@@ -2,11 +2,13 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ApiError, apiBase, apiFetch, isEmbedded } from './api';
 import {
   bootstrapDiscord,
+  buildPresenceSnapshot,
   fetchInstanceParticipants,
   getActivityInstanceId,
   openExternal,
   resolveActivityLocationHint,
   subscribeParticipants,
+  updateRichPresence,
   type AuthState,
 } from './discord';
 import { SafetyWarning } from './components/SafetyWarning';
@@ -115,7 +117,7 @@ type PendingLinkConfirm = {
 type PendingApiKeyReveal = {
   apiKey: string;
   apiKeyName: string;
-  expiresAt: string;
+  expiresAt?: string | null;
   pishockUsername?: string | null;
 };
 
@@ -155,6 +157,7 @@ export function App() {
   const [setupSharePhase, setSetupSharePhase] = useState(false);
   const [setupDevicesReady, setSetupDevicesReady] = useState(false);
   const [setupShareBusy, setSetupShareBusy] = useState(false);
+  const [setupShareKey, setSetupShareKey] = useState(0);
   const [actionError, setActionError] = useState<string | null>(null);
   const [legalView, setLegalView] = useState<LegalView>(null);
   const [friendsMode, setFriendsMode] = useState(true);
@@ -170,7 +173,13 @@ export function App() {
   const [discordShareLimits, setDiscordShareLimits] = useState<
     Record<
       number,
-      { enabled: boolean; maxIntensity: number; maxDurationMs: number }
+      {
+        enabled: boolean;
+        minIntensity: number;
+        maxIntensity: number;
+        minDurationMs: number;
+        maxDurationMs: number;
+      }
     >
   >({});
   const [queueState, setQueueState] = useState<QueueState>({
@@ -194,6 +203,7 @@ export function App() {
   selfIdRef.current = me?.user?.id ?? null;
   const operateInflightRef = useRef(0);
   const linkPollGenRef = useRef(0);
+  const presenceStartedAtRef = useRef<number | null>(null);
 
   const refreshQueue = useCallback(async (accessToken: string) => {
     const data = await apiFetch<QueueState & { stars?: string[] }>('/queue', accessToken);
@@ -402,6 +412,38 @@ export function App() {
       cancelled = true;
     };
   }, [refreshDevices, refreshLogs, refreshMe, refreshParticipants]);
+
+  // Discord Rich Presence — privacy-safe automatic status + party/Join.
+  useEffect(() => {
+    if (!isEmbedded || !bootReady || !auth) return;
+    if (presenceStartedAtRef.current == null) {
+      presenceStartedAtRef.current = Date.now();
+    }
+    const sharingDevices = Object.values(discordShareLimits).some((row) => row.enabled);
+    const selfEStop = (me?.emergencyStopShockerIds?.length ?? 0) > 0;
+    const snapshot = buildPresenceSnapshot({
+      linked: Boolean(me?.pishockLinked),
+      friendsMode,
+      participantCount: Math.max(1, participants.length),
+      sharingDevices,
+      emergencyStop: selfEStop,
+      queueHalted: Boolean(queueState.halted),
+      queuePaused: Boolean(queueState.paused),
+      instanceId: getActivityInstanceId(),
+      startedAt: presenceStartedAtRef.current,
+    });
+    updateRichPresence(snapshot);
+  }, [
+    bootReady,
+    auth,
+    me?.pishockLinked,
+    me?.emergencyStopShockerIds,
+    friendsMode,
+    participants.length,
+    discordShareLimits,
+    queueState.halted,
+    queueState.paused,
+  ]);
 
   useEffect(() => {
     if (!isEmbedded || !token) return;
@@ -637,14 +679,39 @@ export function App() {
     };
   }, [token, me?.pishockLinked, devices, refreshOnlineStatus]);
 
-  const personalLimits = useMemo<PersonalLimits>(
-    () =>
-      me?.personal ?? {
-        activityMaxIntensity: 100,
-        activityMaxDurationMs: 15_000,
-      },
-    [me?.personal?.activityMaxIntensity, me?.personal?.activityMaxDurationMs],
-  );
+  const personalLimits = useMemo<PersonalLimits>(() => {
+    const p = me?.personal;
+    const maxI = Math.max(1, Math.min(100, p?.activityMaxIntensity ?? 100));
+    const maxD = Math.max(16, Math.min(15_000, p?.activityMaxDurationMs ?? 15_000));
+    const vibMaxI = Math.max(1, Math.min(100, p?.activityVibMaxIntensity ?? maxI));
+    const vibMaxD = Math.max(16, Math.min(15_000, p?.activityVibMaxDurationMs ?? maxD));
+    const beepMaxI = Math.max(1, Math.min(100, p?.activityBeepMaxIntensity ?? maxI));
+    const beepMaxD = Math.max(16, Math.min(15_000, p?.activityBeepMaxDurationMs ?? maxD));
+    return {
+      activityMinIntensity: Math.max(1, Math.min(maxI, p?.activityMinIntensity ?? 1)),
+      activityMaxIntensity: maxI,
+      activityMinDurationMs: Math.max(16, Math.min(maxD, p?.activityMinDurationMs ?? 16)),
+      activityMaxDurationMs: maxD,
+      activityVibMinIntensity: Math.max(1, Math.min(vibMaxI, p?.activityVibMinIntensity ?? 1)),
+      activityVibMaxIntensity: vibMaxI,
+      activityVibMinDurationMs: Math.max(16, Math.min(vibMaxD, p?.activityVibMinDurationMs ?? 16)),
+      activityVibMaxDurationMs: vibMaxD,
+      activityBeepMinIntensity: Math.max(1, Math.min(beepMaxI, p?.activityBeepMinIntensity ?? 1)),
+      activityBeepMaxIntensity: beepMaxI,
+      activityBeepMinDurationMs: Math.max(16, Math.min(beepMaxD, p?.activityBeepMinDurationMs ?? 16)),
+      activityBeepMaxDurationMs: beepMaxD,
+      activityCanShock: true,
+      activityCanVibrate: true,
+      activityCanBeep: true,
+      activityCanHold: true,
+      activityRequiredWarningLevel:
+        p?.activityRequiredWarningLevel === 'small' ||
+        p?.activityRequiredWarningLevel === 'mid' ||
+        p?.activityRequiredWarningLevel === 'long'
+          ? p.activityRequiredWarningLevel
+          : 'none',
+    };
+  }, [me?.personal]);
 
   const emergencyStopIds = useMemo(
     () => new Set(me?.emergencyStopShockerIds ?? []),
@@ -660,7 +727,9 @@ export function App() {
       return {
         ...s,
         discordShareEnabled: share.enabled,
+        discordShareMinIntensity: share.minIntensity ?? 1,
         discordShareMaxIntensity: share.maxIntensity,
+        discordShareMinDuration: share.minDurationMs ?? 16,
         discordShareMaxDuration: share.maxDurationMs,
       };
     });
@@ -729,6 +798,46 @@ export function App() {
         const deviceMaxDuration = Math.min(15_000, s.deviceMaxDurationMs ?? s.maxDurationMs);
         const activityMaxIntensity = Math.min(deviceMaxIntensity, s.maxIntensity);
         const activityMaxDuration = Math.min(deviceMaxDuration, s.maxDurationMs);
+        const activityMinIntensity = Math.max(
+          1,
+          Math.min(activityMaxIntensity, s.minIntensity ?? 1),
+        );
+        const activityMinDuration = Math.max(
+          16,
+          Math.min(activityMaxDuration, s.minDurationMs ?? 16),
+        );
+        const vibMaxIntensity = Math.min(
+          deviceMaxIntensity,
+          s.vibMaxIntensity ?? activityMaxIntensity,
+        );
+        const vibMinIntensity = Math.max(
+          1,
+          Math.min(vibMaxIntensity, s.vibMinIntensity ?? activityMinIntensity),
+        );
+        const vibMaxDuration = Math.min(
+          deviceMaxDuration,
+          s.vibMaxDurationMs ?? activityMaxDuration,
+        );
+        const vibMinDuration = Math.max(
+          16,
+          Math.min(vibMaxDuration, s.vibMinDurationMs ?? activityMinDuration),
+        );
+        const beepMaxIntensity = Math.min(
+          deviceMaxIntensity,
+          s.beepMaxIntensity ?? activityMaxIntensity,
+        );
+        const beepMinIntensity = Math.max(
+          1,
+          Math.min(beepMaxIntensity, s.beepMinIntensity ?? activityMinIntensity),
+        );
+        const beepMaxDuration = Math.min(
+          deviceMaxDuration,
+          s.beepMaxDurationMs ?? activityMaxDuration,
+        );
+        const beepMinDuration = Math.max(
+          16,
+          Math.min(beepMaxDuration, s.beepMinDurationMs ?? activityMinDuration),
+        );
         const stopped = Boolean(s.emergencyStop);
         rows.push({
           id: s.shockerId,
@@ -745,10 +854,28 @@ export function App() {
           canPause: false,
           deviceMaxIntensity,
           deviceMaxDuration,
+          activityMinIntensity,
           activityMaxIntensity,
+          activityMinDuration,
           activityMaxDuration,
+          minIntensity: activityMinIntensity,
           maxIntensity: activityMaxIntensity,
+          minDuration: activityMinDuration,
           maxDuration: activityMaxDuration,
+          vibMinIntensity,
+          vibMaxIntensity,
+          vibMinDuration,
+          vibMaxDuration,
+          beepMinIntensity,
+          beepMaxIntensity,
+          beepMinDuration,
+          beepMaxDuration,
+          requiredWarningLevel:
+            s.requiredWarningLevel === 'small' ||
+            s.requiredWarningLevel === 'mid' ||
+            s.requiredWarningLevel === 'long'
+              ? s.requiredWarningLevel
+              : 'none',
           emergencyStop: stopped,
           isV3: true,
           online: true,
@@ -1071,11 +1198,11 @@ export function App() {
         pishockUsername?: string | null;
       }>('/pishock/login/confirm', token, { method: 'POST', body: '{}' });
       setLinkConfirm(null);
-      if (result.apiKey && result.expiresAt) {
+      if (result.apiKey) {
         setApiKeyReveal({
           apiKey: result.apiKey,
           apiKeyName: result.apiKeyName || 'Discord Activity',
-          expiresAt: result.expiresAt,
+          expiresAt: result.expiresAt ?? null,
           pishockUsername: result.pishockUsername ?? linkConfirm.pishockUsername ?? null,
         });
       } else {
@@ -1464,21 +1591,7 @@ export function App() {
   const loadAvailability = useCallback(async () => {
     if (!token) throw new Error('Not authenticated');
     return apiFetch<{
-      shares: Array<{
-        shockerId: number;
-        shockerName: string;
-        hubClientId?: string | null;
-        enabled: boolean;
-        paused: boolean;
-        deviceMaxIntensity?: number;
-        deviceMaxDurationMs?: number;
-        maxIntensity: number;
-        maxDurationMs: number;
-        canShock: boolean;
-        canVibrate: boolean;
-        canBeep: boolean;
-        canHold: boolean;
-      }>;
+      shares: ActivityShareConfig[];
       bannedDiscordUserIds: string[];
       available: boolean;
       personal?: PersonalLimits;
@@ -1487,21 +1600,7 @@ export function App() {
 
   const saveAvailability = useCallback(
     async (payload: {
-      shares: Array<{
-        shockerId: number;
-        shockerName: string;
-        hubClientId?: string | null;
-        enabled: boolean;
-        paused: boolean;
-        deviceMaxIntensity?: number;
-        deviceMaxDurationMs?: number;
-        maxIntensity: number;
-        maxDurationMs: number;
-        canShock: boolean;
-        canVibrate: boolean;
-        canBeep: boolean;
-        canHold: boolean;
-      }>;
+      shares: ActivityShareConfig[];
       bannedDiscordUserIds: string[];
     }) => {
       if (!token) throw new Error('Not authenticated');
@@ -1524,13 +1623,40 @@ export function App() {
     setLinkError(null);
   }, []);
 
+  const startDiscordSetupRedo = useCallback(async () => {
+    if (!token || !me?.pishockLinked) return;
+    setOverlay(null);
+    setLinkError(null);
+    setSetupShareBusy(false);
+    setSetupDevicesReady(false);
+    setSetupShareKey((k) => k + 1);
+    setSetupSharePhase(true);
+    try {
+      await refreshDevices(token);
+      setSetupDevicesReady(true);
+    } catch (err) {
+      setLinkError(err instanceof Error ? err.message : String(err));
+      setSetupDevicesReady(true);
+    }
+  }, [token, me?.pishockLinked, refreshDevices]);
+
   const applyDiscordShareLimits = useCallback((shares: ShareLimitRow[]) => {
-    const next: Record<number, { enabled: boolean; maxIntensity: number; maxDurationMs: number }> =
-      {};
+    const next: Record<
+      number,
+      {
+        enabled: boolean;
+        minIntensity: number;
+        maxIntensity: number;
+        minDurationMs: number;
+        maxDurationMs: number;
+      }
+    > = {};
     for (const row of shares) {
       next[row.shockerId] = {
         enabled: row.enabled,
+        minIntensity: row.minIntensity ?? 1,
         maxIntensity: row.maxIntensity,
+        minDurationMs: row.minDurationMs ?? 16,
         maxDurationMs: row.maxDurationMs,
       };
     }
@@ -1582,12 +1708,23 @@ export function App() {
           paused: s.paused,
           deviceMaxIntensity: s.deviceMaxIntensity ?? s.maxIntensity,
           deviceMaxDurationMs: s.deviceMaxDurationMs ?? s.maxDurationMs,
+          minIntensity: s.minIntensity ?? 1,
           maxIntensity: s.maxIntensity,
+          minDurationMs: s.minDurationMs ?? 16,
           maxDurationMs: s.maxDurationMs,
+          vibMinIntensity: s.vibMinIntensity ?? s.minIntensity ?? 1,
+          vibMaxIntensity: s.vibMaxIntensity ?? s.maxIntensity,
+          vibMinDurationMs: s.vibMinDurationMs ?? s.minDurationMs ?? 16,
+          vibMaxDurationMs: s.vibMaxDurationMs ?? s.maxDurationMs,
+          beepMinIntensity: s.beepMinIntensity ?? s.minIntensity ?? 1,
+          beepMaxIntensity: s.beepMaxIntensity ?? s.maxIntensity,
+          beepMinDurationMs: s.beepMinDurationMs ?? s.minDurationMs ?? 16,
+          beepMaxDurationMs: s.beepMaxDurationMs ?? s.maxDurationMs,
           canShock: s.canShock,
           canVibrate: s.canVibrate,
           canBeep: s.canBeep,
           canHold: s.canHold,
+          requiredWarningLevel: s.requiredWarningLevel ?? 'none',
         }));
         await saveSettings({ personal: result.personal, shares });
         if (result.queue && token) {
@@ -1744,10 +1881,16 @@ export function App() {
 
   if (setupSharePhase) {
     const ownedForSetup = ownedAndShared.filter((s) => s.owned);
+    const initialSelectedIds = Object.entries(discordShareLimits)
+      .filter(([, row]) => row.enabled)
+      .map(([id]) => Number(id))
+      .filter((id) => ownedForSetup.some((s) => s.id === id));
     return (
       <SetupDiscordShareScreen
+        key={setupShareKey}
         shockers={ownedForSetup}
         initialPersonal={personalLimits}
+        initialSelectedIds={initialSelectedIds}
         devicesReady={setupDevicesReady}
         busy={setupShareBusy}
         error={linkError}
@@ -2096,6 +2239,28 @@ export function App() {
                 type="button"
                 className="q-item q-item-type row no-wrap q-item--dark q-item--clickable cursor-pointer full-width bg-transparent text-left"
                 onMouseDown={(e) => e.preventDefault()}
+                onClick={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  void startDiscordSetupRedo();
+                }}
+              >
+                <div className="q-item__section column q-item__section--avatar q-item__section--side justify-center">
+                  <i className="q-icon mdi mdi-replay text-secondary" aria-hidden />
+                </div>
+                <div className="q-item__section column q-item__section--main justify-center">
+                  <div className="q-item__label text-grey-3">Redo Discord setup</div>
+                  <div className="q-item__label q-item__label--caption text-grey-5">
+                    Start again from shocker select
+                  </div>
+                </div>
+              </button>
+            ) : null}
+            {me.pishockLinked ? (
+              <button
+                type="button"
+                className="q-item q-item-type row no-wrap q-item--dark q-item--clickable cursor-pointer full-width bg-transparent text-left"
+                onMouseDown={(e) => e.preventDefault()}
                 onClick={async (e) => {
                   e.preventDefault();
                   e.stopPropagation();
@@ -2184,7 +2349,7 @@ export function App() {
             setOverlay(null);
             setSettingsFocusShockerId(null);
           }}
-          wide
+          fill
         >
           <ActivityLimitsSettings
             ownedShockers={ownedShockers}
@@ -2500,6 +2665,34 @@ function normalizeShockers(
     const deviceMaxDuration = maxDurationMs(s);
     const activityMaxIntensity = Math.min(deviceMaxIntensity, personal.activityMaxIntensity);
     const activityMaxDuration = Math.min(deviceMaxDuration, personal.activityMaxDurationMs);
+    const activityMinIntensity = Math.max(
+      1,
+      Math.min(activityMaxIntensity, personal.activityMinIntensity),
+    );
+    const activityMinDuration = Math.max(
+      16,
+      Math.min(activityMaxDuration, personal.activityMinDurationMs),
+    );
+    const vibMaxIntensity = Math.min(deviceMaxIntensity, personal.activityVibMaxIntensity);
+    const vibMinIntensity = Math.max(
+      1,
+      Math.min(vibMaxIntensity, personal.activityVibMinIntensity),
+    );
+    const vibMaxDuration = Math.min(deviceMaxDuration, personal.activityVibMaxDurationMs);
+    const vibMinDuration = Math.max(
+      16,
+      Math.min(vibMaxDuration, personal.activityVibMinDurationMs),
+    );
+    const beepMaxIntensity = Math.min(deviceMaxIntensity, personal.activityBeepMaxIntensity);
+    const beepMinIntensity = Math.max(
+      1,
+      Math.min(beepMaxIntensity, personal.activityBeepMinIntensity),
+    );
+    const beepMaxDuration = Math.min(deviceMaxDuration, personal.activityBeepMaxDurationMs);
+    const beepMinDuration = Math.max(
+      16,
+      Math.min(beepMaxDuration, personal.activityBeepMinDurationMs),
+    );
     return {
       id,
       name: String(s.Name ?? s.name ?? `Shocker ${id}`),
@@ -2514,10 +2707,23 @@ function normalizeShockers(
       canPause: Boolean(s.CanPause ?? s.canPause ?? false),
       deviceMaxIntensity,
       deviceMaxDuration,
+      activityMinIntensity,
       activityMaxIntensity,
+      activityMinDuration,
       activityMaxDuration,
+      minIntensity: activityMinIntensity,
       maxIntensity: activityMaxIntensity,
+      minDuration: activityMinDuration,
       maxDuration: activityMaxDuration,
+      vibMinIntensity,
+      vibMaxIntensity,
+      vibMinDuration,
+      vibMaxDuration,
+      beepMinIntensity,
+      beepMaxIntensity,
+      beepMinDuration,
+      beepMaxDuration,
+      requiredWarningLevel: personal.activityRequiredWarningLevel,
       emergencyStop: emergencyStopIds.has(id),
       isV3: Boolean(s.IsV3 ?? s.isV3 ?? true),
       online: clientKey ? online[clientKey] === true : undefined,
@@ -2556,9 +2762,13 @@ function normalizeShockers(
       canPause: Boolean(s.CanPause ?? s.canPause ?? false),
       deviceMaxIntensity,
       deviceMaxDuration,
+      activityMinIntensity: 1,
       activityMaxIntensity: deviceMaxIntensity,
+      activityMinDuration: 16,
       activityMaxDuration: deviceMaxDuration,
+      minIntensity: 1,
       maxIntensity: deviceMaxIntensity,
+      minDuration: 16,
       maxDuration: deviceMaxDuration,
       isV3: Boolean(s.IsV3 ?? s.isV3 ?? true),
       online: clientKey ? online[clientKey] === true : undefined,

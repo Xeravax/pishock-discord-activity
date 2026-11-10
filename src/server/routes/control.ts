@@ -34,6 +34,8 @@ import {
   scheduleHoldAutoEnd,
   verifyOwnedClientId,
 } from '../operate-policy.js';
+import { bandForOperation } from '../limit-bands.js';
+import { WARNING_PRESETS, WARNING_SHOCK_GAP_MS } from '../../shared/warning.js';
 import {
   clearPiShockSession,
   listCommandLogs,
@@ -326,12 +328,15 @@ export const controlRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app, op
       throw err;
     }
 
+    const band = bandForOperation(policy.bands, operation);
     try {
       assertWithinCeilings(
         body.intensity,
         body.durationMs,
-        policy.maxIntensity,
-        policy.maxDurationMs,
+        band.maxIntensity,
+        band.maxDurationMs,
+        band.minIntensity,
+        band.minDurationMs,
       );
     } catch (err) {
       if (err instanceof OperatePolicyError) {
@@ -340,8 +345,21 @@ export const controlRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app, op
       throw err;
     }
 
-    const intensity = clampIntensity(body.intensity, policy.maxIntensity);
-    const durationMs = clampDurationMs(body.durationMs, policy.maxDurationMs);
+    const intensity = clampIntensity(body.intensity, band.maxIntensity, band.minIntensity);
+    const durationMs = clampDurationMs(body.durationMs, band.maxDurationMs, band.minDurationMs);
+
+    // Owner-required warning: inject a vibe before shock when vibrate is allowed.
+    const mustWarn =
+      (operation === 'shock' || operation === 'hold') &&
+      !warning &&
+      policy.requiredWarningLevel !== 'none';
+    if (mustWarn && !policy.flags.canVibrate) {
+      return reply.code(405).send({
+        error: 'Owner requires a warning vibe before shock, but vibrate is disabled',
+        code: 'WARNING_REQUIRED',
+        requiredWarningLevel: policy.requiredWarningLevel,
+      });
+    }
 
     try {
       const op =
@@ -350,6 +368,36 @@ export const controlRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app, op
           : operation === 'vibrate' || operation === 'warning'
             ? ShockerOp.Vibrate
             : ShockerOp.Beep;
+
+      if (
+        mustWarn &&
+        shockerId != null &&
+        clientId != null &&
+        policy.requiredWarningLevel !== 'none'
+      ) {
+        const preset = WARNING_PRESETS[policy.requiredWarningLevel];
+        const vibBand = policy.bands.vibrate;
+        const warnIntensity = clampIntensity(
+          preset.intensity,
+          vibBand.maxIntensity,
+          vibBand.minIntensity,
+        );
+        const warnDuration = clampDurationMs(
+          preset.durationMs,
+          vibBand.maxDurationMs,
+          vibBand.minDurationMs,
+        );
+        await publishOperate(creds, {
+          clientId,
+          shockerId,
+          operation: ShockerOp.Vibrate,
+          intensity: Math.max(1, warnIntensity),
+          durationMs: warnDuration,
+          shareCode: shareCode ?? undefined,
+          agentName: `Warning ${preset.label}`,
+        });
+        await new Promise((r) => setTimeout(r, warnDuration + WARNING_SHOCK_GAP_MS));
+      }
 
       // Prefer broker for owned V3 devices (same channel emergency stop cancels)
       if (shockerId != null && clientId != null && !shareCode) {

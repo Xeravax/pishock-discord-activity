@@ -180,33 +180,20 @@ export async function validateApiKey(input: {
 }
 
 /**
- * Create a named API key. Prefer Expiry=now+7d; if PiShock rejects that body, retry name-only.
- * App DB still enforces expiresAt regardless.
+ * Create a named API key with no forced Expiry (lasts until revoked / rejected).
+ * Optional expiry is only sent when the caller explicitly requests it.
  */
 export async function createApiKey(
   creds: SessionCreds,
-  opts: { name?: string; expiry?: Date } = {},
-): Promise<{ apiKey: string; apiKeyId: number | null }> {
+  opts: { name?: string; expiry?: Date | null } = {},
+): Promise<{ apiKey: string; apiKeyId: number | null; expiry: Date | null }> {
   const name = opts.name?.trim() || PISHOCK_API_KEY_NAME;
-  const expiryIso = opts.expiry?.toISOString();
+  const expiryIso = opts.expiry ? opts.expiry.toISOString() : null;
 
-  let created: { ApiKey?: string };
-  try {
-    created = await authRequest<{ ApiKey?: string }>(creds, 'POST', '/Api', {
-      ApiKeyName: name,
-      ...(expiryIso ? { Expiry: expiryIso } : {}),
-    });
-  } catch (err) {
-    if (!expiryIso) throw err;
-    console.warn(
-      `[pishock] create API key with Expiry failed; retrying name-only: ${
-        err instanceof Error ? err.message : String(err)
-      }`,
-    );
-    created = await authRequest<{ ApiKey?: string }>(creds, 'POST', '/Api', {
-      ApiKeyName: name,
-    });
-  }
+  const created = await authRequest<{ ApiKey?: string }>(creds, 'POST', '/Api', {
+    ApiKeyName: name,
+    ...(expiryIso ? { Expiry: expiryIso } : {}),
+  });
 
   const apiKey = typeof created.ApiKey === 'string' ? created.ApiKey.trim() : '';
   if (!apiKey) {
@@ -214,6 +201,7 @@ export async function createApiKey(
   }
 
   let apiKeyId: number | null = null;
+  let expiry: Date | null = opts.expiry ?? null;
   try {
     const account = await getAccount(creds);
     const match = (account.APIKeys ?? [])
@@ -221,6 +209,10 @@ export async function createApiKey(
       .sort((a, b) => Date.parse(b.Generated) - Date.parse(a.Generated))[0];
     if (match && Number.isFinite(match.ApiKeyId)) {
       apiKeyId = match.ApiKeyId;
+      if (match.Expiry) {
+        const parsed = new Date(match.Expiry);
+        if (Number.isFinite(parsed.getTime())) expiry = parsed;
+      }
       console.info(
         `[pishock] created API key id=${apiKeyId} name=${name} expiry=${match.Expiry ?? 'null'}`,
       );
@@ -229,7 +221,7 @@ export async function createApiKey(
     // Non-fatal — we still have the plaintext key to store.
   }
 
-  return { apiKey, apiKeyId };
+  return { apiKey, apiKeyId, expiry };
 }
 
 export function apiKeyCreds(

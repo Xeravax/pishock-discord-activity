@@ -55,7 +55,9 @@ function shareRow(overrides: Partial<ActivitySharePolicyRow> = {}): ActivityShar
     deviceMaxDurationMs: 10_000,
     enabled: true,
     paused: false,
+    minIntensity: 1,
     maxIntensity: 50,
+    minDurationMs: 16,
     maxDurationMs: 5_000,
     canShock: true,
     canVibrate: true,
@@ -68,7 +70,9 @@ function shareRow(overrides: Partial<ActivitySharePolicyRow> = {}): ActivityShar
 function baseDeps(overrides: Partial<OperatePolicyDeps> = {}): OperatePolicyDeps {
   return {
     getPersonalActivityLimits: async () => ({
+      activityMinIntensity: 1,
       activityMaxIntensity: 100,
+      activityMinDurationMs: 16,
       activityMaxDurationMs: 15_000,
     }),
     fetchControlSnapshot: async () => emptySnapshot(),
@@ -290,7 +294,9 @@ describe('expects to happen — happy paths', () => {
   it('resolveOwnOperatePolicy returns own-shocker caps as the tighter of device and personal max', async () => {
     const deps = baseDeps({
       getPersonalActivityLimits: async () => ({
+        activityMinIntensity: 1,
         activityMaxIntensity: 60,
+        activityMinDurationMs: 16,
         activityMaxDurationMs: 8_000,
       }),
       fetchControlSnapshot: async () =>

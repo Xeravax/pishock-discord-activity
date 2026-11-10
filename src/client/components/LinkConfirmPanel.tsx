@@ -43,8 +43,8 @@ export function LinkConfirmPanel({
         <p className="auth-boot__hint">
           PiShock confirmed a successful login. Link it to{' '}
           <strong className="text-grey-3">{discordName}</strong> only if this is you. Confirming
-          creates a <strong>7-day API key</strong> named <strong>Discord Activity</strong> used for
-          device control.
+          creates a <strong>named API key</strong> (<strong>Discord Activity</strong>) used for
+          device control. It stays valid until you unlink or PiShock rejects it.
         </p>
 
         {error ? (
@@ -75,7 +75,7 @@ export function LinkConfirmPanel({
 
         <p className="auth-boot__caption">
           Only confirm if this is your account. Cancel discards the login and does not create an API
-          key or link anything. After 7 days you must reauthenticate.
+          key or link anything.
         </p>
 
         <div className="auth-boot__actions">

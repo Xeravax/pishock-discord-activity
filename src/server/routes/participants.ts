@@ -23,6 +23,8 @@ import {
   OperatePolicyError,
   scheduleHoldAutoEnd,
 } from '../operate-policy.js';
+import { bandForOperation, shareBandsFromRow } from '../limit-bands.js';
+import { WARNING_PRESETS, WARNING_SHOCK_GAP_MS } from '../../shared/warning.js';
 import {
   getCommandQueueEnabled,
   getCommandQueueSettings,
@@ -186,7 +188,9 @@ export const participantRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app
               hubClientId: string | null;
               deviceMaxIntensity: number;
               deviceMaxDurationMs: number;
+              minIntensity: number;
               maxIntensity: number;
+              minDurationMs: number;
               maxDurationMs: number;
               canShock: boolean;
               canVibrate: boolean;
@@ -195,14 +199,26 @@ export const participantRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app
               paused: boolean;
             }) => {
               const stopped = eStops.has(s.shockerId);
+              const bands = shareBandsFromRow(s);
               return {
                 shockerId: s.shockerId,
                 shockerName: s.shockerName,
                 hubClientId: s.hubClientId,
                 deviceMaxIntensity: s.deviceMaxIntensity,
                 deviceMaxDurationMs: s.deviceMaxDurationMs,
-                maxIntensity: s.maxIntensity,
-                maxDurationMs: s.maxDurationMs,
+                minIntensity: bands.shock.minIntensity,
+                maxIntensity: bands.shock.maxIntensity,
+                minDurationMs: bands.shock.minDurationMs,
+                maxDurationMs: bands.shock.maxDurationMs,
+                vibMinIntensity: bands.vibrate.minIntensity,
+                vibMaxIntensity: bands.vibrate.maxIntensity,
+                vibMinDurationMs: bands.vibrate.minDurationMs,
+                vibMaxDurationMs: bands.vibrate.maxDurationMs,
+                beepMinIntensity: bands.beep.minIntensity,
+                beepMaxIntensity: bands.beep.maxIntensity,
+                beepMinDurationMs: bands.beep.minDurationMs,
+                beepMaxDurationMs: bands.beep.maxDurationMs,
+                requiredWarningLevel: bands.requiredWarningLevel,
                 canShock: !stopped && s.canShock,
                 canVibrate: !stopped && s.canVibrate,
                 canBeep: !stopped && s.canBeep,
@@ -445,17 +461,60 @@ export const participantRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app
       throw err;
     }
 
-    const maxIntensity = Math.min(share.maxIntensity, share.deviceMaxIntensity);
-    const maxDurationMs = Math.min(share.maxDurationMs, share.deviceMaxDurationMs);
-    if (Number(body.intensity ?? 1) > maxIntensity) {
+    const modes = shareBandsFromRow(share);
+    const band = bandForOperation(modes, operation);
+    if (Number(body.intensity ?? 1) < band.minIntensity) {
+      return reply.code(412).send({ error: 'Intensity below allowed minimum' });
+    }
+    if (Number(body.intensity ?? 1) > band.maxIntensity) {
       return reply.code(412).send({ error: 'Intensity exceeds allowed maximum' });
     }
-    if (Number(body.durationMs ?? 300) > maxDurationMs) {
+    if (Number(body.durationMs ?? 300) < band.minDurationMs) {
+      return reply.code(416).send({ error: 'Duration below allowed minimum' });
+    }
+    if (Number(body.durationMs ?? 300) > band.maxDurationMs) {
       return reply.code(416).send({ error: 'Duration exceeds allowed maximum' });
     }
 
-    const intensity = clampIntensity(body.intensity, maxIntensity);
-    const durationMs = clampDurationMs(body.durationMs, maxDurationMs);
+    const intensity = clampIntensity(body.intensity, band.maxIntensity, band.minIntensity);
+    const durationMs = clampDurationMs(body.durationMs, band.maxDurationMs, band.minDurationMs);
+
+    const mustWarn =
+      (operation === 'shock' || operation === 'hold') &&
+      modes.requiredWarningLevel !== 'none';
+    if (mustWarn && !share.canVibrate) {
+      return reply.code(405).send({
+        error: 'Owner requires a warning vibe before shock, but vibrate is disabled',
+        code: 'WARNING_REQUIRED',
+        requiredWarningLevel: modes.requiredWarningLevel,
+      });
+    }
+    if (mustWarn && modes.requiredWarningLevel !== 'none') {
+      const preset = WARNING_PRESETS[modes.requiredWarningLevel];
+      const warnIntensity = clampIntensity(
+        preset.intensity,
+        modes.vibrate.maxIntensity,
+        modes.vibrate.minIntensity,
+      );
+      const warnDuration = clampDurationMs(
+        preset.durationMs,
+        modes.vibrate.maxDurationMs,
+        modes.vibrate.minDurationMs,
+      );
+      const clientId = share.hubClientId;
+      if (clientId) {
+        await publishOperate(useSharePath ? executorCreds! : targetCreds, {
+          clientId,
+          shockerId: share.shockerId,
+          operation: ShockerOp.Vibrate,
+          intensity: Math.max(1, warnIntensity),
+          durationMs: warnDuration,
+          shareCode: share.shareCode ?? undefined,
+          agentName: `Warning ${preset.label}`,
+        });
+        await new Promise((r) => setTimeout(r, warnDuration + WARNING_SHOCK_GAP_MS));
+      }
+    }
 
     if (await getCommandQueueEnabled(targetDiscordUserId)) {
       const queuedOp: QueuedOperation =

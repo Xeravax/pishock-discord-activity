@@ -7,6 +7,8 @@ import {
   ABS_MIN_DURATION_MS,
   resolveDeviceCeilingsFromPiShock,
 } from '../operate-policy.js';
+import { shareBandsFromRow } from '../limit-bands.js';
+import { normalizeWarningLevel } from '../../shared/warning.js';
 import {
   getPersonalActivityLimits,
   listActivityBans,
@@ -26,12 +28,23 @@ type IncomingShare = {
   deviceMaxDurationMs?: number;
   enabled?: boolean;
   paused?: boolean;
+  minIntensity?: number;
   maxIntensity?: number;
+  minDurationMs?: number;
   maxDurationMs?: number;
+  vibMinIntensity?: number;
+  vibMaxIntensity?: number;
+  vibMinDurationMs?: number;
+  vibMaxDurationMs?: number;
+  beepMinIntensity?: number;
+  beepMaxIntensity?: number;
+  beepMinDurationMs?: number;
+  beepMaxDurationMs?: number;
   canShock?: boolean;
   canVibrate?: boolean;
   canBeep?: boolean;
   canHold?: boolean;
+  requiredWarningLevel?: string | null;
 };
 
 type ExistingShare = Awaited<ReturnType<typeof listActivityShares>>[number];
@@ -70,22 +83,35 @@ async function normalizeShareRow(
   const canBeep = s.canBeep !== false;
   const canHold = s.canHold !== false;
 
-  const { maxIntensity, maxDurationMs } = clampShareLimits({
+  const bands = shareBandsFromRow({
     deviceMaxIntensity,
     deviceMaxDurationMs,
-    requestedMaxIntensity: s.maxIntensity,
-    requestedMaxDurationMs: s.maxDurationMs,
-    previousMaxIntensity: prev?.maxIntensity,
-    previousMaxDurationMs: prev?.maxDurationMs,
+    minIntensity: s.minIntensity ?? prev?.minIntensity,
+    maxIntensity: s.maxIntensity ?? prev?.maxIntensity,
+    minDurationMs: s.minDurationMs ?? prev?.minDurationMs,
+    maxDurationMs: s.maxDurationMs ?? prev?.maxDurationMs,
+    vibMinIntensity: s.vibMinIntensity ?? prev?.vibMinIntensity,
+    vibMaxIntensity: s.vibMaxIntensity ?? prev?.vibMaxIntensity,
+    vibMinDurationMs: s.vibMinDurationMs ?? prev?.vibMinDurationMs,
+    vibMaxDurationMs: s.vibMaxDurationMs ?? prev?.vibMaxDurationMs,
+    beepMinIntensity: s.beepMinIntensity ?? prev?.beepMinIntensity,
+    beepMaxIntensity: s.beepMaxIntensity ?? prev?.beepMaxIntensity,
+    beepMinDurationMs: s.beepMinDurationMs ?? prev?.beepMinDurationMs,
+    beepMaxDurationMs: s.beepMaxDurationMs ?? prev?.beepMaxDurationMs,
+    requiredWarningLevel:
+      s.requiredWarningLevel ?? prev?.requiredWarningLevel ?? 'none',
   });
+  const requiredWarningLevel = normalizeWarningLevel(
+    s.requiredWarningLevel ?? prev?.requiredWarningLevel,
+  );
 
   // Never accept a client-supplied share code — only keep prior server-created codes
   let shareCode = retainedShareCode(prev?.shareCode, s.shareCode);
   const capsChanged =
     !shareCode ||
     (prev != null &&
-      (prev.maxIntensity !== maxIntensity ||
-        prev.maxDurationMs !== maxDurationMs ||
+      (prev.maxIntensity !== bands.shock.maxIntensity ||
+        prev.maxDurationMs !== bands.shock.maxDurationMs ||
         prev.canShock !== canShock ||
         prev.canVibrate !== canVibrate ||
         prev.canBeep !== canBeep));
@@ -94,8 +120,8 @@ async function normalizeShareRow(
     try {
       const created = await createShare(creds, {
         ShockerId: shockerId,
-        MaxIntensity: maxIntensity,
-        MaxDuration: Math.max(1, Math.min(15, Math.round(maxDurationMs / 1000))),
+        MaxIntensity: bands.shock.maxIntensity,
+        MaxDuration: Math.max(1, Math.min(15, Math.round(bands.shock.maxDurationMs / 1000))),
         CanShock: canShock,
         CanVibrate: canVibrate,
         CanBeep: canBeep,
@@ -118,12 +144,23 @@ async function normalizeShareRow(
       deviceMaxDurationMs,
       enabled: s.enabled !== false,
       paused: Boolean(s.paused),
-      maxIntensity,
-      maxDurationMs,
+      minIntensity: bands.shock.minIntensity,
+      maxIntensity: bands.shock.maxIntensity,
+      minDurationMs: bands.shock.minDurationMs,
+      maxDurationMs: bands.shock.maxDurationMs,
+      vibMinIntensity: bands.vibrate.minIntensity,
+      vibMaxIntensity: bands.vibrate.maxIntensity,
+      vibMinDurationMs: bands.vibrate.minDurationMs,
+      vibMaxDurationMs: bands.vibrate.maxDurationMs,
+      beepMinIntensity: bands.beep.minIntensity,
+      beepMaxIntensity: bands.beep.maxIntensity,
+      beepMinDurationMs: bands.beep.minDurationMs,
+      beepMaxDurationMs: bands.beep.maxDurationMs,
       canShock,
       canVibrate,
       canBeep,
       canHold,
+      requiredWarningLevel,
     },
   };
 }
@@ -175,7 +212,12 @@ export const activityShareRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (a
     }
 
     const body = req.body as {
-      personal?: { activityMaxIntensity?: number; activityMaxDurationMs?: number };
+      personal?: {
+        activityMinIntensity?: number;
+        activityMaxIntensity?: number;
+        activityMinDurationMs?: number;
+        activityMaxDurationMs?: number;
+      };
       shares?: IncomingShare[];
       bannedDiscordUserIds?: string[];
     };
@@ -282,38 +324,45 @@ function extractShareCode(data: unknown): string | null {
   return null;
 }
 
-/** Activity/share caps cannot exceed the live device ceilings. */
+/** Activity/share caps cannot exceed the live device ceilings; mins stay ≤ maxes. */
 export function clampShareLimits(input: {
   deviceMaxIntensity: number;
   deviceMaxDurationMs: number;
+  requestedMinIntensity?: unknown;
   requestedMaxIntensity?: unknown;
+  requestedMinDurationMs?: unknown;
   requestedMaxDurationMs?: unknown;
+  previousMinIntensity?: unknown;
   previousMaxIntensity?: unknown;
+  previousMinDurationMs?: unknown;
   previousMaxDurationMs?: unknown;
-}): { maxIntensity: number; maxDurationMs: number } {
-  const maxIntensity = Math.max(
-    1,
-    Math.min(
-      input.deviceMaxIntensity,
-      Number(
-        input.requestedMaxIntensity ??
-          input.previousMaxIntensity ??
-          input.deviceMaxIntensity,
-      ),
+}): {
+  minIntensity: number;
+  maxIntensity: number;
+  minDurationMs: number;
+  maxDurationMs: number;
+} {
+  const bands = shareBandsFromRow({
+    deviceMaxIntensity: input.deviceMaxIntensity,
+    deviceMaxDurationMs: input.deviceMaxDurationMs,
+    minIntensity: Number(
+      input.requestedMinIntensity ?? input.previousMinIntensity ?? 1,
     ),
-  );
-  const maxDurationMs = Math.max(
-    ABS_MIN_DURATION_MS,
-    Math.min(
-      input.deviceMaxDurationMs,
-      Number(
-        input.requestedMaxDurationMs ??
-          input.previousMaxDurationMs ??
-          input.deviceMaxDurationMs,
-      ),
+    maxIntensity: Number(
+      input.requestedMaxIntensity ??
+        input.previousMaxIntensity ??
+        input.deviceMaxIntensity,
     ),
-  );
-  return { maxIntensity, maxDurationMs };
+    minDurationMs: Number(
+      input.requestedMinDurationMs ?? input.previousMinDurationMs ?? 16,
+    ),
+    maxDurationMs: Number(
+      input.requestedMaxDurationMs ??
+        input.previousMaxDurationMs ??
+        input.deviceMaxDurationMs,
+    ),
+  });
+  return bands.shock;
 }
 
 /** Client-supplied share codes are ignored; only a prior server-issued code is kept. */
@@ -334,13 +383,25 @@ export function serializeShare(s: {
   deviceMaxDurationMs: number;
   enabled: boolean;
   paused: boolean;
+  minIntensity: number;
   maxIntensity: number;
+  minDurationMs: number;
   maxDurationMs: number;
+  vibMinIntensity?: number;
+  vibMaxIntensity?: number;
+  vibMinDurationMs?: number;
+  vibMaxDurationMs?: number;
+  beepMinIntensity?: number;
+  beepMaxIntensity?: number;
+  beepMinDurationMs?: number;
+  beepMaxDurationMs?: number;
   canShock: boolean;
   canVibrate: boolean;
   canBeep: boolean;
   canHold: boolean;
+  requiredWarningLevel?: string | null;
 }) {
+  const bands = shareBandsFromRow(s);
   return {
     shockerId: s.shockerId,
     shockerName: s.shockerName,
@@ -350,11 +411,22 @@ export function serializeShare(s: {
     deviceMaxDurationMs: s.deviceMaxDurationMs,
     enabled: s.enabled,
     paused: s.paused,
-    maxIntensity: s.maxIntensity,
-    maxDurationMs: s.maxDurationMs,
+    minIntensity: bands.shock.minIntensity,
+    maxIntensity: bands.shock.maxIntensity,
+    minDurationMs: bands.shock.minDurationMs,
+    maxDurationMs: bands.shock.maxDurationMs,
+    vibMinIntensity: bands.vibrate.minIntensity,
+    vibMaxIntensity: bands.vibrate.maxIntensity,
+    vibMinDurationMs: bands.vibrate.minDurationMs,
+    vibMaxDurationMs: bands.vibrate.maxDurationMs,
+    beepMinIntensity: bands.beep.minIntensity,
+    beepMaxIntensity: bands.beep.maxIntensity,
+    beepMinDurationMs: bands.beep.minDurationMs,
+    beepMaxDurationMs: bands.beep.maxDurationMs,
     canShock: s.canShock,
     canVibrate: s.canVibrate,
     canBeep: s.canBeep,
     canHold: s.canHold,
+    requiredWarningLevel: bands.requiredWarningLevel,
   };
 }

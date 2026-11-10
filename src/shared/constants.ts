@@ -19,6 +19,3 @@ export const RELAY_LOGIN_TIMEOUT_MS = 5 * 60 * 1000;
 
 /** Named PiShock API key created for this activity (does not replace other named keys). */
 export const PISHOCK_API_KEY_NAME = 'Discord Activity';
-
-/** API key lifetime: requested as PiShock Expiry on create, always enforced in our DB. */
-export const PISHOCK_API_KEY_TTL_MS = 7 * 24 * 60 * 60 * 1000;

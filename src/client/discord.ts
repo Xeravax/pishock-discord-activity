@@ -297,3 +297,86 @@ export async function openExternal(url: string) {
   }
   window.open(url, '_blank', 'noopener,noreferrer');
 }
+
+/**
+ * Rich Presence via Embedded App SDK `setActivity`.
+ * Requires Developer Portal art asset key `pishock_logo`, Activities enabled,
+ * and `rpc.activities.write` (already requested at authorize). Portal toggles
+ * cannot be enabled from code.
+ */
+import {
+  PRESENCE_ASSET_KEY,
+  PRESENCE_PARTY_SOFT_MAX,
+  type PresenceSnapshot,
+} from '../shared/presence';
+
+export {
+  buildPresenceSnapshot,
+  PRESENCE_ASSET_KEY,
+  PRESENCE_PARTY_SOFT_MAX,
+  type PresenceSnapshot,
+} from '../shared/presence';
+
+const PRESENCE_DEBOUNCE_MS = 400;
+
+let presenceTimer: ReturnType<typeof setTimeout> | null = null;
+let lastPresenceKey: string | null = null;
+let presenceInflight: string | null = null;
+
+function presenceKey(snapshot: PresenceSnapshot): string {
+  return [
+    snapshot.details,
+    snapshot.state,
+    snapshot.partySize,
+    snapshot.partyMax,
+    snapshot.instanceId ?? '',
+    snapshot.startedAt,
+  ].join('|');
+}
+
+async function pushRichPresence(snapshot: PresenceSnapshot): Promise<void> {
+  if (!isEmbedded) return;
+  const key = presenceKey(snapshot);
+  if (key === lastPresenceKey || key === presenceInflight) return;
+  presenceInflight = key;
+  try {
+    const discordSdk = getDiscordSdk();
+    const partyId = snapshot.instanceId || `pishock-${snapshot.startedAt}`;
+    const current = Math.max(1, Math.floor(snapshot.partySize) || 1);
+    const max = Math.max(current, Math.floor(snapshot.partyMax) || PRESENCE_PARTY_SOFT_MAX);
+    // Unix seconds for Discord timestamps
+    const startSec = Math.floor(snapshot.startedAt / 1000);
+    await discordSdk.commands.setActivity({
+      activity: {
+        type: 0,
+        details: snapshot.details,
+        state: snapshot.state,
+        instance: true,
+        timestamps: { start: startSec },
+        assets: {
+          large_image: PRESENCE_ASSET_KEY,
+          large_text: 'PiShock',
+        },
+        party: {
+          id: partyId,
+          size: [current, max],
+        },
+      },
+    });
+    lastPresenceKey = key;
+  } catch {
+    // Optional on some clients / missing scope / missing art asset
+  } finally {
+    if (presenceInflight === key) presenceInflight = null;
+  }
+}
+
+/** Debounced Rich Presence update from privacy-safe app state. */
+export function updateRichPresence(snapshot: PresenceSnapshot): void {
+  if (!isEmbedded) return;
+  if (presenceTimer) clearTimeout(presenceTimer);
+  presenceTimer = setTimeout(() => {
+    presenceTimer = null;
+    void pushRichPresence(snapshot);
+  }, PRESENCE_DEBOUNCE_MS);
+}

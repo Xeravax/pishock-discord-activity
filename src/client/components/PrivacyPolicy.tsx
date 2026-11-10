@@ -23,12 +23,12 @@ export function PrivacyPolicy({ onBack }: Props) {
         <h2>PiShock authentication</h2>
         <p className="muted">
           Linking your account uses PiShock&apos;s login page, then{' '}
-          <strong>creates a named 7-day API key</strong> (Discord Activity) for device control. The
+          <strong>creates a named API key</strong> (Discord Activity) for device control. The
           short-lived login session is not persisted. The API key is shown once at link time,
           encrypted at rest (AES-256-GCM), and is never exposed to other participants&apos;
-          browsers afterward. After 7 days you must reauthenticate. Your PiShock password is never
-          stored here. Other people&apos;s devices are only available when those users have linked
-          their own PiShock accounts.
+          browsers afterward. It stays valid until you unlink or PiShock rejects it. Your PiShock
+          password is never stored here. Other people&apos;s devices are only available when those
+          users have linked their own PiShock accounts.
         </p>
       </section>
 
@@ -37,7 +37,8 @@ export function PrivacyPolicy({ onBack }: Props) {
         <ul className="legal-list">
           <li>Discord user id and profile fields needed for the activity session</li>
           <li>
-            Encrypted PiShock API key, username, and expiry linked to your Discord user
+            Encrypted PiShock API key and username linked to your Discord user (optional expiry hint
+            if PiShock reports one)
           </li>
           <li>Consent acknowledgment status</li>
           <li>Command activity logs for accountability (action, intensity, duration, success)</li>
@@ -75,9 +76,9 @@ export function PrivacyPolicy({ onBack }: Props) {
       <section className="panel">
         <h2>Retention</h2>
         <p className="muted">
-          API keys expire after 7 days (you must re-link). Logs are retained only as long as needed
-          for operation, safety, and abuse prevention. You can unlink your PiShock account from the
-          activity at any time.
+          API keys stay valid until you unlink or PiShock rejects them. Logs are retained only as
+          long as needed for operation, safety, and abuse prevention. You can unlink your PiShock
+          account from the activity at any time.
         </p>
       </section>
     </div>
