@@ -2,7 +2,7 @@ name: .NET tests
 
 on:
   push:
-    branches: [develop, release, main]
+    branches: [develop, release, main, feature/dnet10]
   pull_request:
 
 jobs:

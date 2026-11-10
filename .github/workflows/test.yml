@@ -3,7 +3,7 @@ name: Tests
 on:
   pull_request:
   push:
-    branches: [release, develop, main]
+    branches: [release, develop, main, feature/dnet10]
   workflow_dispatch:
 
 concurrency:
