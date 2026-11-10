@@ -325,7 +325,12 @@ export function DemoApp() {
             friendsOpen={friendsOpen}
             showOwnMode={demoLinked}
             safetyBanner={<SafetyNoticeBar />}
-            friendsPanel={({ multiShock, onToggleMultiShock }) => (
+            friendsPanel={({
+              multiShock,
+              onToggleMultiShock,
+              individualIntensity,
+              onToggleIndividualIntensity,
+            }) => (
               <FriendsParticipantList
                 participants={DEMO_PARTICIPANTS}
                 statuses={DEMO_STATUS}
@@ -334,6 +339,8 @@ export function DemoApp() {
                 selectedTargetIds={selectedTargetIds}
                 multiSelect={multiShock}
                 onToggleMultiSelect={onToggleMultiShock}
+                individualIntensity={individualIntensity}
+                onToggleIndividualIntensity={onToggleIndividualIntensity}
                 onSelect={(id) => {
                   if (!id) {
                     setSelectedTargetIds([]);

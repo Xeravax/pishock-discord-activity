@@ -1402,7 +1402,12 @@ export function App() {
             ) : null
           }
           safetyBanner={!pip ? <SafetyNoticeBar /> : null}
-          friendsPanel={({ multiShock, onToggleMultiShock }) => (
+          friendsPanel={({
+            multiShock,
+            onToggleMultiShock,
+            individualIntensity,
+            onToggleIndividualIntensity,
+          }) => (
             <FriendsParticipantList
               participants={participants}
               statuses={participantStatus}
@@ -1411,6 +1416,8 @@ export function App() {
               selectedTargetIds={selectedTargetIds}
               multiSelect={multiShock}
               onToggleMultiSelect={onToggleMultiShock}
+              individualIntensity={individualIntensity}
+              onToggleIndividualIntensity={onToggleIndividualIntensity}
               onSelect={(id) => {
                 if (!id) {
                   setSelectedTargetIds([]);

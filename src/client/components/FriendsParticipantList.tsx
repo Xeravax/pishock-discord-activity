@@ -1,6 +1,6 @@
 import type { DiscordParticipant, ParticipantStatus } from '../participants';
 import { colorForUser } from '../multiColors';
-import { MultiShockToggle } from './MultiShockToggle';
+import { IndividualIntensityToggle, MultiShockToggle } from './MultiShockToggle';
 
 type Props = {
   participants: DiscordParticipant[];
@@ -12,6 +12,8 @@ type Props = {
   selectedTargetIds?: string[];
   multiSelect?: boolean;
   onToggleMultiSelect?: () => void;
+  individualIntensity?: boolean;
+  onToggleIndividualIntensity?: () => void;
   onSelect: (discordUserId: string | null) => void;
   onRefresh?: () => void;
 };
@@ -25,6 +27,8 @@ export function FriendsParticipantList({
   selectedTargetIds,
   multiSelect = false,
   onToggleMultiSelect,
+  individualIntensity = false,
+  onToggleIndividualIntensity,
   onSelect,
   onRefresh,
 }: Props) {
@@ -36,7 +40,8 @@ export function FriendsParticipantList({
     <div className="column flex q-mt-xs official-friends-list">
       <div className="row items-center justify-between official-friends-header">
         <div className="text-secondary official-friends-title">
-          DISCORD SHOCKERS{multiSelect ? ' · MULTI' : ''}
+          DISCORD SHOCKERS
+          {multiSelect ? (individualIntensity ? ' · MULTI · EACH' : ' · MULTI') : ''}
         </div>
         <div className="row items-center no-wrap q-gutter-xs">
           {onToggleMultiSelect ? (
@@ -45,6 +50,13 @@ export function FriendsParticipantList({
               onToggle={onToggleMultiSelect}
               compact
               title="Select several people and operate them together"
+            />
+          ) : null}
+          {multiSelect && onToggleIndividualIntensity ? (
+            <IndividualIntensityToggle
+              active={individualIntensity}
+              onToggle={onToggleIndividualIntensity}
+              compact
             />
           ) : null}
           {onRefresh ? (
