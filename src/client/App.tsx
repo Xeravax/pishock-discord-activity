@@ -47,6 +47,12 @@ import { PsDialog } from './components/PsDialog';
 import { LinkConfirmPanel } from './components/LinkConfirmPanel';
 import { ApiKeyRevealPanel } from './components/ApiKeyRevealPanel';
 import { AuthLoadingScreen } from './components/AuthLoadingScreen';
+import { DefaultMenuPrompt } from './components/DefaultMenuPrompt';
+import {
+  loadDefaultStartMenu,
+  saveDefaultStartMenu,
+  type DefaultStartMenu,
+} from './defaultMenuPrefs';
 import {
   SetupWizard,
   loadSetupPrefs,
@@ -158,6 +164,8 @@ export function App() {
   const [setupDevicesReady, setSetupDevicesReady] = useState(false);
   const [setupShareBusy, setSetupShareBusy] = useState(false);
   const [setupShareKey, setSetupShareKey] = useState(0);
+  const [defaultMenuPrompt, setDefaultMenuPrompt] = useState(false);
+  const defaultMenuAppliedRef = useRef(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [legalView, setLegalView] = useState<LegalView>(null);
   const [friendsMode, setFriendsMode] = useState(true);
@@ -452,6 +460,24 @@ export function App() {
       void refreshParticipantStatus(token, roster).catch(() => undefined);
     });
   }, [token, refreshParticipantStatus]);
+
+  // Default friends view to the first Discord user with an available PiShock share.
+  useEffect(() => {
+    if (!friendsMode || selectedTargetIds.length > 0) return;
+    const selfId = me?.user?.id;
+    const firstAvailable = participants.find((p) => {
+      if (selfId && p.id === selfId) return false;
+      const status = participantStatus[p.id];
+      return Boolean(status?.available && status.shockers?.length);
+    });
+    if (firstAvailable) setSelectedTargetIds([firstAvailable.id]);
+  }, [
+    friendsMode,
+    selectedTargetIds.length,
+    participants,
+    participantStatus,
+    me?.user?.id,
+  ]);
 
   useEffect(() => {
     if (!isEmbedded || !token || !bootReady || !me?.consent) return;
@@ -1047,8 +1073,51 @@ export function App() {
     if (me && !me.pishockLinked) {
       setFriendsMode(true);
       setSelectedHubId(null);
+      setDefaultMenuPrompt(false);
+      defaultMenuAppliedRef.current = false;
     }
   }, [me?.pishockLinked, me]);
+
+  // Linked users: apply saved default menu, or ask once if unset.
+  useEffect(() => {
+    if (!bootReady || !me?.consent || !me.pishockLinked || !me.user?.id) return;
+    if (setupSharePhase || setupPhase || linking || linkConfirm || apiKeyReveal) return;
+    if (defaultMenuAppliedRef.current) return;
+    const pref = loadDefaultStartMenu(me.user.id);
+    if (pref == null) {
+      setDefaultMenuPrompt(true);
+      return;
+    }
+    defaultMenuAppliedRef.current = true;
+    setDefaultMenuPrompt(false);
+    setFriendsMode(pref === 'friends');
+    if (pref === 'own') setSelectedTargetIds([]);
+  }, [
+    bootReady,
+    me?.consent,
+    me?.pishockLinked,
+    me?.user?.id,
+    setupSharePhase,
+    setupPhase,
+    linking,
+    linkConfirm,
+    apiKeyReveal,
+  ]);
+
+  const applyDefaultStartMenu = useCallback(
+    (menu: DefaultStartMenu) => {
+      if (!me?.user?.id) return;
+      saveDefaultStartMenu(me.user.id, menu);
+      defaultMenuAppliedRef.current = true;
+      setDefaultMenuPrompt(false);
+      setFriendsMode(menu === 'friends');
+      if (menu === 'own') {
+        setSelectedTargetIds([]);
+        setSelectedHubId(null);
+      }
+    },
+    [me?.user?.id],
+  );
 
   const acceptConsent = async (payload: {
     acknowledged: true;
@@ -1900,6 +1969,18 @@ export function App() {
     );
   }
 
+  if (me.pishockLinked && defaultMenuPrompt) {
+    const canDismissDefaultMenu =
+      Boolean(me.user?.id) && loadDefaultStartMenu(me.user.id) != null;
+    return (
+      <DefaultMenuPrompt
+        discordName={me.user.global_name || me.user.username}
+        onChoose={applyDefaultStartMenu}
+        onDismiss={canDismissDefaultMenu ? () => setDefaultMenuPrompt(false) : undefined}
+      />
+    );
+  }
+
   // Waiting on browser PiShock login — same boot aesthetic as Discord auth
   if (linking || linkError) {
     return (
@@ -2234,6 +2315,29 @@ export function App() {
                 </div>
               </button>
             ))}
+            {me.pishockLinked ? (
+              <button
+                type="button"
+                className="q-item q-item-type row no-wrap q-item--dark q-item--clickable cursor-pointer full-width bg-transparent text-left"
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  setOverlay(null);
+                  setDefaultMenuPrompt(true);
+                }}
+              >
+                <div className="q-item__section column q-item__section--avatar q-item__section--side justify-center">
+                  <i className="q-icon mdi mdi-view-dashboard-outline text-secondary" aria-hidden />
+                </div>
+                <div className="q-item__section column q-item__section--main justify-center">
+                  <div className="q-item__label text-grey-3">Default start menu</div>
+                  <div className="q-item__label q-item__label--caption text-grey-5">
+                    Discord Shockers or My Shockers on launch
+                  </div>
+                </div>
+              </button>
+            ) : null}
             {me.pishockLinked ? (
               <button
                 type="button"

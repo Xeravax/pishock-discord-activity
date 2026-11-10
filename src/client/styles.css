@@ -2282,6 +2282,15 @@ html.pip-mode .app-restart-overlay:not(.app-restart-overlay--outdated) {
   width: 100%;
 }
 
+.auth-boot__actions--stack {
+  flex-direction: column;
+  align-items: stretch;
+}
+
+.auth-boot__actions--stack .q-btn {
+  width: 100%;
+}
+
 .auth-boot__check {
   display: flex;
   align-items: flex-start;
