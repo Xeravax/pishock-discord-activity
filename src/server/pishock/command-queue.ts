@@ -2,7 +2,48 @@ import { randomUUID } from 'node:crypto';
 import { HOLD_AUTO_END_GRACE_MS } from '../operate-policy.js';
 
 export const QUEUE_MAX_WAITING_TOTAL = 30;
+/** Fallback when owner has not configured a per-sender waiting cap. */
 export const QUEUE_MAX_WAITING_PER_SENDER = 3;
+/** Owner-configured minimum time before the next queue item may start. */
+export const QUEUE_PROGRESS_MIN_MS = 0;
+export const QUEUE_PROGRESS_MAX_MS = 60_000;
+export const QUEUE_MAX_PER_SENDER_MIN = 1;
+/** Soft ceiling only — Prisma Int / abuse guard, not a product limit of 10. */
+export const QUEUE_MAX_PER_SENDER_MAX = 1_000_000;
+export const QUEUE_MAX_SENDER_MS_MIN = 0;
+export const QUEUE_MAX_SENDER_MS_MAX = 300_000;
+
+/**
+ * How long the queue holds an item before advancing.
+ * Never shorter than the command itself (plus hold grace), so ops don't overlap.
+ */
+export function resolveQueueAdvanceMs(durationMs: number, progressMs: number): number {
+  const commandHold = Math.max(0, durationMs) + HOLD_AUTO_END_GRACE_MS;
+  const configured = Math.max(
+    QUEUE_PROGRESS_MIN_MS,
+    Math.min(QUEUE_PROGRESS_MAX_MS, Math.floor(Number(progressMs) || 0)),
+  );
+  return Math.max(commandHold, configured);
+}
+
+export function clampQueueMaxPerSender(value: unknown): number {
+  const n = Math.floor(Number(value));
+  if (!Number.isFinite(n)) return QUEUE_MAX_WAITING_PER_SENDER;
+  return Math.max(QUEUE_MAX_PER_SENDER_MIN, Math.min(QUEUE_MAX_PER_SENDER_MAX, n));
+}
+
+export function clampQueueMaxSenderMs(value: unknown): number {
+  const n = Math.floor(Number(value));
+  if (!Number.isFinite(n)) return 30_000;
+  return Math.max(QUEUE_MAX_SENDER_MS_MIN, Math.min(QUEUE_MAX_SENDER_MS_MAX, n));
+}
+
+export type QueueOwnerLimits = {
+  progressMs: number;
+  maxPerSender: number;
+  /** 0 = unlimited */
+  maxSenderMs: number;
+};
 
 export type QueuedOperation = 'shock' | 'vibrate' | 'beep' | 'hold' | 'warning';
 
@@ -38,6 +79,10 @@ export type QueueTicketEvent = {
   status: 'queued' | 'started' | 'done' | 'removed' | 'failed';
   position: number | null;
   paused: boolean;
+  /** Estimated ms until this item starts (null when unknown / done). */
+  estimatedWaitMs: number | null;
+  /** Wall-clock estimate for when the item starts. */
+  estimatedStartAt: number | null;
   at: number;
 };
 
@@ -79,6 +124,8 @@ export class CommandQueueError extends Error {
 export type CommandQueueDeps = {
   /** Whether this executor currently has priority for this owner. */
   isStarred: (ownerDiscordUserId: string, executorDiscordUserId: string) => boolean | Promise<boolean>;
+  /** Owner queue timing / per-sender caps. */
+  getLimits: (ownerDiscordUserId: string) => QueueOwnerLimits | Promise<QueueOwnerLimits>;
   /** Re-check before running a waiting item. Return false to drop it. */
   validateBeforeRun: (item: QueueItemInternal) => boolean | Promise<boolean>;
   /** Publish the command to the device. */
@@ -95,6 +142,10 @@ type OwnerQueue = {
   paused: boolean;
   waiting: QueueItemInternal[];
   active: QueueItemInternal | null;
+  /** When the active item began occupying the slot (for ETA). */
+  activeStartedAt: number | null;
+  /** Planned advance hold for the active item. */
+  activeAdvanceMs: number | null;
   /** Incremented to cancel in-flight sleep / advance loops. */
   generation: number;
   running: boolean;
@@ -142,6 +193,8 @@ export function createCommandQueue(deps: CommandQueueDeps) {
         paused: false,
         waiting: [],
         active: null,
+        activeStartedAt: null,
+        activeAdvanceMs: null,
         generation: 0,
         running: false,
         wake: [],
@@ -155,6 +208,12 @@ export function createCommandQueue(deps: CommandQueueDeps) {
     q.generation += 1;
     const waiters = q.wake.splice(0, q.wake.length);
     for (const resolve of waiters) resolve();
+  }
+
+  function clearActiveSlot(q: OwnerQueue): void {
+    q.active = null;
+    q.activeStartedAt = null;
+    q.activeAdvanceMs = null;
   }
 
   async function sleepUntilDoneOrSkipped(ownerDiscordUserId: string, ms: number): Promise<void> {
@@ -208,6 +267,7 @@ export function createCommandQueue(deps: CommandQueueDeps) {
     status: QueueTicketEvent['status'],
     position: number | null,
     paused: boolean,
+    eta?: { estimatedWaitMs: number | null; estimatedStartAt: number | null },
   ): void {
     deps.onTicket({
       type: 'queue_ticket',
@@ -217,22 +277,57 @@ export function createCommandQueue(deps: CommandQueueDeps) {
       status,
       position,
       paused,
+      estimatedWaitMs: eta?.estimatedWaitMs ?? (status === 'started' ? 0 : null),
+      estimatedStartAt:
+        eta?.estimatedStartAt ?? (status === 'started' ? now() : null),
       at: now(),
     });
   }
 
+  function remainingActiveMs(q: OwnerQueue): number {
+    if (!q.active || q.activeStartedAt == null || q.activeAdvanceMs == null) return 0;
+    const elapsed = Math.max(0, now() - q.activeStartedAt);
+    return Math.max(0, q.activeAdvanceMs - elapsed);
+  }
+
+  async function estimateWaitMs(
+    ownerDiscordUserId: string,
+    itemId: string,
+  ): Promise<number | null> {
+    const q = ensure(ownerDiscordUserId);
+    const limits = await deps.getLimits(ownerDiscordUserId);
+    if (q.active?.id === itemId) return 0;
+    const ordered = await orderedWaiting(ownerDiscordUserId, q.waiting);
+    const idx = ordered.findIndex((w) => w.id === itemId);
+    if (idx < 0) return null;
+    let wait = remainingActiveMs(q);
+    for (let i = 0; i < idx; i++) {
+      wait += resolveQueueAdvanceMs(ordered[i]!.durationMs, limits.progressMs);
+    }
+    return wait;
+  }
+
   async function positionOf(ownerDiscordUserId: string, itemId: string): Promise<number | null> {
-    const state = await snapshot(ownerDiscordUserId);
-    if (state.active?.id === itemId) return 0;
-    const idx = state.waiting.findIndex((w) => w.id === itemId);
+    const q = ensure(ownerDiscordUserId);
+    if (q.active?.id === itemId) return 0;
+    const ordered = await orderedWaiting(ownerDiscordUserId, q.waiting);
+    const idx = ordered.findIndex((w) => w.id === itemId);
     return idx >= 0 ? idx + 1 : null;
   }
 
   async function notifyWaitingPositions(ownerDiscordUserId: string): Promise<void> {
     const q = ensure(ownerDiscordUserId);
     const ordered = await orderedWaiting(ownerDiscordUserId, q.waiting);
+    const limits = await deps.getLimits(ownerDiscordUserId);
+    let wait = remainingActiveMs(q);
     for (let i = 0; i < ordered.length; i++) {
-      emitTicket(ordered[i]!, 'queued', i + 1, q.paused);
+      const item = ordered[i]!;
+      const estimatedWaitMs = wait;
+      emitTicket(item, 'queued', i + 1, q.paused, {
+        estimatedWaitMs,
+        estimatedStartAt: now() + estimatedWaitMs,
+      });
+      wait += resolveQueueAdvanceMs(item.durationMs, limits.progressMs);
     }
   }
 
@@ -280,14 +375,24 @@ export function createCommandQueue(deps: CommandQueueDeps) {
         const gen = q.generation;
         const ok = await deps.validateBeforeRun(next);
         if (!ok) {
-          emitTicket(next, 'removed', null, q.paused);
+          emitTicket(next, 'removed', null, q.paused, {
+            estimatedWaitMs: null,
+            estimatedStartAt: null,
+          });
           await emitState(ownerDiscordUserId);
           await notifyWaitingPositions(ownerDiscordUserId);
           continue;
         }
 
+        const limits = await deps.getLimits(ownerDiscordUserId);
+        const waitMs = resolveQueueAdvanceMs(next.durationMs, limits.progressMs);
         q.active = next;
-        emitTicket(next, 'started', 0, q.paused);
+        q.activeStartedAt = now();
+        q.activeAdvanceMs = waitMs;
+        emitTicket(next, 'started', 0, q.paused, {
+          estimatedWaitMs: 0,
+          estimatedStartAt: now(),
+        });
         await emitState(ownerDiscordUserId);
         await notifyWaitingPositions(ownerDiscordUserId);
 
@@ -303,7 +408,6 @@ export function createCommandQueue(deps: CommandQueueDeps) {
           continue;
         }
 
-        const waitMs = Math.max(0, next.durationMs + HOLD_AUTO_END_GRACE_MS);
         if (waitMs > 0 && !failed) {
           await sleepUntilDoneOrSkipped(ownerDiscordUserId, waitMs);
         }
@@ -313,8 +417,11 @@ export function createCommandQueue(deps: CommandQueueDeps) {
         }
 
         if (q.active?.id === next.id) {
-          q.active = null;
-          emitTicket(next, failed ? 'failed' : 'done', null, q.paused);
+          clearActiveSlot(q);
+          emitTicket(next, failed ? 'failed' : 'done', null, q.paused, {
+            estimatedWaitMs: null,
+            estimatedStartAt: null,
+          });
           await emitState(ownerDiscordUserId);
         }
       }
@@ -331,9 +438,13 @@ export function createCommandQueue(deps: CommandQueueDeps) {
     itemId: string;
     position: number;
     paused: boolean;
+    estimatedWaitMs: number;
+    estimatedStartAt: number;
     state: QueueStatePublic;
   }> {
     const q = ensure(input.ownerDiscordUserId);
+    const limits = await deps.getLimits(input.ownerDiscordUserId);
+
     if (q.waiting.length >= QUEUE_MAX_WAITING_TOTAL) {
       throw new CommandQueueError(
         'Command queue is full — try again shortly',
@@ -341,15 +452,37 @@ export function createCommandQueue(deps: CommandQueueDeps) {
         'QUEUE_FULL',
       );
     }
-    const fromSender = q.waiting.filter(
+
+    const senderWaiting = q.waiting.filter(
       (w) => w.executorDiscordUserId === input.executorDiscordUserId,
-    ).length;
-    if (fromSender >= QUEUE_MAX_WAITING_PER_SENDER) {
+    );
+    if (senderWaiting.length >= limits.maxPerSender) {
       throw new CommandQueueError(
-        'Too many of your commands are already waiting',
+        `You can only queue ${limits.maxPerSender} command${limits.maxPerSender === 1 ? '' : 's'} ahead for this person`,
         429,
         'QUEUE_SENDER_FULL',
       );
+    }
+
+    const newAdvance = resolveQueueAdvanceMs(input.durationMs, limits.progressMs);
+    if (limits.maxSenderMs > 0) {
+      let senderMs = 0;
+      if (
+        q.active &&
+        q.active.executorDiscordUserId === input.executorDiscordUserId
+      ) {
+        senderMs += remainingActiveMs(q);
+      }
+      for (const w of senderWaiting) {
+        senderMs += resolveQueueAdvanceMs(w.durationMs, limits.progressMs);
+      }
+      if (senderMs + newAdvance > limits.maxSenderMs) {
+        throw new CommandQueueError(
+          `That would exceed this person's max queue time (${Math.round(limits.maxSenderMs / 1000)}s) for you`,
+          429,
+          'QUEUE_SENDER_TIME',
+        );
+      }
     }
 
     const item: QueueItemInternal = {
@@ -362,12 +495,21 @@ export function createCommandQueue(deps: CommandQueueDeps) {
 
     const state = await emitState(input.ownerDiscordUserId);
     const position = (await positionOf(input.ownerDiscordUserId, item.id)) ?? state.waiting.length;
-    emitTicket(item, 'queued', position, q.paused);
+    const estimatedWaitMs = (await estimateWaitMs(input.ownerDiscordUserId, item.id)) ?? 0;
+    const estimatedStartAt = now() + estimatedWaitMs;
+    emitTicket(item, 'queued', position, q.paused, { estimatedWaitMs, estimatedStartAt });
     await notifyWaitingPositions(input.ownerDiscordUserId);
 
     void pump(input.ownerDiscordUserId);
 
-    return { itemId: item.id, position, paused: q.paused, state };
+    return {
+      itemId: item.id,
+      position,
+      paused: q.paused,
+      estimatedWaitMs,
+      estimatedStartAt,
+      state,
+    };
   }
 
   async function setPaused(ownerDiscordUserId: string, paused: boolean): Promise<QueueStatePublic> {
@@ -410,13 +552,16 @@ export function createCommandQueue(deps: CommandQueueDeps) {
       return emitState(ownerDiscordUserId);
     }
     bumpGeneration(q);
-    q.active = null;
+    clearActiveSlot(q);
     try {
       await deps.endActive(active);
     } catch {
       // Device may already be idle.
     }
-    emitTicket(active, 'removed', null, q.paused);
+    emitTicket(active, 'removed', null, q.paused, {
+      estimatedWaitMs: null,
+      estimatedStartAt: null,
+    });
     const state = await emitState(ownerDiscordUserId);
     if (!q.paused) void pump(ownerDiscordUserId);
     return state;
@@ -434,10 +579,13 @@ export function createCommandQueue(deps: CommandQueueDeps) {
     bumpGeneration(q);
     const removed = q.waiting.splice(0, q.waiting.length);
     for (const item of removed) {
-      emitTicket(item, 'removed', null, q.paused);
+      emitTicket(item, 'removed', null, q.paused, {
+        estimatedWaitMs: null,
+        estimatedStartAt: null,
+      });
     }
     const active = q.active;
-    q.active = null;
+    clearActiveSlot(q);
     if (active) {
       if (opts?.endActiveDevice !== false) {
         try {
@@ -446,7 +594,10 @@ export function createCommandQueue(deps: CommandQueueDeps) {
           // ignore
         }
       }
-      emitTicket(active, 'removed', null, q.paused);
+      emitTicket(active, 'removed', null, q.paused, {
+        estimatedWaitMs: null,
+        estimatedStartAt: null,
+      });
     }
     return emitState(ownerDiscordUserId);
   }
@@ -493,7 +644,7 @@ export function createCommandQueue(deps: CommandQueueDeps) {
     for (const q of queues.values()) {
       bumpGeneration(q);
       q.waiting = [];
-      q.active = null;
+      clearActiveSlot(q);
       q.paused = false;
       q.running = false;
     }

@@ -38,6 +38,10 @@ export type RealtimeEvent =
       type: 'queue_state';
       ownerDiscordUserId: string;
       enabled: boolean;
+      progressMs: number;
+      maxPerSender: number;
+      maxSenderMs: number;
+      starOnly: boolean;
       paused: boolean;
       active: {
         id: string;
@@ -79,6 +83,8 @@ export type RealtimeEvent =
       status: 'queued' | 'started' | 'done' | 'removed' | 'failed';
       position: number | null;
       paused: boolean;
+      estimatedWaitMs: number | null;
+      estimatedStartAt: number | null;
       at: number;
     }
   | {

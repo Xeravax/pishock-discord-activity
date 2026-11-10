@@ -2,7 +2,7 @@ import type { AppEnv } from '../env.js';
 import { broadcastRealtime } from '../realtime.js';
 import { clearHoldAutoEnd, scheduleHoldAutoEnd } from '../operate-policy.js';
 import {
-  getCommandQueueEnabled,
+  getCommandQueueSettings,
   getConsent,
   isEmergencyStopped,
   isExecutorBanned,
@@ -120,8 +120,14 @@ function opFor(operation: QueuedOperation) {
 }
 
 async function validateQueuedItem(item: QueueItemInternal): Promise<boolean> {
-  if (!(await getCommandQueueEnabled(item.ownerDiscordUserId))) {
+  const settings = await getCommandQueueSettings(item.ownerDiscordUserId);
+  if (!settings.enabled) {
     return false;
+  }
+  if (settings.starOnly) {
+    if (!(await isQueueStarred(item.ownerDiscordUserId, item.executorDiscordUserId))) {
+      return false;
+    }
   }
   if (await isExecutorBanned(item.ownerDiscordUserId, item.executorDiscordUserId)) {
     return false;
@@ -311,12 +317,16 @@ async function executeQueuedItem(item: QueueItemInternal): Promise<void> {
 }
 
 async function emitQueueState(state: QueueStatePublic): Promise<void> {
-  const enabled = await getCommandQueueEnabled(state.ownerDiscordUserId);
+  const settings = await getCommandQueueSettings(state.ownerDiscordUserId);
   broadcastRealtime(
     {
       type: 'queue_state',
       ownerDiscordUserId: state.ownerDiscordUserId,
-      enabled,
+      enabled: settings.enabled,
+      progressMs: settings.progressMs,
+      maxPerSender: settings.maxPerSender,
+      maxSenderMs: settings.maxSenderMs,
+      starOnly: settings.starOnly,
       paused: state.paused,
       active: state.active,
       waiting: state.waiting,
@@ -328,6 +338,14 @@ async function emitQueueState(state: QueueStatePublic): Promise<void> {
 
 export const commandQueue = createCommandQueue({
   isStarred: (owner, executor) => isQueueStarred(owner, executor),
+  getLimits: async (owner) => {
+    const s = await getCommandQueueSettings(owner);
+    return {
+      progressMs: s.progressMs,
+      maxPerSender: s.maxPerSender,
+      maxSenderMs: s.maxSenderMs,
+    };
+  },
   validateBeforeRun: validateQueuedItem,
   execute: executeQueuedItem,
   endActive: endQueuedItem,

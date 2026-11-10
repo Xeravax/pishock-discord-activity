@@ -1,3 +1,5 @@
+import { useEffect, useState } from 'react';
+
 export type QueuePanelItem = {
   id: string;
   executorDiscordUserId: string;
@@ -14,13 +16,21 @@ export type QueuePanelItem = {
   priority: boolean;
 };
 
-type Props = {
+export type QueuePanelSettings = {
   enabled: boolean;
+  progressMs: number;
+  maxPerSender: number;
+  maxSenderMs: number;
+  starOnly: boolean;
+};
+
+type Props = {
+  settings: QueuePanelSettings;
   paused: boolean;
   active: QueuePanelItem | null;
   waiting: QueuePanelItem[];
   busy?: boolean;
-  onToggleEnabled: (enabled: boolean) => void;
+  onSettingsChange: (patch: Partial<QueuePanelSettings>) => void;
   onTogglePaused: (paused: boolean) => void;
   onSkip: () => void;
   onClear: () => void;
@@ -40,18 +50,62 @@ function formatDuration(ms: number): string {
 }
 
 export function QueuePanel({
-  enabled,
+  settings,
   paused,
   active,
   waiting,
   busy = false,
-  onToggleEnabled,
+  onSettingsChange,
   onTogglePaused,
   onSkip,
   onClear,
   onRemove,
   displayNameFor,
 }: Props) {
+  const { enabled, progressMs, maxPerSender, maxSenderMs, starOnly } = settings;
+  const [progressSecDraft, setProgressSecDraft] = useState(
+    () => Math.round(progressMs / 100) / 10,
+  );
+  const [maxSenderSecDraft, setMaxSenderSecDraft] = useState(
+    () => Math.round(maxSenderMs / 100) / 10,
+  );
+  const [maxPerSenderDraft, setMaxPerSenderDraft] = useState(maxPerSender);
+
+  useEffect(() => {
+    setProgressSecDraft(Math.round(progressMs / 100) / 10);
+  }, [progressMs]);
+  useEffect(() => {
+    setMaxSenderSecDraft(Math.round(maxSenderMs / 100) / 10);
+  }, [maxSenderMs]);
+  useEffect(() => {
+    setMaxPerSenderDraft(maxPerSender);
+  }, [maxPerSender]);
+
+  const commitProgress = () => {
+    const sec = Number(progressSecDraft);
+    const nextMs = Number.isFinite(sec)
+      ? Math.round(Math.max(0, Math.min(60, sec)) * 1000)
+      : progressMs;
+    setProgressSecDraft(Math.round(nextMs / 100) / 10);
+    if (nextMs !== progressMs) onSettingsChange({ progressMs: nextMs });
+  };
+
+  const commitMaxSender = () => {
+    const sec = Number(maxSenderSecDraft);
+    const nextMs = Number.isFinite(sec)
+      ? Math.round(Math.max(0, Math.min(300, sec)) * 1000)
+      : maxSenderMs;
+    setMaxSenderSecDraft(Math.round(nextMs / 100) / 10);
+    if (nextMs !== maxSenderMs) onSettingsChange({ maxSenderMs: nextMs });
+  };
+
+  const commitMaxPerSender = () => {
+    const n = Math.floor(Number(maxPerSenderDraft));
+    const next = Number.isFinite(n) ? Math.max(1, Math.min(1_000_000, n)) : maxPerSender;
+    setMaxPerSenderDraft(next);
+    if (next !== maxPerSender) onSettingsChange({ maxPerSender: next });
+  };
+
   return (
     <div className="queue-panel">
       <div className="row items-center justify-between queue-panel-header">
@@ -62,7 +116,7 @@ export function QueuePanel({
             type="checkbox"
             checked={enabled}
             disabled={busy}
-            onChange={(e) => onToggleEnabled(e.target.checked)}
+            onChange={(e) => onSettingsChange({ enabled: e.target.checked })}
           />
         </label>
       </div>
@@ -100,6 +154,92 @@ export function QueuePanel({
             </button>
             {paused ? <span className="text-warning text-caption">Paused</span> : null}
           </div>
+
+          <label className="queue-panel-progress">
+            <span className="text-caption text-grey-5">Advance after</span>
+            <span className="row items-center no-wrap q-gutter-xs">
+              <input
+                type="number"
+                min={0}
+                max={60}
+                step={0.5}
+                disabled={busy}
+                value={progressSecDraft}
+                aria-label="Minimum seconds before the next queue item"
+                onChange={(e) =>
+                  setProgressSecDraft(e.target.value === '' ? 0 : Number(e.target.value))
+                }
+                onBlur={commitProgress}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') e.currentTarget.blur();
+                }}
+              />
+              <span className="text-caption text-grey-5">s</span>
+            </span>
+          </label>
+
+          <label className="queue-panel-progress">
+            <span className="text-caption text-grey-5">Per person ahead</span>
+            <span className="row items-center no-wrap q-gutter-xs">
+              <input
+                type="number"
+                min={1}
+                max={1000000}
+                step={1}
+                disabled={busy}
+                value={maxPerSenderDraft}
+                aria-label="Max waiting commands per person"
+                onChange={(e) =>
+                  setMaxPerSenderDraft(e.target.value === '' ? 1 : Number(e.target.value))
+                }
+                onBlur={commitMaxPerSender}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') e.currentTarget.blur();
+                }}
+              />
+            </span>
+          </label>
+
+          <label className="queue-panel-progress">
+            <span className="text-caption text-grey-5">Max queue time / person</span>
+            <span className="row items-center no-wrap q-gutter-xs">
+              <input
+                type="number"
+                min={0}
+                max={300}
+                step={1}
+                disabled={busy}
+                value={maxSenderSecDraft}
+                aria-label="Max total queued seconds per person"
+                onChange={(e) =>
+                  setMaxSenderSecDraft(e.target.value === '' ? 0 : Number(e.target.value))
+                }
+                onBlur={commitMaxSender}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') e.currentTarget.blur();
+                }}
+              />
+              <span className="text-caption text-grey-5">s</span>
+            </span>
+            <span className="text-grey-6 queue-panel-progress-hint">
+              {maxSenderMs <= 0 ? 'Unlimited' : `Cap ${formatDuration(maxSenderMs)} of waiting time`}
+            </span>
+          </label>
+
+          <label className="queue-panel-toggle row items-center justify-between q-mt-xs">
+            <span className="text-caption text-grey-5">Stars only</span>
+            <input
+              type="checkbox"
+              checked={starOnly}
+              disabled={busy}
+              onChange={(e) => onSettingsChange({ starOnly: e.target.checked })}
+            />
+          </label>
+          {starOnly ? (
+            <div className="text-grey-6 queue-panel-progress-hint">
+              Only starred people can control your shockers.
+            </div>
+          ) : null}
 
           <div className="queue-panel-section">
             <div className="text-caption text-grey-5">Now</div>

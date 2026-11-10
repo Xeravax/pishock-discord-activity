@@ -4,17 +4,45 @@ import { broadcastRealtime } from '../realtime.js';
 import { commandQueue } from '../pishock/command-queue-runtime.js';
 import { CommandQueueError } from '../pishock/command-queue.js';
 import {
-  getCommandQueueEnabled,
+  getCommandQueueSettings,
   listQueueStars,
-  setCommandQueueEnabled,
+  setCommandQueueSettings,
   setQueueStar,
+  type CommandQueueSettings,
 } from '../session.js';
 
-function requireConsent(req: { hasConsent?: boolean }, reply: { code: (n: number) => { send: (b: unknown) => unknown } }) {
+function requireConsent(
+  req: { hasConsent?: boolean },
+  reply: { code: (n: number) => { send: (b: unknown) => unknown } },
+) {
   if (!req.hasConsent) {
     return reply.code(403).send({ error: 'Consent required', code: 'CONSENT_REQUIRED' });
   }
   return null;
+}
+
+async function broadcastOwnerQueueState(
+  ownerDiscordUserId: string,
+  settings: CommandQueueSettings,
+) {
+  const state = await commandQueue.snapshot(ownerDiscordUserId);
+  broadcastRealtime(
+    {
+      type: 'queue_state',
+      ownerDiscordUserId,
+      enabled: settings.enabled,
+      progressMs: settings.progressMs,
+      maxPerSender: settings.maxPerSender,
+      maxSenderMs: settings.maxSenderMs,
+      starOnly: settings.starOnly,
+      paused: state.paused,
+      active: state.active,
+      waiting: state.waiting,
+      at: Date.now(),
+    },
+    { discordUserId: ownerDiscordUserId },
+  );
+  return state;
 }
 
 export const queueRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app) => {
@@ -22,15 +50,47 @@ export const queueRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app) => {
     const blocked = requireConsent(req, reply);
     if (blocked) return blocked;
 
-    const enabled = await getCommandQueueEnabled(req.discordUser.id);
-    const state = await commandQueue.snapshot(req.discordUser.id);
-    const stars = await listQueueStars(req.discordUser.id);
+    const [settings, state, stars] = await Promise.all([
+      getCommandQueueSettings(req.discordUser.id),
+      commandQueue.snapshot(req.discordUser.id),
+      listQueueStars(req.discordUser.id),
+    ]);
     return {
-      enabled,
+      ...settings,
       paused: state.paused,
       active: state.active,
       waiting: state.waiting,
       stars,
+    };
+  });
+
+  app.post('/api/queue/settings', async (req, reply) => {
+    const blocked = requireConsent(req, reply);
+    if (blocked) return blocked;
+
+    const body = req.body as Partial<{
+      enabled: boolean;
+      progressMs: number;
+      maxPerSender: number;
+      maxSenderMs: number;
+      starOnly: boolean;
+    }>;
+
+    const before = await getCommandQueueSettings(req.discordUser.id);
+    const settings = await setCommandQueueSettings(req.discordUser.id, body);
+
+    if (before.enabled && !settings.enabled) {
+      await commandQueue.clearWaiting(req.discordUser.id);
+      await commandQueue.setPaused(req.discordUser.id, false);
+    }
+
+    const state = await broadcastOwnerQueueState(req.discordUser.id, settings);
+    return {
+      ok: true,
+      ...settings,
+      paused: state.paused,
+      active: state.active,
+      waiting: state.waiting,
     };
   });
 
@@ -43,30 +103,40 @@ export const queueRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app) => {
       return reply.code(400).send({ error: 'enabled boolean required' });
     }
 
-    const enabled = await setCommandQueueEnabled(req.discordUser.id, body.enabled);
-    if (!enabled) {
-      // Clear waiting; let the active command finish on its own.
+    const settings = await setCommandQueueSettings(req.discordUser.id, {
+      enabled: body.enabled,
+    });
+    if (!settings.enabled) {
       await commandQueue.clearWaiting(req.discordUser.id);
       await commandQueue.setPaused(req.discordUser.id, false);
     }
 
-    const state = await commandQueue.snapshot(req.discordUser.id);
-    broadcastRealtime(
-      {
-        type: 'queue_state',
-        ownerDiscordUserId: req.discordUser.id,
-        enabled,
-        paused: state.paused,
-        active: state.active,
-        waiting: state.waiting,
-        at: Date.now(),
-      },
-      { discordUserId: req.discordUser.id },
-    );
-
+    const state = await broadcastOwnerQueueState(req.discordUser.id, settings);
     return {
       ok: true,
-      enabled,
+      ...settings,
+      paused: state.paused,
+      active: state.active,
+      waiting: state.waiting,
+    };
+  });
+
+  app.post('/api/queue/progress', async (req, reply) => {
+    const blocked = requireConsent(req, reply);
+    if (blocked) return blocked;
+
+    const body = req.body as { progressMs?: number };
+    if (typeof body.progressMs !== 'number' || !Number.isFinite(body.progressMs)) {
+      return reply.code(400).send({ error: 'progressMs number required' });
+    }
+
+    const settings = await setCommandQueueSettings(req.discordUser.id, {
+      progressMs: body.progressMs,
+    });
+    const state = await broadcastOwnerQueueState(req.discordUser.id, settings);
+    return {
+      ok: true,
+      ...settings,
       paused: state.paused,
       active: state.active,
       waiting: state.waiting,
@@ -77,7 +147,8 @@ export const queueRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app) => {
     const blocked = requireConsent(req, reply);
     if (blocked) return blocked;
 
-    if (!(await getCommandQueueEnabled(req.discordUser.id))) {
+    const settings = await getCommandQueueSettings(req.discordUser.id);
+    if (!settings.enabled) {
       return reply.code(409).send({ error: 'Command queue is disabled', code: 'QUEUE_DISABLED' });
     }
 
@@ -87,45 +158,48 @@ export const queueRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app) => {
     }
 
     const state = await commandQueue.setPaused(req.discordUser.id, body.paused);
-    return { ok: true, enabled: true, ...state };
+    return { ok: true, ...settings, ...state };
   });
 
   app.post('/api/queue/skip', async (req, reply) => {
     const blocked = requireConsent(req, reply);
     if (blocked) return blocked;
 
-    if (!(await getCommandQueueEnabled(req.discordUser.id))) {
+    const settings = await getCommandQueueSettings(req.discordUser.id);
+    if (!settings.enabled) {
       return reply.code(409).send({ error: 'Command queue is disabled', code: 'QUEUE_DISABLED' });
     }
 
     const state = await commandQueue.skipActive(req.discordUser.id);
-    return { ok: true, enabled: true, ...state };
+    return { ok: true, ...settings, ...state };
   });
 
   app.post('/api/queue/clear', async (req, reply) => {
     const blocked = requireConsent(req, reply);
     if (blocked) return blocked;
 
-    if (!(await getCommandQueueEnabled(req.discordUser.id))) {
+    const settings = await getCommandQueueSettings(req.discordUser.id);
+    if (!settings.enabled) {
       return reply.code(409).send({ error: 'Command queue is disabled', code: 'QUEUE_DISABLED' });
     }
 
     const state = await commandQueue.clearWaiting(req.discordUser.id);
-    return { ok: true, enabled: true, ...state };
+    return { ok: true, ...settings, ...state };
   });
 
   app.delete('/api/queue/items/:itemId', async (req, reply) => {
     const blocked = requireConsent(req, reply);
     if (blocked) return blocked;
 
-    if (!(await getCommandQueueEnabled(req.discordUser.id))) {
+    const settings = await getCommandQueueSettings(req.discordUser.id);
+    if (!settings.enabled) {
       return reply.code(409).send({ error: 'Command queue is disabled', code: 'QUEUE_DISABLED' });
     }
 
     const itemId = String((req.params as { itemId: string }).itemId);
     try {
       const state = await commandQueue.removeItem(req.discordUser.id, itemId);
-      return { ok: true, enabled: true, ...state };
+      return { ok: true, ...settings, ...state };
     } catch (err) {
       if (err instanceof CommandQueueError) {
         return reply.code(err.status).send({ error: err.message, code: err.code });
@@ -150,21 +224,9 @@ export const queueRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app) => {
     }
 
     const starred = await setQueueStar(req.discordUser.id, starredDiscordUserId, body.starred);
-    // Re-broadcast queue so priority flags on waiting items refresh.
-    if (await getCommandQueueEnabled(req.discordUser.id)) {
-      const state = await commandQueue.snapshot(req.discordUser.id);
-      broadcastRealtime(
-        {
-          type: 'queue_state',
-          ownerDiscordUserId: req.discordUser.id,
-          enabled: true,
-          paused: state.paused,
-          active: state.active,
-          waiting: state.waiting,
-          at: Date.now(),
-        },
-        { discordUserId: req.discordUser.id },
-      );
+    const settings = await getCommandQueueSettings(req.discordUser.id);
+    if (settings.enabled) {
+      await broadcastOwnerQueueState(req.discordUser.id, settings);
     }
 
     return { ok: true, starred, discordUserId: starredDiscordUserId };

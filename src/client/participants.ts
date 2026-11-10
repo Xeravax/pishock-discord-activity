@@ -40,6 +40,16 @@ export type ParticipantStatus = {
   bannedYou: boolean;
   /** Caller's star — this person's commands to the caller get queue priority */
   priority?: boolean;
+  /** Their queue / access rules when you target them */
+  queue?: {
+    enabled: boolean;
+    starOnly: boolean;
+    starredByThem: boolean;
+    canOperate: boolean;
+    maxPerSender: number;
+    maxSenderMs: number;
+    progressMs: number;
+  };
   shockers: ParticipantShockerStatus[];
 };
 

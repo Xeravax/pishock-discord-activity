@@ -35,7 +35,11 @@ import {
   type ShareLimitRow,
 } from './components/ActivityLimitsSettings';
 import { FriendsParticipantList } from './components/FriendsParticipantList';
-import { QueuePanel, type QueuePanelItem } from './components/QueuePanel';
+import {
+  QueuePanel,
+  type QueuePanelItem,
+  type QueuePanelSettings,
+} from './components/QueuePanel';
 import { PsDialog } from './components/PsDialog';
 import { LinkConfirmPanel } from './components/LinkConfirmPanel';
 import { AuthLoadingScreen } from './components/AuthLoadingScreen';
@@ -60,8 +64,7 @@ type MeResponse = {
   commandQueueEnabled?: boolean;
 };
 
-type QueueState = {
-  enabled: boolean;
+type QueueState = QueuePanelSettings & {
   paused: boolean;
   active: QueuePanelItem | null;
   waiting: QueuePanelItem[];
@@ -73,8 +76,17 @@ type SenderQueueTicket = {
   status: string;
   position: number | null;
   paused: boolean;
+  estimatedWaitMs: number | null;
+  estimatedStartAt: number | null;
   at: number;
 };
+
+function formatQueueEta(waitMs: number | null | undefined): string | null {
+  if (waitMs == null || !Number.isFinite(waitMs)) return null;
+  if (waitMs <= 0) return 'now';
+  const sec = Math.max(1, Math.round(waitMs / 1000));
+  return `~${sec}s`;
+}
 
 type DevicesResponse = {
   hubs: Array<Record<string, unknown>>;
@@ -146,6 +158,10 @@ export function App() {
   >({});
   const [queueState, setQueueState] = useState<QueueState>({
     enabled: false,
+    progressMs: 0,
+    maxPerSender: 3,
+    maxSenderMs: 30_000,
+    starOnly: false,
     paused: false,
     active: null,
     waiting: [],
@@ -162,14 +178,13 @@ export function App() {
   const linkPollGenRef = useRef(0);
 
   const refreshQueue = useCallback(async (accessToken: string) => {
-    const data = await apiFetch<{
-      enabled: boolean;
-      paused: boolean;
-      active: QueuePanelItem | null;
-      waiting: QueuePanelItem[];
-    }>('/queue', accessToken);
+    const data = await apiFetch<QueueState & { stars?: string[] }>('/queue', accessToken);
     setQueueState({
       enabled: Boolean(data.enabled),
+      progressMs: Number(data.progressMs) || 0,
+      maxPerSender: Number(data.maxPerSender) || 3,
+      maxSenderMs: Number(data.maxSenderMs) || 0,
+      starOnly: Boolean(data.starOnly),
       paused: Boolean(data.paused),
       active: data.active ?? null,
       waiting: data.waiting ?? [],
@@ -468,6 +483,10 @@ export function App() {
         if (selfIdRef.current && event.ownerDiscordUserId === selfIdRef.current) {
           setQueueState({
             enabled: Boolean(event.enabled),
+            progressMs: Number(event.progressMs) || 0,
+            maxPerSender: Number(event.maxPerSender) || 3,
+            maxSenderMs: Number(event.maxSenderMs) || 0,
+            starOnly: Boolean(event.starOnly),
             paused: Boolean(event.paused),
             active: event.active ?? null,
             waiting: event.waiting ?? [],
@@ -486,6 +505,8 @@ export function App() {
             status: event.status,
             position: event.position,
             paused: event.paused,
+            estimatedWaitMs: event.estimatedWaitMs,
+            estimatedStartAt: event.estimatedStartAt,
             at: event.at,
           });
           if (
@@ -1056,6 +1077,8 @@ export function App() {
           itemId?: string;
           position?: number;
           paused?: boolean;
+          estimatedWaitMs?: number;
+          estimatedStartAt?: number;
         }>(`/participants/${targetId}/operate`, token, {
           method: 'POST',
           body: JSON.stringify({ ...input, instanceId, locationHint }),
@@ -1067,6 +1090,8 @@ export function App() {
             status: 'queued',
             position: result.position ?? null,
             paused: Boolean(result.paused),
+            estimatedWaitMs: result.estimatedWaitMs ?? null,
+            estimatedStartAt: result.estimatedStartAt ?? null,
             at: Date.now(),
           });
         }
@@ -1089,6 +1114,14 @@ export function App() {
       } else if (err instanceof ApiError && err.code === 'EMERGENCY_STOP') {
         setActionError('Emergency stop is engaged — owner must release STOP');
         if (token) void refreshParticipantStatus(token, participants, true).catch(() => undefined);
+      } else if (err instanceof ApiError && err.code === 'STAR_ONLY') {
+        setActionError('They only accept commands from starred people');
+        if (token) void refreshParticipantStatus(token, participants, true).catch(() => undefined);
+      } else if (
+        err instanceof ApiError &&
+        (err.code === 'QUEUE_SENDER_FULL' || err.code === 'QUEUE_SENDER_TIME' || err.code === 'QUEUE_FULL')
+      ) {
+        setActionError(err.message);
       } else {
         setActionError(err instanceof Error ? err.message : String(err));
       }
@@ -1098,22 +1131,41 @@ export function App() {
     }
   };
 
-  const setQueueEnabled = async (enabled: boolean) => {
+  const applyQueueState = (result: Partial<QueueState> & { enabled?: boolean }) => {
+    setQueueState((prev) => ({
+      enabled: typeof result.enabled === 'boolean' ? result.enabled : prev.enabled,
+      progressMs:
+        typeof result.progressMs === 'number' && Number.isFinite(result.progressMs)
+          ? result.progressMs
+          : prev.progressMs,
+      maxPerSender:
+        typeof result.maxPerSender === 'number' && Number.isFinite(result.maxPerSender)
+          ? result.maxPerSender
+          : prev.maxPerSender,
+      maxSenderMs:
+        typeof result.maxSenderMs === 'number' && Number.isFinite(result.maxSenderMs)
+          ? result.maxSenderMs
+          : prev.maxSenderMs,
+      starOnly: typeof result.starOnly === 'boolean' ? result.starOnly : prev.starOnly,
+      paused: typeof result.paused === 'boolean' ? result.paused : prev.paused,
+      active: result.active !== undefined ? result.active : prev.active,
+      waiting: result.waiting !== undefined ? result.waiting : prev.waiting,
+    }));
+  };
+
+  const patchQueueSettings = async (patch: Partial<QueuePanelSettings>) => {
     if (!token) return;
     setQueueBusy(true);
     setActionError(null);
     try {
-      const result = await apiFetch<QueueState & { ok: boolean }>('/queue/enabled', token, {
+      const result = await apiFetch<QueueState & { ok: boolean }>('/queue/settings', token, {
         method: 'POST',
-        body: JSON.stringify({ enabled }),
+        body: JSON.stringify(patch),
       });
-      setQueueState({
-        enabled: Boolean(result.enabled),
-        paused: Boolean(result.paused),
-        active: result.active ?? null,
-        waiting: result.waiting ?? [],
-      });
-      setMe((prev) => (prev ? { ...prev, commandQueueEnabled: Boolean(result.enabled) } : prev));
+      applyQueueState(result);
+      if (typeof result.enabled === 'boolean') {
+        setMe((prev) => (prev ? { ...prev, commandQueueEnabled: result.enabled } : prev));
+      }
     } catch (err) {
       setActionError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -1130,12 +1182,7 @@ export function App() {
         method: 'POST',
         body: JSON.stringify({ paused }),
       });
-      setQueueState({
-        enabled: true,
-        paused: Boolean(result.paused),
-        active: result.active ?? null,
-        waiting: result.waiting ?? [],
-      });
+      applyQueueState({ ...result, enabled: true });
     } catch (err) {
       setActionError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -1152,12 +1199,7 @@ export function App() {
         method: 'POST',
         body: JSON.stringify({}),
       });
-      setQueueState({
-        enabled: true,
-        paused: Boolean(result.paused),
-        active: result.active ?? null,
-        waiting: result.waiting ?? [],
-      });
+      applyQueueState({ ...result, enabled: true });
     } catch (err) {
       setActionError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -1174,12 +1216,7 @@ export function App() {
         method: 'POST',
         body: JSON.stringify({}),
       });
-      setQueueState({
-        enabled: true,
-        paused: Boolean(result.paused),
-        active: result.active ?? null,
-        waiting: result.waiting ?? [],
-      });
+      applyQueueState({ ...result, enabled: true });
     } catch (err) {
       setActionError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -1197,12 +1234,7 @@ export function App() {
         token,
         { method: 'DELETE' },
       );
-      setQueueState({
-        enabled: true,
-        paused: Boolean(result.paused),
-        active: result.active ?? null,
-        waiting: result.waiting ?? [],
-      });
+      applyQueueState({ ...result, enabled: true });
     } catch (err) {
       setActionError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -1387,7 +1419,11 @@ export function App() {
   );
 
   const saveSetupDiscordShares = useCallback(
-    async (result: { shares: ActivityShareConfig[]; personal: PersonalLimits }) => {
+    async (result: {
+      shares: ActivityShareConfig[];
+      personal: PersonalLimits;
+      queue?: QueuePanelSettings;
+    }) => {
       setSetupShareBusy(true);
       setLinkError(null);
       try {
@@ -1407,13 +1443,23 @@ export function App() {
           canHold: s.canHold,
         }));
         await saveSettings({ personal: result.personal, shares });
+        if (result.queue && token) {
+          const queueResult = await apiFetch<QueueState & { ok: boolean }>('/queue/settings', token, {
+            method: 'POST',
+            body: JSON.stringify(result.queue),
+          });
+          applyQueueState(queueResult);
+          setMe((prev) =>
+            prev ? { ...prev, commandQueueEnabled: Boolean(queueResult.enabled) } : prev,
+          );
+        }
         finishSetupShare();
       } catch (err) {
         setLinkError(err instanceof Error ? err.message : String(err));
         setSetupShareBusy(false);
       }
     },
-    [saveSettings, finishSetupShare],
+    [saveSettings, finishSetupShare, token],
   );
 
   useEffect(() => {
@@ -1651,75 +1697,38 @@ export function App() {
             individualIntensity,
             onToggleIndividualIntensity,
           }) => (
-            <div className="column q-gutter-xs">
-              {me.pishockLinked ? (
-                <QueuePanel
-                  enabled={queueState.enabled}
-                  paused={queueState.paused}
-                  active={queueState.active}
-                  waiting={queueState.waiting}
-                  busy={queueBusy}
-                  onToggleEnabled={(enabled) => void setQueueEnabled(enabled)}
-                  onTogglePaused={(paused) => void setQueuePaused(paused)}
-                  onSkip={() => void skipQueue()}
-                  onClear={() => void clearQueue()}
-                  onRemove={(itemId) => void removeQueueItem(itemId)}
-                  displayNameFor={(item) => {
-                    const fromRoster = participants.find(
-                      (p) => p.id === item.executorDiscordUserId,
-                    );
-                    return (
-                      fromRoster?.displayName ||
-                      item.executorGlobalName ||
-                      item.executorUsername ||
-                      'Someone'
-                    );
-                  }}
-                />
-              ) : null}
-              {myQueueTicket &&
-              (myQueueTicket.status === 'queued' || myQueueTicket.status === 'started') ? (
-                <div className="queue-ticket-banner text-caption">
-                  {myQueueTicket.status === 'started'
-                    ? 'Your command is running'
-                    : myQueueTicket.paused
-                      ? `Paused · #${myQueueTicket.position ?? '?'}`
-                      : `In queue · #${myQueueTicket.position ?? '?'}`}
-                </div>
-              ) : null}
-              <FriendsParticipantList
-                participants={participants}
-                statuses={participantStatus}
-                currentUserId={me.user.id}
-                selectedTargetId={selectedTargetId}
-                selectedTargetIds={selectedTargetIds}
-                multiSelect={multiShock}
-                onToggleMultiSelect={onToggleMultiShock}
-                individualIntensity={individualIntensity}
-                onToggleIndividualIntensity={onToggleIndividualIntensity}
-                onSelect={(id) => {
-                  if (!id) {
-                    setSelectedTargetIds([]);
-                    return;
-                  }
-                  if (multiShock) {
-                    setSelectedTargetIds((prev) =>
-                      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id],
-                    );
-                    return;
-                  }
-                  setSelectedTargetIds((prev) =>
-                    prev.length === 1 && prev[0] === id ? [] : [id],
-                  );
-                }}
-                onRefresh={() => token && refreshParticipants(token, true)}
-                onTogglePriority={
-                  me.pishockLinked
-                    ? (id, starred) => void toggleQueueStar(id, starred)
-                    : undefined
+            <FriendsParticipantList
+              participants={participants}
+              statuses={participantStatus}
+              currentUserId={me.user.id}
+              selectedTargetId={selectedTargetId}
+              selectedTargetIds={selectedTargetIds}
+              multiSelect={multiShock}
+              onToggleMultiSelect={onToggleMultiShock}
+              individualIntensity={individualIntensity}
+              onToggleIndividualIntensity={onToggleIndividualIntensity}
+              onSelect={(id) => {
+                if (!id) {
+                  setSelectedTargetIds([]);
+                  return;
                 }
-              />
-            </div>
+                if (multiShock) {
+                  setSelectedTargetIds((prev) =>
+                    prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id],
+                  );
+                  return;
+                }
+                setSelectedTargetIds((prev) =>
+                  prev.length === 1 && prev[0] === id ? [] : [id],
+                );
+              }}
+              onRefresh={() => token && refreshParticipants(token, true)}
+              onTogglePriority={
+                me.pishockLinked
+                  ? (id, starred) => void toggleQueueStar(id, starred)
+                  : undefined
+              }
+            />
           )}
           onOperate={(input) =>
             operate({
@@ -2076,7 +2085,53 @@ export function App() {
           />
         </PsDialog>
 
-        <OfficialLogsFab count={officialLogEntries.length} onClick={openOfficialLogs} />
+        <div className="official-right-rail">
+          {me.pishockLinked ? (
+            <QueuePanel
+              settings={{
+                enabled: queueState.enabled,
+                progressMs: queueState.progressMs,
+                maxPerSender: queueState.maxPerSender,
+                maxSenderMs: queueState.maxSenderMs,
+                starOnly: queueState.starOnly,
+              }}
+              paused={queueState.paused}
+              active={queueState.active}
+              waiting={queueState.waiting}
+              busy={queueBusy}
+              onSettingsChange={(patch) => void patchQueueSettings(patch)}
+              onTogglePaused={(paused) => void setQueuePaused(paused)}
+              onSkip={() => void skipQueue()}
+              onClear={() => void clearQueue()}
+              onRemove={(itemId) => void removeQueueItem(itemId)}
+              displayNameFor={(item) => {
+                const fromRoster = participants.find((p) => p.id === item.executorDiscordUserId);
+                return (
+                  fromRoster?.displayName ||
+                  item.executorGlobalName ||
+                  item.executorUsername ||
+                  'Someone'
+                );
+              }}
+            />
+          ) : null}
+          {myQueueTicket &&
+          (myQueueTicket.status === 'queued' || myQueueTicket.status === 'started') ? (
+            <div className="queue-ticket-banner text-caption">
+              {myQueueTicket.status === 'started'
+                ? 'Your command is running'
+                : (() => {
+                    const eta = formatQueueEta(myQueueTicket.estimatedWaitMs);
+                    const pos = `#${myQueueTicket.position ?? '?'}`;
+                    if (myQueueTicket.paused) {
+                      return eta ? `Paused · ${pos} · starts in ${eta}` : `Paused · ${pos}`;
+                    }
+                    return eta ? `In queue · ${pos} · arrives in ${eta}` : `In queue · ${pos}`;
+                  })()}
+            </div>
+          ) : null}
+          <OfficialLogsFab count={officialLogEntries.length} onClick={openOfficialLogs} />
+        </div>
         <OfficialLogsPanel
           open={logsOpen || overlay === 'logs'}
           entries={officialLogEntries}

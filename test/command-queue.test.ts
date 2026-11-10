@@ -5,10 +5,12 @@ import {
   QUEUE_MAX_WAITING_PER_SENDER,
   QUEUE_MAX_WAITING_TOTAL,
   createCommandQueue,
+  resolveQueueAdvanceMs,
   type QueueEnqueueInput,
   type QueueItemInternal,
   type QueueTicketEvent,
 } from '../src/server/pishock/command-queue.js';
+import { HOLD_AUTO_END_GRACE_MS } from '../src/server/operate-policy.js';
 
 function baseInput(
   overrides: Partial<QueueEnqueueInput> &
@@ -39,10 +41,14 @@ type Harness = {
   stars: Set<string>;
   advance: (ms: number) => Promise<void>;
   flush: () => Promise<void>;
+  setProgressMs: (ms: number) => void;
 };
 
 function makeHarness(opts?: {
   validate?: (item: QueueItemInternal) => boolean | Promise<boolean>;
+  progressMs?: number;
+  maxPerSender?: number;
+  maxSenderMs?: number;
 }): Harness {
   let now = 1_000_000;
   const timers: Array<{ at: number; resolve: () => void }> = [];
@@ -50,6 +56,9 @@ function makeHarness(opts?: {
   const ended: string[] = [];
   const tickets: QueueTicketEvent[] = [];
   const stars = new Set<string>();
+  let progressMs = opts?.progressMs ?? 0;
+  let maxPerSender = opts?.maxPerSender ?? QUEUE_MAX_WAITING_PER_SENDER;
+  let maxSenderMs = opts?.maxSenderMs ?? 0;
 
   const sleep = (ms: number) =>
     new Promise<void>((resolve) => {
@@ -79,6 +88,7 @@ function makeHarness(opts?: {
     now: () => now,
     sleep,
     isStarred: (owner, executor) => stars.has(`${owner}:${executor}`),
+    getLimits: () => ({ progressMs, maxPerSender, maxSenderMs }),
     validateBeforeRun: opts?.validate ?? (async () => true),
     execute: async (item) => {
       executed.push(item.id);
@@ -90,10 +100,45 @@ function makeHarness(opts?: {
     onTicket: (t) => tickets.push(t),
   });
 
-  return { queue, executed, ended, tickets, stars, advance, flush };
+  return {
+    queue,
+    executed,
+    ended,
+    tickets,
+    stars,
+    advance,
+    flush,
+    setProgressMs: (ms: number) => {
+      progressMs = ms;
+    },
+  };
 }
 
 describe('command queue', () => {
+  it('resolveQueueAdvanceMs never goes below command duration + grace', () => {
+    assert.equal(resolveQueueAdvanceMs(100, 0), 100 + HOLD_AUTO_END_GRACE_MS);
+    assert.equal(resolveQueueAdvanceMs(100, 50), 100 + HOLD_AUTO_END_GRACE_MS);
+    assert.equal(resolveQueueAdvanceMs(100, 5_000), 5_000);
+  });
+
+  it('honors owner progressMs when longer than the command', async () => {
+    const h = makeHarness({ progressMs: 1_000 });
+    const first = await h.queue.enqueue(
+      baseInput({ ownerDiscordUserId: 'owner', executorDiscordUserId: 'a', durationMs: 40 }),
+    );
+    const second = await h.queue.enqueue(
+      baseInput({ ownerDiscordUserId: 'owner', executorDiscordUserId: 'b', durationMs: 40 }),
+    );
+    await h.flush();
+    assert.equal(h.executed[0], first.itemId);
+    await h.advance(300);
+    await h.flush();
+    assert.equal(h.executed.length, 1);
+    await h.advance(800);
+    await h.flush();
+    assert.equal(h.executed[1], second.itemId);
+  });
+
   it('runs starred senders before open-lane FIFO', async () => {
     const h = makeHarness();
     const a = await h.queue.enqueue(
@@ -207,7 +252,7 @@ describe('command queue', () => {
   });
 
   it('enforces per-sender and total waiting caps', async () => {
-    const h = makeHarness();
+    const h = makeHarness({ maxPerSender: QUEUE_MAX_WAITING_PER_SENDER });
     await h.queue.setPaused('owner', true);
     for (let i = 0; i < QUEUE_MAX_WAITING_PER_SENDER; i++) {
       await h.queue.enqueue(
@@ -245,6 +290,34 @@ describe('command queue', () => {
         ),
       (err: unknown) => err instanceof CommandQueueError && err.code === 'QUEUE_FULL',
     );
+  });
+
+  it('enforces max total queue time per sender', async () => {
+    const h = makeHarness({ maxSenderMs: 500, progressMs: 400 });
+    await h.queue.setPaused('owner', true);
+    await h.queue.enqueue(
+      baseInput({ ownerDiscordUserId: 'owner', executorDiscordUserId: 'a', durationMs: 100 }),
+    );
+    await assert.rejects(
+      () =>
+        h.queue.enqueue(
+          baseInput({ ownerDiscordUserId: 'owner', executorDiscordUserId: 'a', durationMs: 100 }),
+        ),
+      (err: unknown) => err instanceof CommandQueueError && err.code === 'QUEUE_SENDER_TIME',
+    );
+  });
+
+  it('returns an arrival estimate when enqueueing', async () => {
+    const h = makeHarness({ progressMs: 1_000 });
+    await h.queue.setPaused('owner', true);
+    const first = await h.queue.enqueue(
+      baseInput({ ownerDiscordUserId: 'owner', executorDiscordUserId: 'a', durationMs: 100 }),
+    );
+    const second = await h.queue.enqueue(
+      baseInput({ ownerDiscordUserId: 'owner', executorDiscordUserId: 'b', durationMs: 100 }),
+    );
+    assert.equal(first.estimatedWaitMs, 0);
+    assert.ok(second.estimatedWaitMs >= 1_000);
   });
 
   it('keeps separate queues per wearer', async () => {

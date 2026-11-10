@@ -25,11 +25,13 @@ import {
 } from '../operate-policy.js';
 import {
   getCommandQueueEnabled,
+  getCommandQueueSettings,
   getConsent,
   getEmergencyStopShockerIds,
   isEmergencyStopped,
   isExecutorBanned,
   listEnabledActivityShares,
+  isQueueStarred,
   listQueueStars,
   loadPiShockCreds,
   logCommand,
@@ -157,13 +159,16 @@ export const participantRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app
     const myStars = new Set(await listQueueStars(req.discordUser.id));
     const participants = [];
     for (const id of ids) {
-      const [user, shares, bannedYou, hasSession, hasConsent] = await Promise.all([
-        prisma.discordUser.findUnique({ where: { id } }),
-        listEnabledActivityShares(id),
-        isExecutorBanned(id, req.discordUser.id),
-        loadPiShockCreds(opts.env, id).then(Boolean),
-        getConsent(id),
-      ]);
+      const [user, shares, bannedYou, hasSession, hasConsent, theirSettings, theyStarredMe] =
+        await Promise.all([
+          prisma.discordUser.findUnique({ where: { id } }),
+          listEnabledActivityShares(id),
+          isExecutorBanned(id, req.discordUser.id),
+          loadPiShockCreds(opts.env, id).then(Boolean),
+          getConsent(id),
+          getCommandQueueSettings(id),
+          isQueueStarred(id, req.discordUser.id),
+        ]);
       const eStops = new Set(await getEmergencyStopShockerIds(id));
       const active = shares.filter(
         (s: { enabled: boolean; paused: boolean }) => s.enabled && !s.paused,
@@ -220,6 +225,16 @@ export const participantRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app
         bannedYou,
         /** Caller's star — this person's commands to the caller get queue priority. */
         priority: myStars.has(id),
+        /** Their queue / access rules when you target them. */
+        queue: {
+          enabled: theirSettings.enabled,
+          starOnly: theirSettings.starOnly,
+          starredByThem: theyStarredMe,
+          canOperate: !theirSettings.starOnly || theyStarredMe,
+          maxPerSender: theirSettings.maxPerSender,
+          maxSenderMs: theirSettings.maxSenderMs,
+          progressMs: theirSettings.progressMs,
+        },
         shockers: visibleShockers,
       });
     }
@@ -280,6 +295,14 @@ export const participantRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app
       return reply.code(403).send({
         error: 'This user has blocked you from controlling their device',
         code: 'BANNED',
+      });
+    }
+
+    const targetQueue = await getCommandQueueSettings(targetDiscordUserId);
+    if (targetQueue.starOnly && !(await isQueueStarred(targetDiscordUserId, req.discordUser.id))) {
+      return reply.code(403).send({
+        error: 'This person only accepts commands from starred participants',
+        code: 'STAR_ONLY',
       });
     }
 
@@ -468,6 +491,8 @@ export const participantRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app
           itemId: queued.itemId,
           position: queued.position,
           paused: queued.paused,
+          estimatedWaitMs: queued.estimatedWaitMs,
+          estimatedStartAt: queued.estimatedStartAt,
         };
       } catch (err) {
         if (err instanceof CommandQueueError) {

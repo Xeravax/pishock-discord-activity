@@ -478,6 +478,28 @@ html.pip-mode #root > * {
   flex-wrap: wrap;
 }
 
+.queue-panel-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 8px;
+}
+
+.queue-panel-progress input[type='number'] {
+  width: 52px;
+  background: #121212;
+  border: 1px solid hsla(0, 0%, 100%, 0.16);
+  border-radius: 6px;
+  color: #e8e8e8;
+  padding: 2px 4px;
+  font-size: 11px;
+}
+
+.queue-panel-progress-hint {
+  font-size: 9px;
+  line-height: 1.2;
+}
+
 .queue-panel-actions .q-btn {
   font-size: 10px;
   min-height: 22px;
@@ -845,11 +867,36 @@ html.pip-mode .app-restart-overlay:not(.app-restart-overlay--outdated) {
   display: none;
 }
 
-.official-logs-fab {
+.official-right-rail {
   position: fixed;
   right: 14px;
   bottom: 14px;
   z-index: 2500;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+  max-width: min(240px, calc(100vw - 28px));
+  max-height: calc(100vh - 28px);
+  pointer-events: none;
+}
+
+.official-right-rail > * {
+  pointer-events: auto;
+}
+
+.official-right-rail .queue-panel {
+  max-width: 100%;
+  max-height: min(52vh, 440px);
+  overflow: auto;
+}
+
+.official-right-rail .queue-ticket-banner {
+  max-width: 100%;
+}
+
+.official-logs-fab {
+  position: relative;
   width: 52px;
   height: 36px;
   border: none;
@@ -861,7 +908,7 @@ html.pip-mode .app-restart-overlay:not(.app-restart-overlay--outdated) {
   align-items: center;
   justify-content: center;
   box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45);
-  pointer-events: auto;
+  flex-shrink: 0;
 }
 
 .official-logs-fab .q-icon {

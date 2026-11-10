@@ -8,8 +8,9 @@ import {
   formatDurationMs,
   formatIntensityPct,
 } from './LimitSlider';
+import type { QueuePanelSettings } from './QueuePanel';
 
-type SetupStep = 'loading' | 'devices' | 'limits';
+type SetupStep = 'loading' | 'devices' | 'limits' | 'queue';
 
 type Props = {
   shockers: ShockerView[];
@@ -21,8 +22,17 @@ type Props = {
   onComplete: (result: {
     shares: ActivityShareConfig[];
     personal: PersonalLimits;
+    queue?: QueuePanelSettings;
   }) => void | Promise<void>;
   onSkip: () => void;
+};
+
+const DEFAULT_QUEUE: QueuePanelSettings = {
+  enabled: false,
+  progressMs: 0,
+  maxPerSender: 3,
+  maxSenderMs: 30_000,
+  starOnly: false,
 };
 
 function toShare(
@@ -75,6 +85,7 @@ export function SetupDiscordShareScreen({
   const [shareCaps, setShareCaps] = useState<
     Record<number, { maxIntensity: number; maxDurationMs: number }>
   >({});
+  const [queue, setQueue] = useState<QueuePanelSettings>(DEFAULT_QUEUE);
 
   useEffect(() => {
     setPersonal(initialPersonal);
@@ -117,12 +128,23 @@ export function SetupDiscordShareScreen({
 
   const selectedOwned = owned.filter((s) => selected.has(s.id));
 
-  const submit = () => {
+  const submit = (includeQueue: boolean) => {
     const shares = selectedOwned.map((s) => toShare(s, shareCaps[s.id]));
-    void onComplete({ shares, personal });
+    void onComplete({
+      shares,
+      personal,
+      queue: includeQueue ? queue : undefined,
+    });
   };
 
-  const stepIndex = step === 'limits' ? 2 : step === 'devices' ? 1 : 0;
+  const afterLimits = () => {
+    if (selectedOwned.length > 0) go('queue', 'forward');
+    else submit(false);
+  };
+
+  const stepIndex =
+    step === 'queue' ? 3 : step === 'limits' ? 2 : step === 'devices' ? 1 : 0;
+  const stepTotal = selectedOwned.length > 0 || step === 'queue' ? 3 : 2;
 
   return (
     <div className="auth-boot" role="dialog" aria-modal="true" aria-labelledby="setup-share-title">
@@ -142,7 +164,7 @@ export function SetupDiscordShareScreen({
           <AppVersionBadge />
         </h1>
         <p className="auth-boot__sub">
-          Setup{step !== 'loading' ? ` · ${stepIndex}/2` : ''}
+          Setup{step !== 'loading' ? ` · ${stepIndex}/${stepTotal}` : ''}
         </p>
 
         <div
@@ -401,7 +423,127 @@ export function SetupDiscordShareScreen({
                   type="button"
                   className="q-btn q-btn-item non-selectable no-outline bg-secondary text-dark q-btn--standard q-btn--rectangle q-btn--actionable"
                   disabled={busy}
-                  onClick={submit}
+                  onClick={afterLimits}
+                >
+                  <span className="q-btn__wrapper col row q-anchor--skip">
+                    <span className="q-btn__content text-center col items-center q-anchor--skip justify-center row no-wrap">
+                      {busy ? (
+                        <i className="q-icon on-left mdi mdi-loading mdi-spin" aria-hidden />
+                      ) : null}
+                      <span className="block">
+                        {busy
+                          ? 'Saving…'
+                          : selectedOwned.length > 0
+                            ? 'Next: queue'
+                            : 'Finish setup'}
+                      </span>
+                    </span>
+                  </span>
+                </button>
+              </div>
+            </>
+          ) : null}
+
+          {step === 'queue' ? (
+            <>
+              <h2 id="setup-share-title" className="auth-boot__heading">
+                Use a command queue?
+              </h2>
+              <p className="auth-boot__hint">
+                When several people control your shared shockers, a queue runs commands one at a
+                time. You can change this later from the queue panel.
+              </p>
+
+              {error ? (
+                <div className="auth-boot__error">
+                  <div className="auth-boot__error-title">Couldn’t save</div>
+                  <p>{error}</p>
+                </div>
+              ) : null}
+
+              <label className={`auth-boot__shocker${queue.enabled ? ' is-on' : ''}`}>
+                <input
+                  type="checkbox"
+                  checked={queue.enabled}
+                  disabled={busy}
+                  onChange={(e) => setQueue((q) => ({ ...q, enabled: e.target.checked }))}
+                />
+                <span className="auth-boot__shocker-copy">
+                  <span className="auth-boot__shocker-name">Enable command queue</span>
+                  <span className="auth-boot__shocker-hub">
+                    Line up incoming shocks instead of firing them all at once
+                  </span>
+                </span>
+              </label>
+
+              {queue.enabled ? (
+                <div className="setup-limits-block">
+                  <div className="setup-limits-block__title">Queue settings</div>
+                  <LimitSlider
+                    label="Advance after"
+                    value={Math.max(0, queue.progressMs)}
+                    min={0}
+                    max={15_000}
+                    step={500}
+                    formatValue={(ms) => (ms <= 0 ? 'Command length' : formatDurationMs(ms))}
+                    disabled={busy}
+                    onChange={(progressMs) => setQueue((q) => ({ ...q, progressMs }))}
+                  />
+                  <LimitSlider
+                    label="Commands ahead per person"
+                    value={queue.maxPerSender}
+                    min={1}
+                    max={100}
+                    step={1}
+                    formatValue={(n) => String(n)}
+                    disabled={busy}
+                    onChange={(maxPerSender) => setQueue((q) => ({ ...q, maxPerSender }))}
+                  />
+                  <LimitSlider
+                    label="Max queue time per person"
+                    value={queue.maxSenderMs}
+                    min={0}
+                    max={120_000}
+                    step={1000}
+                    formatValue={(ms) => (ms <= 0 ? 'Unlimited' : formatDurationMs(ms))}
+                    disabled={busy}
+                    onChange={(maxSenderMs) => setQueue((q) => ({ ...q, maxSenderMs }))}
+                  />
+                  <label className={`auth-boot__shocker${queue.starOnly ? ' is-on' : ''}`}>
+                    <input
+                      type="checkbox"
+                      checked={queue.starOnly}
+                      disabled={busy}
+                      onChange={(e) => setQueue((q) => ({ ...q, starOnly: e.target.checked }))}
+                    />
+                    <span className="auth-boot__shocker-copy">
+                      <span className="auth-boot__shocker-name">Stars only</span>
+                      <span className="auth-boot__shocker-hub">
+                        Only people you star can control your shockers
+                      </span>
+                    </span>
+                  </label>
+                </div>
+              ) : null}
+
+              <div className="auth-boot__actions">
+                <button
+                  type="button"
+                  className="q-btn q-btn-item non-selectable no-outline text-grey-4 bg-dark q-btn--outline q-btn--rectangle q-btn--actionable"
+                  disabled={busy}
+                  onClick={() => go('limits', 'back')}
+                >
+                  <span className="q-btn__wrapper col row q-anchor--skip">
+                    <span className="q-btn__content text-center col items-center q-anchor--skip justify-center row">
+                      <span className="block">Back</span>
+                    </span>
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  className="q-btn q-btn-item non-selectable no-outline bg-secondary text-dark q-btn--standard q-btn--rectangle q-btn--actionable"
+                  disabled={busy}
+                  onClick={() => submit(true)}
                 >
                   <span className="q-btn__wrapper col row q-anchor--skip">
                     <span className="q-btn__content text-center col items-center q-anchor--skip justify-center row no-wrap">

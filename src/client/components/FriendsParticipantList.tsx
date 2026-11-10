@@ -90,9 +90,11 @@ export function FriendsParticipantList({
             status?.emergencyStop || status?.shockers?.some((s) => s.emergencyStop),
           );
           const notLoggedIn = Boolean(status && !status.linked);
+          const starBlocked = Boolean(status?.queue?.starOnly && !status.queue.canOperate);
           const selectable =
             Boolean(status) &&
             !notLoggedIn &&
+            !starBlocked &&
             (banned || eStop || status?.available || (status?.shockers?.length ?? 0) > 0);
           const active = selectedSet.has(p.id);
           const label = statusLabel(status);
@@ -171,8 +173,8 @@ export function FriendsParticipantList({
                   className={`official-friend-star ${starred ? 'active' : ''}`}
                   title={
                     starred
-                      ? 'Remove queue priority'
-                      : 'Star for queue priority on your shockers'
+                      ? 'Remove priority / stars-only access for them'
+                      : 'Star for queue priority (and stars-only access) on your shockers'
                   }
                   aria-label={starred ? 'Unstar for priority' : 'Star for priority'}
                   aria-pressed={starred}
@@ -202,7 +204,11 @@ function statusLabel(status?: ParticipantStatus): string {
   if (status.bannedYou) return 'Blocked';
   if (status.emergencyStop || status.shockers?.some((s) => s.emergencyStop)) return 'E-STOP';
   if (!status.linked) return 'Not logged in · Disabled';
-  if (status.available) return 'Available';
+  if (status.queue?.starOnly && !status.queue.canOperate) return 'Stars only';
+  if (status.available) {
+    if (status.queue?.enabled) return 'Available · Queue';
+    return 'Available';
+  }
   if (status.paused) return 'Paused';
   if (!status.consent) return 'No consent · Disabled';
   return 'Unavailable · Disabled';
@@ -221,6 +227,19 @@ function statusDetail(status?: ParticipantStatus): string | null {
   }
   if (!status.consent) {
     return 'They have not consented — control is disabled';
+  }
+  if (status.queue?.starOnly && !status.queue.canOperate) {
+    return 'They only accept commands from starred people — ask them to star you';
+  }
+  if (status.queue?.enabled) {
+    const parts = [
+      `Queue on · ${status.queue.maxPerSender} ahead`,
+      status.queue.maxSenderMs > 0
+        ? `max ${Math.round(status.queue.maxSenderMs / 1000)}s`
+        : null,
+      status.queue.starOnly ? 'stars only' : null,
+    ].filter(Boolean);
+    return parts.join(' · ');
   }
   return null;
 }
