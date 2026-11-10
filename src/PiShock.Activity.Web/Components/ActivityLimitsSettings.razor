@@ -1,0 +1,203 @@
+@inject IJSRuntime Js
+
+@if (!_loaded)
+{
+    <div class="text-grey-5 q-pa-md">Loading settings…</div>
+}
+else
+{
+    <div class="column q-gutter-md">
+        <div class="text-grey-5 text-body2">
+            <strong class="text-grey-3">PiShock limits</strong> come from the device/API (red zone on
+            the slider). <strong class="text-grey-3">Activity limits</strong> are a separate ceiling
+            for this Discord app and must stay at or below the PiShock max.
+        </div>
+
+        @if (!string.IsNullOrEmpty(_error))
+        {
+            <div class="bg-negative text-white q-pa-sm" style="border-radius: 4px;">@_error</div>
+        }
+
+        <div>
+            <div class="text-secondary text-subtitle2 q-mb-sm">Your own devices (Activity Limit)</div>
+            <div class="q-item q-item-type column q-pa-sm" style="border: 1px solid hsla(0,0%,100%,.12);">
+                <div class="text-caption text-grey-5 q-mb-sm">
+                    Applied when you control your linked shockers in this activity.
+                </div>
+                <div class="column q-gutter-sm">
+                    <LimitSlider Label="Max intensity"
+                                 @bind-Value="_personal.ActivityMaxIntensity"
+                                 Min="1" Max="100"
+                                 FormatValue="LimitSlider.FormatIntensityPct" />
+                    <LimitSlider Label="Max duration"
+                                 @bind-Value="_personal.ActivityMaxDurationMs"
+                                 Min="16" Max="15000" Step="100"
+                                 FormatValue="LimitSlider.FormatDurationMs" />
+                </div>
+            </div>
+        </div>
+
+        <div>
+            <div class="text-secondary text-subtitle2 q-mb-sm">Discord Shockers you share</div>
+            @if (OwnedShockers.Count == 0)
+            {
+                <div class="text-grey-5">No owned shockers loaded.</div>
+            }
+            else
+            {
+                <div class="column q-gutter-sm">
+                    @foreach (var s in OwnedShockers)
+                    {
+                        var shocker = s;
+                        var row = _shares.FirstOrDefault(x => x.ShockerId == shocker.Id);
+                        var deviceMaxI = Math.Min(100, shocker.DeviceMaxIntensity ?? shocker.MaxIntensity);
+                        var deviceMaxD = Math.Min(15_000, shocker.DeviceMaxDuration ?? shocker.MaxDuration);
+                        var focused = FocusShockerId == shocker.Id;
+                        <div @key="shocker.Id"
+                             id="activity-limit-shocker-@shocker.Id"
+                             @ref="_refs[shocker.Id]"
+                             class="q-item q-item-type column q-pa-sm"
+                             style="border: @(focused ? "1px solid #79c6db" : "1px solid hsla(0,0%,100%,.12)"); @(focused ? "box-shadow: 0 0 0 1px rgba(121,198,219,.35);" : "")">
+                            <label class="row items-center no-wrap cursor-pointer">
+                                <input type="checkbox" checked="@(row is not null)" class="q-mr-sm"
+                                       style="accent-color: #79c6db;"
+                                       @onchange="() => ToggleShare(shocker)" />
+                                <span class="column">
+                                    <span class="q-item__label">@shocker.Name</span>
+                                    <span class="q-item__label q-item__label--caption text-grey-5">
+                                        PiShock max @(deviceMaxI)% · @((deviceMaxD / 1000.0).ToString(deviceMaxD % 1000 != 0 ? "0.0" : "0", System.Globalization.CultureInfo.InvariantCulture))s
+                                        (red above this)
+                                    </span>
+                                </span>
+                            </label>
+                            @if (row is not null)
+                            {
+                                <div class="column q-gutter-sm q-mt-sm">
+                                    <LimitSlider Label="Activity max intensity"
+                                                 @bind-Value="row.MaxIntensity"
+                                                 Min="1" Max="@(row.DeviceMaxIntensity ?? deviceMaxI)"
+                                                 FormatValue="LimitSlider.FormatIntensityPct" />
+                                    <LimitSlider Label="Activity max duration"
+                                                 @bind-Value="row.MaxDurationMs"
+                                                 Min="16" Max="@(row.DeviceMaxDurationMs ?? deviceMaxD)" Step="100"
+                                                 FormatValue="LimitSlider.FormatDurationMs" />
+                                    <label class="row items-center text-caption text-grey-5 cursor-pointer">
+                                        <input type="checkbox" checked="@row.Paused" class="q-mr-xs"
+                                               style="accent-color: #79c6db;"
+                                               @onchange="e => row.Paused = (bool)(e.Value ?? false)" />
+                                        Paused
+                                    </label>
+                                </div>
+                            }
+                        </div>
+                    }
+                </div>
+            }
+        </div>
+
+        <div class="row justify-between items-center q-gutter-sm">
+            @if (OnRevokeConsent is not null)
+            {
+                <QBtn Class="text-negative q-btn--flat q-btn--rectangle q-btn--actionable"
+                      Disabled="@(Busy || _saving)" OnClick="Revoke">
+                    <span class="block">Revoke consent</span>
+                </QBtn>
+            }
+            else
+            {
+                <span></span>
+            }
+            <QBtn Class="@QBtn.Primary" Disabled="@(Busy || _saving)" OnClick="Save">
+                <span class="block">@(_saving ? "Saving…" : "Save settings")</span>
+            </QBtn>
+        </div>
+    </div>
+}
+
+@code {
+    [Parameter] public List<ShockerView> OwnedShockers { get; set; } = [];
+    [Parameter] public bool Busy { get; set; }
+
+    /// <summary>Highlight / scroll to this shocker when opening from the SO cog.</summary>
+    [Parameter] public int? FocusShockerId { get; set; }
+    [Parameter] public Func<Task<ActivitySettingsResponse>>? OnLoad { get; set; }
+    [Parameter] public Func<PersonalLimits, List<ShareLimitRow>, Task>? OnSave { get; set; }
+    [Parameter] public Func<Task>? OnRevokeConsent { get; set; }
+
+    private PersonalLimits _personal = new();
+    private List<ShareLimitRow> _shares = [];
+    private bool _loaded;
+    private bool _saving;
+    private bool _scrolled;
+    private readonly Dictionary<int, ElementReference> _refs = [];
+    private string? _error;
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            if (OnLoad is not null)
+            {
+                var data = await OnLoad();
+                _personal = data.Personal;
+                _shares = data.Shares;
+            }
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        _loaded = true;
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!_loaded || _scrolled || FocusShockerId is null) return;
+        if (!_refs.ContainsKey(FocusShockerId.Value)) return;
+        _scrolled = true;
+        try
+        {
+            // DOM scroll via the built-in Element.scrollIntoView (no custom JS, no eval)
+            await Js.InvokeVoidAsync("Element.prototype.scrollIntoView.call", _refs[FocusShockerId.Value], new { behavior = "smooth", block = "center" });
+        }
+        catch
+        {
+            // cosmetic
+        }
+    }
+
+    private void ToggleShare(ShockerView s)
+    {
+        var existing = _shares.FirstOrDefault(x => x.ShockerId == s.Id);
+        if (existing is not null) _shares.Remove(existing);
+        else _shares.Add(ShareLimitRow.FromShocker(s));
+    }
+
+    private async Task Save()
+    {
+        if (OnSave is null) return;
+        _saving = true;
+        _error = null;
+        try
+        {
+            await OnSave(_personal, _shares);
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    private async Task Revoke()
+    {
+        if (OnRevokeConsent is null) return;
+        var ok = await Js.InvokeAsync<bool>(
+            "confirm",
+            "Revoke safety consent? You will need to re-acknowledge the safety warning before sending or receiving commands.");
+        if (ok) await OnRevokeConsent();
+    }
+}

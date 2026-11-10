@@ -1,0 +1,106 @@
+@* First-time link intro — same boot aesthetic as Discord / PiShock auth. *@
+<div class="auth-boot" role="dialog" aria-modal="true" aria-labelledby="setup-wizard-title">
+    <div class="auth-boot__glow" aria-hidden="true"></div>
+    <div class="auth-boot__panel auth-boot__panel--wide">
+        <div class="auth-boot__mark" aria-hidden="true">
+            <i class="q-icon mdi mdi-flash auth-boot__bolt"></i>
+        </div>
+        <h1 class="auth-boot__brand auth-boot__brand-row">
+            <span class="auth-boot__brand-name">Pi<span>Shock</span></span>
+            <AppVersionBadge />
+        </h1>
+        <p class="auth-boot__sub">First-time setup · @DiscordName · @(_step + 1)/@StepCount</p>
+
+        <h2 id="setup-wizard-title" class="auth-boot__heading">@Title</h2>
+        <div class="auth-boot__hint setup-wizard-body">
+            @if (_step == 0)
+            {
+                <PiShockAuthDisclaimer />
+                <p>
+                    Your PiShock <strong>password never enters Discord</strong>. Linking opens PiShock's
+                    own browser login page; only the session token PiShock returns is kept (encrypted).
+                </p>
+            }
+            else if (_step == 1)
+            {
+                <p>
+                    This activity opens a <strong>browser login page</strong> from PiShock (not Discord). Sign
+                    in there with your PiShock account.
+                </p>
+                <ol class="setup-steps-list">
+                    <li>A PiShock login URL opens in your browser</li>
+                    <li>Log in on that page (password never enters Discord)</li>
+                    <li>Come back here — we detect the successful login</li>
+                    <li>Confirm “Is this your PiShock account?” before anything is linked</li>
+                </ol>
+            }
+            else
+            {
+                <p>
+                    After linking, you can opt shockers into <strong>Discord Shockers</strong> so other people
+                    in this activity can control them (with your limits and pause/block controls).
+                </p>
+                <p class="text-grey-5">
+                    You can still control other people’s Discord Shockers without linking. Linking is only
+                    required to receive shocks or use your own devices.
+                </p>
+            }
+        </div>
+
+        @if (Last)
+        {
+            <label class="auth-boot__check">
+                <input type="checkbox" @bind="_wantsDiscordShare" />
+                <span>After I link, ask which shockers to share in Discord Shockers</span>
+            </label>
+        }
+
+        <div class="auth-boot__actions">
+            <QBtn Class="text-grey-5 q-btn--flat q-btn--rectangle q-btn--actionable q-btn--dense"
+                  OnClick="SkipClick">
+                <span class="block">Skip intro</span>
+            </QBtn>
+            @if (_step > 0)
+            {
+                <QBtn Class="@QBtn.Outline" OnClick="Back"><span class="block">Back</span></QBtn>
+            }
+            <QBtn Class="@QBtn.Primary" OnClick="NextClick">
+                <span class="block">@(Last ? "Continue to login" : "Next")</span>
+            </QBtn>
+        </div>
+    </div>
+</div>
+
+@code {
+    private const int StepCount = 3;
+    private static readonly string[] Titles =
+    [
+        "Authentication — read this first",
+        "How linking works",
+        "Discord Shockers (optional)",
+    ];
+
+    [Parameter] public string DiscordName { get; set; } = "";
+    [Parameter] public EventCallback<SetupChoices> OnComplete { get; set; }
+    [Parameter] public EventCallback<SetupChoices> OnSkipToLogin { get; set; }
+
+    private int _step;
+    private bool _wantsDiscordShare = true;
+
+    private bool Last => _step >= StepCount - 1;
+    private string Title => Titles[_step];
+
+    private void Back() => _step = Math.Max(0, _step - 1);
+
+    private Task SkipClick() => OnSkipToLogin.InvokeAsync(new SetupChoices(_wantsDiscordShare));
+
+    private Task NextClick()
+    {
+        if (!Last)
+        {
+            _step++;
+            return Task.CompletedTask;
+        }
+        return OnComplete.InvokeAsync(new SetupChoices(_wantsDiscordShare));
+    }
+}

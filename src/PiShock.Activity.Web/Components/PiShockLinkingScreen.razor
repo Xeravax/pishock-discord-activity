@@ -1,0 +1,73 @@
+@* Full-bleed PiShock login wait — same visual language as Discord boot. *@
+@{
+    var hasError = !string.IsNullOrEmpty(Error);
+}
+<div class="auth-boot" role="status" aria-live="polite" aria-busy="@(hasError ? "false" : "true")">
+    <div class="auth-boot__glow" aria-hidden="true"></div>
+    <div class="auth-boot__panel">
+        <div class="auth-boot__mark@(hasError ? "" : " auth-boot__mark--pulse")" aria-hidden="true">
+            <i class="q-icon mdi mdi-flash auth-boot__bolt"></i>
+        </div>
+        <h1 class="auth-boot__brand auth-boot__brand-row">
+            <span class="auth-boot__brand-name">Pi<span>Shock</span></span>
+            <AppVersionBadge />
+        </h1>
+        <p class="auth-boot__sub">Link account</p>
+
+        @if (hasError)
+        {
+            <div class="auth-boot__error">
+                <div class="auth-boot__error-title">Login failed</div>
+                <p>@Error</p>
+            </div>
+        }
+        else
+        {
+            <div class="auth-boot__bar auth-boot__bar--indeterminate" aria-hidden="true">
+                <div class="auth-boot__bar-fill"></div>
+            </div>
+            <div class="auth-boot__meta auth-boot__meta--center">
+                <span class="auth-boot__label">@Label</span>
+            </div>
+            <p class="auth-boot__hint">
+                This requests a PiShock <strong>authentication token</strong> (not an API key). Tokens
+                are encrypted in the database. Finish signing in in your browser, then return here —
+                we'll detect it automatically.
+            </p>
+        }
+
+        <div class="auth-boot__actions">
+            @if (hasError)
+            {
+                @if (OnRetry.HasDelegate)
+                {
+                    <QBtn Class="@QBtn.Primary" OnClick="OnRetry"><span class="block">Try again</span></QBtn>
+                }
+                @if (OnCancel.HasDelegate)
+                {
+                    <QBtn Class="@QBtn.Outline" OnClick="OnCancel"><span class="block">Cancel</span></QBtn>
+                }
+            }
+            else
+            {
+                @if (CanReopen && OnReopen.HasDelegate)
+                {
+                    <QBtn Class="@QBtn.Primary" OnClick="OnReopen"><span class="block">Reopen login</span></QBtn>
+                }
+                @if (OnCancel.HasDelegate)
+                {
+                    <QBtn Class="@QBtn.Outline" OnClick="OnCancel"><span class="block">Cancel</span></QBtn>
+                }
+            }
+        </div>
+    </div>
+</div>
+
+@code {
+    [Parameter] public string Label { get; set; } = "Waiting for PiShock login…";
+    [Parameter] public string? Error { get; set; }
+    [Parameter] public bool CanReopen { get; set; }
+    [Parameter] public EventCallback OnReopen { get; set; }
+    [Parameter] public EventCallback OnCancel { get; set; }
+    [Parameter] public EventCallback OnRetry { get; set; }
+}

@@ -1,0 +1,1 @@
+var DiscordEmbeddedAppSdk = { DiscordSDK: null };

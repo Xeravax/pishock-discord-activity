@@ -1,0 +1,63 @@
+@{
+    var btnClass = Outline ? "q-btn--outline text-secondary"
+        : Flat ? "q-btn--flat text-secondary"
+        : Danger ? "q-btn--standard bg-secondary text-negative"
+        : "q-btn--standard bg-secondary text-dark";
+    var chipClass = Active && Danger ? "bg-negative text-white"
+        : Outline ? "bg-secondary text-dark"
+        : "bg-dark text-secondary";
+}
+<div class="flex column">
+    <button type="button"
+            disabled="@Disabled"
+            @onclick="HandleClick"
+            @onpointerdown="HandleDown"
+            @onpointerup="HandleUp"
+            @onpointercancel="HandleUp"
+            @onpointerleave="HandleUp"
+            @oncontextmenu:preventDefault="Hold"
+            class="q-btn q-btn-item non-selectable no-outline @btnClass q-btn--rectangle q-btn--actionable q-focusable q-hoverable q-btn--wrap @((Outline || Flat ? "q-btn--dense " : "") + (Active && !Danger ? "bg-secondary text-dark " : "") + (Active && Danger ? "bg-negative text-white" : ""))"
+            style="border-bottom-left-radius: 0; border-bottom-right-radius: 0;@((Flat ? " font-size: 10px;" : "") + (Active ? " box-shadow: inset 0 0 0 2px #fff;" : "") + (Hold ? " touch-action: none; user-select: none;" : ""))">
+        <span class="q-btn__wrapper col row q-anchor--skip"
+              style="@(Padding > 0 ? $"padding: {Padding}px; min-width: 0; min-height: 0;" : "")">
+            <span class="q-btn__content text-center col items-center q-anchor--skip justify-center @(!string.IsNullOrEmpty(Caption) ? "column" : "row")">
+                <i class="q-icon mdi @Icon" aria-hidden="true"></i>
+                @if (!string.IsNullOrEmpty(Caption))
+                {
+                    <div class="text-caption" style="font-size: 9px;">@Caption</div>
+                }
+            </span>
+        </span>
+    </button>
+    <div class="q-chip row inline no-wrap items-center text-center no-margin @chipClass border-color-secondary q-chip--dense @(Flat ? "" : "q-chip--square")"
+         style="font-size: 10px; border-top-left-radius: 0; border-top-right-radius: 0; border: 1px solid;">
+        <div class="q-chip__content col row no-wrap items-center q-anchor--skip">
+            <div class="full-width text-center text-caption">
+                <span>@Chip</span>
+            </div>
+        </div>
+    </div>
+</div>
+
+@code {
+    [Parameter, EditorRequired] public string Icon { get; set; } = "";
+    [Parameter] public string? Caption { get; set; }
+    [Parameter, EditorRequired] public string Chip { get; set; } = "";
+    [Parameter] public bool Outline { get; set; }
+    [Parameter] public bool Flat { get; set; }
+    [Parameter] public bool Danger { get; set; }
+    [Parameter] public int Padding { get; set; }
+    [Parameter] public bool Active { get; set; }
+    [Parameter] public bool Disabled { get; set; }
+    [Parameter] public bool Hold { get; set; }
+    [Parameter] public EventCallback OnClick { get; set; }
+    [Parameter] public EventCallback OnHoldStart { get; set; }
+    [Parameter] public EventCallback OnHoldEnd { get; set; }
+
+    private Task HandleClick() => Hold ? Task.CompletedTask : OnClick.InvokeAsync();
+
+    private Task HandleDown(PointerEventArgs e) =>
+        Hold && !Disabled && e.Button == 0 ? OnHoldStart.InvokeAsync() : Task.CompletedTask;
+
+    private Task HandleUp() => Hold ? OnHoldEnd.InvokeAsync() : Task.CompletedTask;
+}

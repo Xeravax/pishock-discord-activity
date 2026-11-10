@@ -1,0 +1,22 @@
+{
+  "descriptionHash": "manual-bootstrap",
+  "descriptionLocation": "../PiShock.Activity.Server/openapi/openapi.json",
+  "lockFileVersion": "1.0.0",
+  "kiotaVersion": "1.21.0",
+  "clientClassName": "ActivityApiClient",
+  "clientNamespaceName": "PiShock.Activity.ApiClient",
+  "language": "CSharp",
+  "usesBackingStore": false,
+  "includeAdditionalData": true,
+  "serializers": [
+    "Microsoft.Kiota.Serialization.Json.JsonSerializationWriterFactory"
+  ],
+  "deserializers": [
+    "Microsoft.Kiota.Serialization.Json.JsonParseNodeFactory"
+  ],
+  "structuredMimeTypes": [
+    "application/json"
+  ],
+  "disabledValidationRules": [],
+  "notes": "Sources are committed (manual / Kiota-shaped ActivityApiClient.cs) until `kiota generate` is re-run from the OpenAPI document. Do not delete the hand-authored client while regenerating; replace in place."
+}

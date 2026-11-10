@@ -1,0 +1,51 @@
+@using System.Text.Json
+
+<div class="q-list q-list--dark q-list--separator">
+    @if (Rows.Count == 0)
+    {
+        <div class="text-grey-5 q-pa-sm">No commands yet.</div>
+    }
+    @foreach (var row in Rows)
+    {
+        <div @key="row.Id" class="q-item q-item-type column q-pa-sm">
+            <div class="q-item__label @(row.Success ? "text-secondary" : "text-negative")">@row.Action</div>
+            <div class="q-item__label q-item__label--caption text-grey-5">
+                @row.CreatedAt.ToLocalTime().ToString("g")@(row.ShockerId is not null ? $" · shocker {row.ShockerId}" : "")@(row.Intensity is not null ? $" · int {row.Intensity}" : "")@(row.DurationMs is not null ? $" · {row.DurationMs}ms" : "")
+            </div>
+            @if (!string.IsNullOrEmpty(row.ExecutorDiscordUserId) || !string.IsNullOrEmpty(row.TargetDiscordUserId))
+            {
+                <div class="q-item__label q-item__label--caption text-grey-5">
+                    @(!string.IsNullOrEmpty(row.ExecutorDiscordUserId) ? $"executor {row.ExecutorDiscordUserId}" : "")@(!string.IsNullOrEmpty(row.ExecutorDiscordUserId) && !string.IsNullOrEmpty(row.TargetDiscordUserId) ? " → " : "")@(!string.IsNullOrEmpty(row.TargetDiscordUserId) ? $"target {row.TargetDiscordUserId}" : "")
+                </div>
+            }
+            @if (!string.IsNullOrEmpty(row.Detail))
+            {
+                <div class="q-item__label q-item__label--caption text-grey-6">@FormatDetail(row.Detail)</div>
+            }
+        </div>
+    }
+</div>
+
+@code {
+    [Parameter] public List<CommandLogRow> Rows { get; set; } = [];
+
+    private static string FormatDetail(string detail)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(detail);
+            var root = doc.RootElement;
+            var bits = new List<string>();
+            if (Json.Str(root, "via") is { } via) bits.Add($"via={via}");
+            if (Json.Str(root, "path") is { } path) bits.Add($"path={path}");
+            if (Json.Str(root, "agent") is { } agent) bits.Add($"agent={agent}");
+            if (Json.Str(root, "error") is { } error) bits.Add($"error={error}");
+            if (Json.Str(root, "note") is { } note) bits.Add(note);
+            return bits.Count > 0 ? string.Join(" · ", bits) : detail;
+        }
+        catch
+        {
+            return detail;
+        }
+    }
+}

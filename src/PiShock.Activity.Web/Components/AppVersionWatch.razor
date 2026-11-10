@@ -1,0 +1,113 @@
+@implements IDisposable
+@inject AppHealthService Health
+
+@if (Health.Restarting || Health.Outdated)
+{
+    <div class="app-restart-overlay@(Health.Outdated ? " app-restart-overlay--outdated" : "")"
+         role="alertdialog" aria-live="assertive" aria-modal="true">
+        <div class="app-restart-overlay__glow" aria-hidden="true"></div>
+        <div class="app-restart-overlay__panel">
+            <div class="app-restart-overlay__spinner" aria-hidden="true"></div>
+            @if (Health.Outdated)
+            {
+                <div class="app-restart-overlay__title">Update required</div>
+                <p class="app-restart-overlay__hint">
+                    This activity is still running build <strong>@Health.BootVersion</strong>, but the server
+                    is on <strong>@(Health.ServerVersion ?? "a newer build")</strong>. Reload to pick up the
+                    update. If you stay on this version, the activity will restart automatically
+                    @if (Health.ForceReloadAt is not null)
+                    {
+                        <text> in <strong>@FormatCountdown()</strong></text>
+                    }
+                    else
+                    {
+                        <text> soon</text>
+                    }.
+                </p>
+                <p class="app-restart-overlay__meta">
+                    Grace period @((int)AppHealthService.OutdatedGrace.TotalMinutes) minutes after a version mismatch
+                    is detected.
+                </p>
+                <button type="button" class="app-restart-overlay__reload" @onclick="Reload">Reload now</button>
+            }
+            else
+            {
+                <div class="app-restart-overlay__title">
+                    @(Health.Status == AppHealthStatus.Restarting ? "App is restarting…" : "Reconnecting…")
+                </div>
+                <p class="app-restart-overlay__hint">
+                    Waiting for the server to come back online. Checking every 5 seconds. When a new
+                    version is detected, this activity will reload automatically.
+                </p>
+            }
+        </div>
+    </div>
+}
+
+@code {
+    private CancellationTokenSource? _tick;
+
+    protected override void OnInitialized()
+    {
+        Health.Changed += OnHealthChanged;
+    }
+
+    protected override void OnAfterRender(bool firstRender)
+    {
+        // Start polling only after the WASM JS runtime is ready (HttpClient / interop safe).
+        if (firstRender) Health.Start();
+    }
+
+    private void OnHealthChanged()
+    {
+        _ = InvokeAsync(() =>
+        {
+            if (Health.Outdated && _tick is null) StartCountdown();
+            if (!Health.Outdated) StopCountdown();
+            StateHasChanged();
+        });
+    }
+
+    private void StartCountdown()
+    {
+        _tick = new CancellationTokenSource();
+        var token = _tick.Token;
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                while (!token.IsCancellationRequested)
+                {
+                    await Task.Delay(250, token);
+                    await InvokeAsync(StateHasChanged);
+                }
+            }
+            catch (TaskCanceledException)
+            {
+            }
+        });
+    }
+
+    private void StopCountdown()
+    {
+        _tick?.Cancel();
+        _tick = null;
+    }
+
+    private string FormatCountdown()
+    {
+        var remaining = Math.Max(0, (Health.ForceReloadAt ?? 0) - DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+        var totalSec = (int)Math.Ceiling(remaining / 1000.0);
+        var min = totalSec / 60;
+        var sec = totalSec % 60;
+        return min <= 0 ? $"{sec}s" : $"{min}:{sec:D2}";
+    }
+
+    private Task Reload() => Health.ReloadAppAsync();
+
+    public void Dispose()
+    {
+        Health.Changed -= OnHealthChanged;
+        StopCountdown();
+    }
+}

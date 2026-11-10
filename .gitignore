@@ -1,11 +1,23 @@
-node_modules/
-dist/
+## .NET
+bin/
+obj/
+*.user
+*.suo
+.vs/
+TestResults/
+
+## Env / secrets
 .env
 .env.local
 .env.version
-version.json
 *.log
 .DS_Store
-client-dist/
-prisma/*.db
-prisma/*.db-journal
+
+## Optional local artifacts
+version.json
+data/
+*.db
+*.db-journal
+
+## SDK bundle install (Docker builds this stage)
+sdk-bundle/node_modules/

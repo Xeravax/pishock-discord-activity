@@ -1,0 +1,209 @@
+@using System.Globalization
+@{
+    const int scaleMax = 100;
+    var device = Clamp(DeviceMax, 1, scaleMax);
+    var activity = Clamp(ActivityMax, 1, device);
+    var usable = Clamp(Value, 0, activity);
+    var lo = Clamp(Math.Min(MinValue, MaxValue), 0, activity);
+    var hi = Clamp(Math.Max(MinValue, MaxValue), 0, activity);
+    var pct = usable / (double)scaleMax * 100;
+    var loPct = lo / (double)scaleMax * 100;
+    var hiPct = hi / (double)scaleMax * 100;
+    var redHeight = Math.Max(0, 100 - device);
+    var multi = LimitMarkers.Count > 1;
+    var trackWidth = multi ? Math.Min(4 + LimitMarkers.Count * 4, 22) : 5;
+    string P(double v) => v.ToString("0.###", CultureInfo.InvariantCulture);
+}
+<div class="q-card__section q-card__section--vert official-slider-col"
+     style="padding: 0px 5px; margin-left: 5px; position: relative;">
+    <div class="flex column items-center q-gutter-sm justify-between">
+        <div role="slider"
+             aria-valuemin="0"
+             aria-valuemax="@activity"
+             aria-orientation="vertical"
+             aria-valuenow="@(Random ? hi : usable)"
+             aria-valuetext="@(Random ? $"{lo}-{hi}" : usable.ToString())"
+             class="q-slider q-slider--v q-slider--inactive inline no-wrap row q-slider--enabled q-slider--editable q-slider--label q-slider--dark q-slider--dense q-slider--dense--v">
+            <div tabindex="@(Disabled ? -1 : 0)"
+                 class="q-slider__track-container q-slider__track-container--v official-slider-hit"
+                 style="touch-action: none; cursor: @(Disabled ? "not-allowed" : "ns-resize");"
+                 @onpointerdown="PointerDown"
+                 @onpointerdown:preventDefault
+                 @onpointermove="PointerMove"
+                 @onpointerup="EndDrag"
+                 @onpointercancel="EndDrag"
+                 @onpointerleave="EndDrag"
+                 @onkeydown="KeyDown">
+                <div class="q-slider__track relative-position no-outline" style="width: @(trackWidth)px;">
+                    <div class="q-slider__inner absolute" style="bottom: 0%; height: 100%;"></div>
+                    @if (activity < device)
+                    {
+                        <div class="absolute" title="Above Activity Limit"
+                             style="left: 0; right: 0; bottom: @(P(activity))%; height: @(P(device - activity))%; background: rgba(244, 214, 0, 0.35); pointer-events: none;"></div>
+                    }
+                    @if (redHeight > 0)
+                    {
+                        <div class="absolute" title="Above PiShock device limit"
+                             style="left: 0; right: 0; bottom: @(P(device))%; height: @(P(redHeight))%; background: rgba(229, 57, 53, 0.55); pointer-events: none;"></div>
+                    }
+                    @if (multi)
+                    {
+                        <div class="absolute"
+                             style="left: 0; right: 0; bottom: 0; top: 0; display: flex; gap: 1px; pointer-events: none; z-index: 1;">
+                            @foreach (var m in LimitMarkers)
+                            {
+                                var setValue = m.Value is { } mv ? Clamp(mv, 0, m.Intensity) : usable;
+                                var fillTo = Random ? Math.Min(hi, m.Intensity) : Math.Min(setValue, m.Intensity);
+                                var fillFrom = Random ? Math.Min(lo, fillTo) : 0;
+                                var height = Math.Max(0, fillTo - fillFrom);
+                                <div @key="m.Key" style="flex: 1; position: relative;">
+                                    <div title="@(m.Value is not null ? $"{m.Label} · {setValue}/{m.Intensity}%" : $"{m.Label} · up to {m.Intensity}%")"
+                                         style="position: absolute; left: 0; right: 0; bottom: @(P(fillFrom / (double)scaleMax * 100))%; height: @(P(height / (double)scaleMax * 100))%; background: @m.Color; border-radius: 1px;"></div>
+                                    <div style="position: absolute; left: -1px; right: -1px; bottom: calc(@(P(Clamp(m.Intensity, 0, scaleMax) / (double)scaleMax * 100))% - 1px); height: 2px; background: @m.Color; box-shadow: 0 0 0 1px rgba(0,0,0,.35);"></div>
+                                </div>
+                            }
+                        </div>
+                    }
+                    else if (Random)
+                    {
+                        <div class="q-slider__selection absolute text-secondary"
+                             style="bottom: @(P(loPct))%; height: @(P(Math.Max(0, hiPct - loPct)))%;"></div>
+                    }
+                    else
+                    {
+                        <div class="q-slider__selection absolute text-secondary"
+                             style="bottom: 0%; height: @(P(pct))%;"></div>
+                    }
+                    <div class="q-slider__markers q-slider__markers--v absolute overflow-hidden"
+                         style="bottom: 0%; height: 100%; background-size: 2px 10%;"></div>
+                    @if (Random)
+                    {
+                        <div class="q-slider__thumb q-slider__thumb--v q-slider__thumb--v-rtl absolute non-selectable text-secondary"
+                             style="width: 20px; height: 20px; bottom: @(P(loPct))%;">
+                            <svg viewBox="0 0 20 20" aria-hidden="true" class="q-slider__thumb-shape absolute-full">
+                                <path d="M 4, 10 a 6,6 0 1,0 12,0 a 6,6 0 1,0 -12,0"></path>
+                            </svg>
+                        </div>
+                        <div class="q-slider__thumb q-slider__thumb--v q-slider__thumb--v-rtl absolute non-selectable text-secondary"
+                             style="width: 20px; height: 20px; bottom: @(P(hiPct))%;">
+                            <svg viewBox="0 0 20 20" aria-hidden="true" class="q-slider__thumb-shape absolute-full">
+                                <path d="M 4, 10 a 6,6 0 1,0 12,0 a 6,6 0 1,0 -12,0"></path>
+                            </svg>
+                        </div>
+                    }
+                    else
+                    {
+                        <div class="q-slider__thumb q-slider__thumb--v q-slider__thumb--v-rtl absolute non-selectable text-secondary"
+                             style="width: 20px; height: 20px; bottom: @(P(pct))%;">
+                            <svg viewBox="0 0 20 20" aria-hidden="true" class="q-slider__thumb-shape absolute-full">
+                                <path d="M 4, 10 a 6,6 0 1,0 12,0 a 6,6 0 1,0 -12,0"></path>
+                            </svg>
+                            <div class="q-slider__focus-ring fit"></div>
+                        </div>
+                    }
+                </div>
+            </div>
+        </div>
+        <i class="q-icon mdi mdi-speedometer" style="font-size: 24px;" aria-hidden="true"></i>
+    </div>
+</div>
+
+@code {
+    /// <summary>Fixed height of Quasar's vertical slider (<c>.q-slider--v</c>).</summary>
+    private const double TrackHeightPx = 200;
+
+    [Parameter] public int Value { get; set; }
+    [Parameter] public int MinValue { get; set; }
+    [Parameter] public int MaxValue { get; set; }
+    [Parameter] public bool Random { get; set; }
+
+    /// <summary>PiShock hard ceiling — red zone above this (scale 0–100).</summary>
+    [Parameter] public int DeviceMax { get; set; } = 100;
+
+    /// <summary>Highest usable Activity Limit among the selection — thumb may reach this.</summary>
+    [Parameter] public int ActivityMax { get; set; } = 100;
+
+    /// <summary>Multishock: per-person limit ticks (color-coded).</summary>
+    [Parameter] public List<LimitMarker> LimitMarkers { get; set; } = [];
+
+    [Parameter] public EventCallback<int> OnChange { get; set; }
+    [Parameter] public EventCallback<int> OnChangeMin { get; set; }
+    [Parameter] public EventCallback<int> OnChangeMax { get; set; }
+    [Parameter] public bool Disabled { get; set; }
+
+    private enum Handle { None, Value, Min, Max }
+
+    private Handle _drag = Handle.None;
+
+    private static int Clamp(int n, int min, int max) => Math.Max(min, Math.Min(max, n));
+
+    private int Device => Clamp(DeviceMax, 1, 100);
+    private int Activity => Clamp(ActivityMax, 1, Device);
+    private int Lo => Clamp(Math.Min(MinValue, MaxValue), 0, Activity);
+    private int Hi => Clamp(Math.Max(MinValue, MaxValue), 0, Activity);
+
+    private static int RawFromOffset(double offsetY)
+    {
+        var ratio = Math.Clamp(1 - offsetY / TrackHeightPx, 0, 1);
+        return (int)Math.Round(ratio * 100);
+    }
+
+    private Handle PickHandle(int raw)
+    {
+        if (!Random) return Handle.Value;
+        return Math.Abs(raw - Lo) <= Math.Abs(raw - Hi) ? Handle.Min : Handle.Max;
+    }
+
+    private async Task Apply(int raw, Handle mode)
+    {
+        if (raw > Device) return;
+        var next = Clamp(raw, 0, Activity);
+        switch (mode)
+        {
+            case Handle.Value:
+                await OnChange.InvokeAsync(next);
+                break;
+            case Handle.Min:
+                await OnChangeMin.InvokeAsync(Clamp(next, 0, Hi));
+                break;
+            case Handle.Max:
+                await OnChangeMax.InvokeAsync(Clamp(next, Lo, Activity));
+                break;
+        }
+    }
+
+    private async Task PointerDown(PointerEventArgs e)
+    {
+        if (Disabled) return;
+        var raw = RawFromOffset(e.OffsetY);
+        _drag = PickHandle(raw);
+        await Apply(raw, _drag);
+    }
+
+    private async Task PointerMove(PointerEventArgs e)
+    {
+        if (_drag == Handle.None) return;
+        if (e.Buttons == 0)
+        {
+            _drag = Handle.None;
+            return;
+        }
+        await Apply(RawFromOffset(e.OffsetY), _drag);
+    }
+
+    private void EndDrag() => _drag = Handle.None;
+
+    private async Task KeyDown(KeyboardEventArgs e)
+    {
+        if (Disabled) return;
+        var delta = e.Key is "ArrowUp" or "ArrowRight" ? 1 : e.Key is "ArrowDown" or "ArrowLeft" ? -1 : 0;
+        if (delta == 0) return;
+        if (!Random)
+        {
+            await OnChange.InvokeAsync(Clamp(Clamp(Value, 0, Activity) + delta, 0, Activity));
+            return;
+        }
+        if (delta > 0) await OnChangeMax.InvokeAsync(Clamp(Hi + delta, Lo, Activity));
+        else await OnChangeMin.InvokeAsync(Clamp(Lo + delta, 0, Hi));
+    }
+}

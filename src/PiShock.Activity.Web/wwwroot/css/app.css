@@ -1,0 +1,44 @@
+/*
+ * Blazor-specific glue on top of the React client's styles.css (copied verbatim as styles.css).
+ * Keep this file tiny — all look & feel comes from the official PiShock sheets + styles.css.
+ */
+
+/* styles.css targets #root (React); Blazor mounts into #app */
+html.pip-mode #app,
+html.pip-mode #app > * {
+  margin: 0 !important;
+  padding: 0 !important;
+  width: 100% !important;
+  height: 100% !important;
+  min-height: 100% !important;
+  overflow: hidden !important;
+  background: #121212 !important;
+}
+
+/* Vertical slider: let the hit <div> receive pointer events (we read OffsetY from it) */
+.official-slider-hit * {
+  pointer-events: none;
+}
+
+#blazor-error-ui {
+  background: #b32121;
+  color: #fff;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  padding: 0.6rem 1.25rem 0.7rem;
+  position: fixed;
+  z-index: 10000;
+}
+
+#blazor-error-ui .dismiss {
+  cursor: pointer;
+  position: absolute;
+  right: 0.75rem;
+  top: 0.5rem;
+}
+
+#blazor-error-ui a {
+  color: #fff;
+  margin-left: 0.75rem;
+}

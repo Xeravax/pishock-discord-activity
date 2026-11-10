@@ -1,0 +1,103 @@
+@page "/"
+@implements IDisposable
+@inject ActivitySession Session
+@inject NavigationManager Nav
+@inject DiscordActivity Discord
+
+@* Boot flow like App.tsx: loading → legal/safety/consent → link → controller. ?demo / #/demo skips the real SDK. *@
+@if (_demo)
+{
+    <DemoApp />
+}
+else if (Session.LegalView == LegalView.Terms)
+{
+    <TermsOfService OnBack="CloseLegal" />
+}
+else if (Session.LegalView == LegalView.Privacy)
+{
+    <PrivacyPolicy OnBack="CloseLegal" />
+}
+else if (!Session.BootReady || Session.Me is null || Session.Token is null)
+{
+    <AuthLoadingScreen Progress="Session.BootProgress"
+                       Label="@(Session.BootError is not null ? "Failed" : Session.BootLabel)"
+                       Error="@Session.BootError" />
+}
+else if (Session.SetupPhase)
+{
+    <SetupWizard DiscordName="@Session.Me.DisplayName"
+                 OnComplete="Session.FinishSetupAsync"
+                 OnSkipToLogin="Session.FinishSetupAsync" />
+}
+else if (Session.LinkConfirm is { } confirm)
+{
+    <LinkConfirmPanel PishockUserId="confirm.PishockUserId"
+                      HubNames="confirm.HubNames"
+                      DiscordName="@Session.Me.DisplayName"
+                      Busy="Session.ConfirmBusy"
+                      Error="Session.LinkError"
+                      OnConfirm="Session.ConfirmLinkAsync"
+                      OnCancel="Session.CancelLinkAsync" />
+}
+else if (Session.Linking || Session.LinkError is not null)
+{
+    <PiShockLinkingScreen Label="@(Session.LoginUrl is not null ? "Waiting for PiShock login…" : "Opening PiShock login…")"
+                          Error="Session.LinkError"
+                          CanReopen="@(Session.LoginUrl is not null)"
+                          OnReopen="Session.ReopenLoginAsync"
+                          OnCancel="Session.CancelLoginWaitAsync"
+                          OnRetry="Session.StartPiShockLoginAsync" />
+}
+else if (Session.Me.Consent)
+{
+    @if (Session.Pip)
+    {
+        <PipIncomingShock Hit="Session.PipHit" />
+    }
+    else
+    {
+        <LinkedShell />
+    }
+}
+else
+{
+    <SafetyGate UserName="@Session.Me.DisplayName"
+                Embedded="Session.Embedded"
+                Pip="Session.Pip"
+                Busy="Session.Busy"
+                Error="Session.ActionError"
+                OnAccepted="Session.AcceptConsentAsync"
+                OnOpenTerms="OpenTerms"
+                OnOpenPrivacy="OpenPrivacy" />
+}
+
+@code {
+    private bool _demo;
+    private bool _started;
+
+    protected override void OnInitialized()
+    {
+        _demo = IsDemoUri(Nav.Uri);
+        if (_demo) return;
+        Session.Changed += OnSessionChanged;
+        _started = true;
+        if (!Session.BootStarted) _ = Session.BootAsync();
+    }
+
+    private static bool IsDemoUri(string uri)
+    {
+        var u = uri.ToLowerInvariant();
+        return u.Contains("?demo") || u.Contains("&demo") || u.Contains("#/demo");
+    }
+
+    private void OnSessionChanged() => _ = InvokeAsync(StateHasChanged);
+
+    private void CloseLegal() => Session.LegalView = LegalView.None;
+    private void OpenTerms() => Session.LegalView = LegalView.Terms;
+    private void OpenPrivacy() => Session.LegalView = LegalView.Privacy;
+
+    public void Dispose()
+    {
+        if (_started) Session.Changed -= OnSessionChanged;
+    }
+}

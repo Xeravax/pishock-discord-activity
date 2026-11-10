@@ -1,0 +1,12 @@
+@* React: `export { SafetyWarning as ConsentGate }` — the consent gate IS the safety warning checklist. *@
+<SafetyWarning OnAccept="OnAccept"
+               Busy="Busy"
+               OnOpenTerms="OnOpenTerms"
+               OnOpenPrivacy="OnOpenPrivacy" />
+
+@code {
+    [Parameter] public EventCallback OnAccept { get; set; }
+    [Parameter] public bool Busy { get; set; }
+    [Parameter] public EventCallback OnOpenTerms { get; set; }
+    [Parameter] public EventCallback OnOpenPrivacy { get; set; }
+}

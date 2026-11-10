@@ -1,0 +1,52 @@
+@* Compact start CTA for the link dialog (waiting state uses PiShockLinkingScreen). *@
+<section class="pishock-link-panel">
+    <PiShockAuthDisclaimer Compact="true" />
+    <p class="text-grey-5 text-body2">
+        Continue only if you accept that. Your password never enters this activity.
+    </p>
+    @if (!string.IsNullOrEmpty(Error))
+    {
+        <div class="auth-boot__error" style="margin-bottom: 12px;">
+            <div class="auth-boot__error-title">Couldn’t start login</div>
+            <p>@Error</p>
+        </div>
+    }
+    <div class="row q-gutter-sm" style="flex-wrap: wrap;">
+        @if (string.IsNullOrEmpty(LoginUrl))
+        {
+            <QBtn Class="@QBtn.Primary" ContentClass="row no-wrap" Disabled="Linking" OnClick="OnStartClick">
+                @if (Linking)
+                {
+                    <i class="q-icon on-left mdi mdi-loading mdi-spin" aria-hidden="true"></i>
+                }
+                else
+                {
+                    <i class="q-icon on-left mdi mdi-open-in-new" aria-hidden="true"></i>
+                }
+                <span class="block">@(Linking ? "Opening browser…" : "Connect PiShock")</span>
+            </QBtn>
+        }
+        else
+        {
+            <QBtn Class="@QBtn.Primary" OnClick="OnOpenClick">
+                <span class="block">Open PiShock login</span>
+            </QBtn>
+            <QBtn Class="@QBtn.Outline" OnClick="OnRefreshClick">
+                <span class="block">I finished logging in</span>
+            </QBtn>
+        }
+    </div>
+</section>
+
+@code {
+    [Parameter] public bool Linking { get; set; }
+    [Parameter] public string? LoginUrl { get; set; }
+    [Parameter] public string? Error { get; set; }
+    [Parameter] public EventCallback OnStart { get; set; }
+    [Parameter] public EventCallback OnOpen { get; set; }
+    [Parameter] public EventCallback OnRefresh { get; set; }
+
+    private Task OnStartClick() => OnStart.InvokeAsync();
+    private Task OnOpenClick() => OnOpen.InvokeAsync();
+    private Task OnRefreshClick() => OnRefresh.InvokeAsync();
+}

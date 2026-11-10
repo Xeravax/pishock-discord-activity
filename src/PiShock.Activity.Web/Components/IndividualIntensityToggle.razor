@@ -1,0 +1,16 @@
+@* Soft pill toggle for per-person shock intensity while Multi is on. *@
+<button type="button"
+        class="multi-shock-toggle multi-shock-toggle--indiv@((Active ? " is-on" : "") + (Compact ? " is-compact" : ""))"
+        title="@Title"
+        aria-pressed="@(Active ? "true" : "false")"
+        @onclick="OnToggle">
+    <i class="q-icon mdi mdi-account-edit" aria-hidden="true"></i>
+    <span>Each</span>
+</button>
+
+@code {
+    [Parameter] public bool Active { get; set; }
+    [Parameter] public EventCallback OnToggle { get; set; }
+    [Parameter] public string Title { get; set; } = "Set shock intensity separately for each selected person";
+    [Parameter] public bool Compact { get; set; }
+}

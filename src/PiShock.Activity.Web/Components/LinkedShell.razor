@@ -1,0 +1,312 @@
+@* Consented + linked-or-not main surface: controller, dialogs and logs (App.tsx "me.consent" branch). *@
+@implements IDisposable
+@inject ActivitySession Session
+@{
+    var me = Session.Me!;
+    var linked = me.PishockLinked;
+    var owned = Session.OwnedShockers;
+    var devices = Session.Devices;
+}
+<div class="official-activity-root">
+    @if (Session.ActionError is not null)
+    {
+        <div class="q-banner bg-negative text-white official-error-toast" style="z-index: 7000;">
+            <div class="q-banner__content col text-body2">@Session.ActionError</div>
+            <button type="button"
+                    class="q-btn q-btn-item non-selectable no-outline q-btn--flat q-btn--round text-white q-btn--dense"
+                    @onclick="DismissError" aria-label="Dismiss">
+                <span class="q-btn__wrapper col row q-anchor--skip">
+                    <span class="q-btn__content text-center col items-center q-anchor--skip justify-center row">
+                        <i class="q-icon mdi mdi-close" aria-hidden="true"></i>
+                    </span>
+                </span>
+            </button>
+        </div>
+    }
+
+    <OfficialController Hub="Session.PrimaryHub"
+                        Hubs="Session.HubOptions"
+                        Shockers="Session.Shockers"
+                        Busy="Session.Busy"
+                        Pip="Session.Pip"
+                        FriendsOpen="Session.FriendsMode"
+                        SelectedHubId="Session.SelectedHubId"
+                        Pinging="Session.Pinging"
+                        ShowLinkAccount="!linked"
+                        ShowOwnMode="linked"
+                        EmptyMessage="@EmptyMessage()"
+                        AccessBanner="@AccessBannerFragment()"
+                        OnOperate="Session.OperateAsync"
+                        OnEmergencyStop="Session.SetEmergencyStopAsync"
+                        OnSelectHub="Session.SelectHub"
+                        OnOpenOwnShockers="Session.OpenOwnShockers"
+                        OnOpenFriends="Session.OpenFriends"
+                        OnOpenMenu="OpenMenu"
+                        OnOpenLinkAccount="Session.OpenLinkFlowAsync"
+                        OnOpenShockerSettings="Session.OpenShockerSettings"
+                        OnPingHub="Session.RequestPingHub"
+                        OnPair="Session.RequestPair"
+                        OnShareShocker="Session.RequestShareShockerAsync">
+        <SafetyBanner>
+            <SafetyNoticeBar />
+        </SafetyBanner>
+        <FriendsPanel Context="ctx">
+            <FriendsParticipantList Participants="Session.Participants"
+                                    Statuses="Session.ParticipantStatuses"
+                                    CurrentUserId="@me.User!.Id"
+                                    SelectedTargetId="Session.SelectedTargetId"
+                                    SelectedTargetIds="Session.SelectedTargetIds"
+                                    MultiSelect="ctx.MultiShock"
+                                    OnToggleMultiSelect="ctx.OnToggleMultiShock"
+                                    IndividualIntensity="ctx.IndividualIntensity"
+                                    OnToggleIndividualIntensity="ctx.OnToggleIndividualIntensity"
+                                    OnSelect="@(id => Session.SelectParticipant(id, ctx.MultiShock))"
+                                    OnRefresh="Session.RefreshFriendsAsync" />
+        </FriendsPanel>
+    </OfficialController>
+
+    @* Pair *@
+    <PsDialog Open="@(Session.PairDialog is not null)"
+              Title="@(Session.PairDialog is { } pd ? $"Pair {pd.Name}" : "Pair")"
+              OnClose="ClosePair">
+        <div class="column q-gutter-sm">
+            <div class="text-body2 text-grey-3">
+                Put the shocker into pairing mode (power on, then hold the button ~3 seconds). While
+                the shocker is pairing, send a vibrate from here to complete pairing.
+            </div>
+            <button type="button" class="q-btn q-btn--standard bg-secondary text-dark q-btn--rectangle"
+                    disabled="@(Session.Busy || Session.PairDialog is null)"
+                    @onclick="SendPairVibrate">
+                Send pair vibrate
+            </button>
+            <button type="button" class="q-btn q-btn--outline text-secondary q-btn--rectangle" @onclick="ClosePair">
+                Done
+            </button>
+        </div>
+    </PsDialog>
+
+    @* Menu *@
+    <PsDialog Open="@(Session.Overlay == Overlay.Menu)" Title="Menu" OnClose="CloseOverlay">
+        <div class="q-list q-list--dark menu-action-list">
+            <div class="q-pa-sm text-caption text-grey-5">
+                @(linked
+                    ? "PiShock linked — manage Discord availability, limits, and shares here. Mode switching is in the bottom-left dock."
+                    : "No PiShock login needed to control Discord Shockers. Link only to share yourself or use your own devices.")
+            </div>
+            @foreach (var item in MenuItems.Where(i => linked || i.Overlay == Overlay.Logs))
+            {
+                var entry = item;
+                <button @key="entry.Label" type="button"
+                        class="q-item q-item-type row no-wrap q-item--dark q-item--clickable cursor-pointer full-width bg-transparent text-left"
+                        @onmousedown:preventDefault
+                        @onclick="() => MenuClick(entry.Overlay)"
+                        @onclick:preventDefault
+                        @onclick:stopPropagation>
+                    <div class="q-item__section column q-item__section--avatar q-item__section--side justify-center">
+                        <i class="q-icon mdi @entry.Icon text-secondary" aria-hidden="true"></i>
+                    </div>
+                    <div class="q-item__section column q-item__section--main justify-center">
+                        <div class="q-item__label text-grey-3">@entry.Label</div>
+                    </div>
+                </button>
+            }
+            @if (linked)
+            {
+                <button type="button"
+                        class="q-item q-item-type row no-wrap q-item--dark q-item--clickable cursor-pointer full-width bg-transparent text-left"
+                        @onmousedown:preventDefault
+                        @onclick="Unlink" @onclick:preventDefault @onclick:stopPropagation>
+                    <div class="q-item__section column q-item__section--avatar q-item__section--side justify-center">
+                        <i class="q-icon mdi mdi-link-off text-negative" aria-hidden="true"></i>
+                    </div>
+                    <div class="q-item__section column q-item__section--main justify-center">
+                        <div class="q-item__label text-negative">Unlink PiShock</div>
+                    </div>
+                </button>
+            }
+            else
+            {
+                <button type="button"
+                        class="q-item q-item-type row no-wrap q-item--dark q-item--clickable cursor-pointer full-width bg-transparent text-left"
+                        @onmousedown:preventDefault
+                        @onclick="OpenLink" @onclick:preventDefault @onclick:stopPropagation>
+                    <div class="q-item__section column q-item__section--avatar q-item__section--side justify-center">
+                        <i class="q-icon mdi mdi-link-variant text-secondary" aria-hidden="true"></i>
+                    </div>
+                    <div class="q-item__section column q-item__section--main justify-center">
+                        <div class="q-item__label text-secondary">Link PiShock Account</div>
+                    </div>
+                </button>
+            }
+        </div>
+    </PsDialog>
+
+    @* Link *@
+    <PsDialog Open="@(Session.Overlay == Overlay.Link)" Title="Link PiShock" OnClose="CloseOverlay" Wide="true">
+        <PiShockLinkPanel />
+    </PsDialog>
+
+    @* Availability *@
+    <PsDialog Open="@(Session.Overlay == Overlay.Availability)" Title="Available in Discord" OnClose="CloseOverlay" Wide="true">
+        <AvailabilitySettings OwnedShockers="owned"
+                              Participants="Session.Participants"
+                              CurrentUserId="@me.User!.Id"
+                              Busy="Session.Busy"
+                              OnLoad="Session.LoadAvailabilityAsync"
+                              OnSave="SaveAvailability" />
+    </PsDialog>
+
+    @* Activity limits *@
+    <PsDialog Open="@(Session.Overlay == Overlay.Settings)" Title="Activity Limits" OnClose="CloseSettings" Wide="true">
+        <ActivityLimitsSettings OwnedShockers="owned"
+                                Busy="Session.Busy"
+                                FocusShockerId="Session.SettingsFocusShockerId"
+                                OnLoad="Session.LoadSettingsAsync"
+                                OnRevokeConsent="Session.RevokeConsentAsync"
+                                OnSave="SaveSettings" />
+    </PsDialog>
+
+    @* Shares & links *@
+    <PsDialog Open="@(Session.Overlay == Overlay.Shares)" Title="Shares &amp; links" OnClose="CloseOverlay" Wide="true">
+        <SharesPanel Links="@(devices?.Links ?? new())"
+                     Shared="@(devices?.Shared ?? new())"
+                     Shockers="owned"
+                     Busy="Session.Busy"
+                     OnCreate="Session.CreateLinkAsync"
+                     OnPause="@(args => Session.PauseLinkAsync(args.LinkId, args.PauseState))"
+                     OnDelete="Session.DeleteLinkAsync"
+                     OnCreateShare="@(id => Session.CreateShareAsync(id, false, true))"
+                     OnClaimShare="Session.ClaimShareAsync" />
+    </PsDialog>
+
+    <OfficialLogsFab Count="Session.PublicLogs.Count" OnClick="Session.OpenOfficialLogs" />
+    <OfficialLogsPanel Open="@(Session.LogsOpen || Session.Overlay == Overlay.Logs)"
+                       Entries="Session.PublicLogs"
+                       OnClose="CloseLogs" />
+</div>
+
+@code {
+    private sealed record MenuItem(Overlay Overlay, string Label, string Icon);
+
+    private static readonly MenuItem[] MenuItems =
+    [
+        new(Overlay.Availability, "Available in Discord", "mdi-account-check"),
+        new(Overlay.Settings, "Activity Limits", "mdi-tune"),
+        new(Overlay.Shares, "Shares & links", "mdi-share-variant"),
+        new(Overlay.Logs, "Logs", "mdi-message-text-clock"),
+    ];
+
+    protected override void OnInitialized() => Session.Changed += OnChanged;
+
+    private void OnChanged() => _ = InvokeAsync(StateHasChanged);
+
+    public void Dispose() => Session.Changed -= OnChanged;
+
+    private void DismissError() => Session.ActionError = null;
+    private void OpenMenu() => Session.Overlay = Overlay.Menu;
+    private void CloseOverlay() => Session.Overlay = Overlay.None;
+
+    private void CloseSettings()
+    {
+        Session.Overlay = Overlay.None;
+        Session.SettingsFocusShockerId = null;
+    }
+
+    private void CloseLogs()
+    {
+        Session.CloseOfficialLogs();
+    }
+
+    private void ClosePair() => Session.PairDialog = null;
+
+    private void OpenLink() => Session.OpenLinkedOverlay(Overlay.Link);
+
+    private void MenuClick(Overlay target)
+    {
+        if (target == Overlay.Logs)
+        {
+            Session.Overlay = Overlay.None;
+            Session.OpenOfficialLogs();
+            return;
+        }
+        if (target == Overlay.Settings) Session.SettingsFocusShockerId = null;
+        Session.OpenLinkedOverlay(target);
+    }
+
+    private async Task Unlink()
+    {
+        Session.Overlay = Overlay.None;
+        await Session.UnlinkPiShockAsync();
+    }
+
+    private Task SendPairVibrate()
+    {
+        var s = Session.PairDialog;
+        if (s is null) return Task.CompletedTask;
+        return Session.OperateAsync(new OfficialOperateInput
+        {
+            ShockerId = s.Id,
+            ClientId = s.ClientId,
+            Operation = "vibrate",
+            Intensity = Math.Min(20, s.MaxIntensity > 0 ? s.MaxIntensity : 20),
+            DurationMs = 1000,
+            CanShock = s.CanShock,
+            CanVibrate = true,
+            CanBeep = s.CanBeep,
+            CanHold = s.CanHold,
+            MaxIntensity = s.MaxIntensity,
+            MaxDuration = s.MaxDuration,
+        });
+    }
+
+    private async Task SaveAvailability(List<ShareLimitRow> shares, List<string> banned)
+    {
+        await Session.SaveAvailabilityAsync(shares, banned);
+        Session.Overlay = Overlay.None;
+    }
+
+    private async Task SaveSettings(PersonalLimits personal, List<ShareLimitRow> shares)
+    {
+        await Session.SaveSettingsAsync(personal, shares);
+        Session.Overlay = Overlay.None;
+        Session.SettingsFocusShockerId = null;
+    }
+
+    private string EmptyMessage()
+    {
+        var linked = Session.Me?.PishockLinked == true;
+        if (Session.FriendBlocked)
+            return "You are blocked by this user. You cannot view or use any of their shockers.";
+        if (Session.FriendsMode && Session.SelectedTargetIds.Count > 0)
+            return "No shockers shared by the selected participants.";
+        if (Session.FriendsMode)
+            return linked
+                ? "Select Discord Shockers to control."
+                : "Not linked to PiShock — open Discord Shockers and pick someone who shared devices.";
+        return "No shockers";
+    }
+
+    private RenderFragment? AccessBannerFragment()
+    {
+        if (Session.FriendBlocked)
+        {
+            return @<div class="access-banner access-banner--blocked q-mt-sm q-pa-sm">
+                <div class="text-negative text-subtitle2">You are blocked</div>
+                <div class="text-grey-4 text-body2">
+                    This user blocked you. You cannot view or use any of their shockers.
+                </div>
+            </div>;
+        }
+        if (Session.FriendEStop)
+        {
+            return @<div class="access-banner access-banner--estop q-mt-sm q-pa-sm">
+                <div class="text-negative text-subtitle2">Emergency stop armed</div>
+                <div class="text-grey-4 text-body2">
+                    The owner engaged emergency stop. Shockers stay visible, but all controls are
+                    disabled until they release it.
+                </div>
+            </div>;
+        }
+        return null;
+    }
+}

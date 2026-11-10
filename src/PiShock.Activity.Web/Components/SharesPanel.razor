@@ -1,0 +1,150 @@
+@using System.Text.Json
+
+<div class="column q-gutter-md">
+    <div class="text-grey-5 text-body2">
+        Redeem a share code from someone else, create codes for your shockers, or manage website
+        links.
+    </div>
+
+    <div class="column q-gutter-sm">
+        <div class="text-secondary text-subtitle2">Redeem share code</div>
+        <div class="row q-gutter-sm items-center" style="flex-wrap: wrap;">
+            <input @bind="_claimCode" @bind:event="oninput" placeholder="Enter share code"
+                   class="bg-dark text-grey-3" style="@FieldStyle min-width: 180px; flex: 1;" disabled="@Busy" />
+            <QBtn Class="bg-secondary text-dark q-btn--standard q-btn--rectangle q-btn--actionable q-btn--dense"
+                  Disabled="@(Busy || string.IsNullOrWhiteSpace(_claimCode))" OnClick="Claim">
+                <span class="block">Add share code</span>
+            </QBtn>
+        </div>
+    </div>
+
+    <div class="column q-gutter-sm">
+        <div class="text-secondary text-subtitle2">Create for your shocker</div>
+        <div class="row q-gutter-sm items-center" style="flex-wrap: wrap;">
+            <select @bind="_shockerId" class="bg-dark text-grey-3" style="@FieldStyle">
+                @foreach (var s in Shockers)
+                {
+                    <option value="@s.Id">@s.Name</option>
+                }
+            </select>
+            <input @bind="_name" @bind:event="oninput" placeholder="Link name"
+                   class="bg-dark text-grey-3" style="@FieldStyle min-width: 140px;" />
+            <QBtn Class="bg-secondary text-dark q-btn--standard q-btn--rectangle q-btn--actionable q-btn--dense"
+                  Disabled="@(Busy || EffectiveShockerId == 0)" OnClick="CreateLink">
+                <span class="block">Create link</span>
+            </QBtn>
+            <QBtn Class="text-secondary bg-dark q-btn--outline q-btn--rectangle q-btn--actionable q-btn--dense"
+                  Disabled="@(Busy || EffectiveShockerId == 0)" OnClick="CreateShare">
+                <span class="block">Create share code</span>
+            </QBtn>
+        </div>
+    </div>
+
+    <div class="column q-gutter-sm">
+        <div class="text-secondary text-subtitle2">Shared with you</div>
+        <div class="q-list q-list--dark q-list--separator">
+            @if (Shared.Count == 0)
+            {
+                <div class="text-grey-5 q-pa-sm">No redeemed share codes yet.</div>
+            }
+            @{ var idx = 0; }
+            @foreach (var row in Shared)
+            {
+                var id = Json.Num(row, "ShareId", "shareId") is { } sid ? ((long)sid).ToString() : idx.ToString();
+                idx++;
+                var code = Json.Str(row, "ShareCode", "shareCode", "Code", "code");
+                var title = Json.Str(row, "ShockerName", "shockerName", "Name", "name")
+                            ?? (code is not null ? $"Share {code}" : $"Share {id}");
+                var owner = Json.Str(row, "Username", "username");
+                var paused = Json.Bool(row, "Paused", "paused", "SharePaused", "sharePaused") ?? false;
+                <div class="q-item q-item-type column q-pa-sm">
+                    <div class="q-item__label text-secondary">@title</div>
+                    <div class="q-item__label q-item__label--caption text-grey-5">
+                        @(owner is not null ? $"{owner} · " : "")@(code is not null ? $"Code {code} · " : "")@(paused ? "Paused" : "Active")
+                    </div>
+                </div>
+            }
+        </div>
+    </div>
+
+    <div class="column q-gutter-sm">
+        <div class="text-secondary text-subtitle2">Website links</div>
+        <div class="q-list q-list--dark q-list--separator">
+            @if (Links.Count == 0)
+            {
+                <div class="text-grey-5 q-pa-sm">No links yet.</div>
+            }
+            @foreach (var link in Links)
+            {
+                var id = (int)(Json.Num(link, "LinkId", "linkId") ?? 0);
+                var title = Json.Str(link, "Name", "name") ?? $"Link {id}";
+                var code = Json.Str(link, "Code", "code");
+                var paused = Json.Bool(link, "Paused", "paused") ?? false;
+                <div @key="id" class="q-item q-item-type column q-pa-sm">
+                    <div class="q-item__label text-secondary">@title</div>
+                    <div class="q-item__label q-item__label--caption text-grey-5">
+                        @(code is not null ? $"Code {code} · " : "")@(paused ? "Paused" : "Active")
+                    </div>
+                    <div class="row q-gutter-sm q-mt-sm">
+                        <QBtn Class="text-secondary q-btn--outline q-btn--rectangle q-btn--dense q-btn--actionable"
+                              Disabled="Busy" OnClick="() => OnPause.InvokeAsync((id, !paused))">
+                            <span class="block">@(paused ? "Unpause" : "Pause")</span>
+                        </QBtn>
+                        <QBtn Class="text-negative q-btn--outline q-btn--rectangle q-btn--dense q-btn--actionable"
+                              Disabled="Busy" OnClick="() => OnDelete.InvokeAsync(id)">
+                            <span class="block">Delete</span>
+                        </QBtn>
+                    </div>
+                </div>
+            }
+        </div>
+    </div>
+</div>
+
+@code {
+    private const string FieldStyle = "background: #121212; color: #e8e8e8; border: 1px solid hsla(0,0%,100%,.28); padding: 8px;";
+
+    [Parameter] public List<JsonElement> Links { get; set; } = [];
+    [Parameter] public List<JsonElement> Shared { get; set; } = [];
+    [Parameter] public List<ShockerView> Shockers { get; set; } = [];
+    [Parameter] public bool Busy { get; set; }
+    [Parameter] public EventCallback<Dictionary<string, object?>> OnCreate { get; set; }
+    [Parameter] public EventCallback<(int LinkId, bool PauseState)> OnPause { get; set; }
+    [Parameter] public EventCallback<int> OnDelete { get; set; }
+    [Parameter] public EventCallback<int> OnCreateShare { get; set; }
+    [Parameter] public EventCallback<string> OnClaimShare { get; set; }
+
+    private string _name = "Activity link";
+    private string _claimCode = "";
+    private int _shockerId;
+
+    private int EffectiveShockerId => _shockerId != 0 ? _shockerId : Shockers.FirstOrDefault()?.Id ?? 0;
+
+    private async Task Claim()
+    {
+        var code = _claimCode.Trim();
+        if (code.Length == 0) return;
+        await OnClaimShare.InvokeAsync(code);
+        _claimCode = "";
+    }
+
+    private Task CreateShare() => OnCreateShare.InvokeAsync(EffectiveShockerId);
+
+    private Task CreateLink() => OnCreate.InvokeAsync(new Dictionary<string, object?>
+    {
+        ["Name"] = _name,
+        ["ShockerId"] = EffectiveShockerId,
+        ["Intensity"] = 30,
+        ["Duration"] = 1000,
+        ["ShockEnabled"] = true,
+        ["VibrateEnabled"] = true,
+        ["BeepEnabled"] = true,
+        ["ShowCountdown"] = true,
+        ["ShowUsages"] = true,
+        ["Editable"] = true,
+        ["ActivateOnLoad"] = false,
+        ["ForceWarning"] = false,
+        ["ForceLogin"] = false,
+        ["SingleUser"] = false,
+    });
+}

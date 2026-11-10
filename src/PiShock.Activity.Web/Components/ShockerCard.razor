@@ -1,0 +1,96 @@
+@using System.Globalization
+
+@* Legacy per-shocker card (slider + action buttons). *@
+<article class="shocker-card">
+    <header>
+        <div>
+            <h3>@Shocker.Name</h3>
+            <div class="meta">
+                @(string.IsNullOrEmpty(Shocker.HubName) ? "" : $"{Shocker.HubName} · ")@(Shocker.Owned ? "Owned" : "Shared")@(Shocker.IsV3 ? " · V3" : "")@(Shocker.Paused ? " · Paused" : "")
+            </div>
+        </div>
+        <span class="status-pill">
+            <span class="dot @(Shocker.Online == true ? "on" : "off")"></span>
+            @(Shocker.Online == true ? "Online" : "Offline")
+        </span>
+    </header>
+
+    <div class="slider-block">
+        <label>
+            <span>Intensity</span>
+            <span>@_intensity</span>
+        </label>
+        <input type="range" min="1" max="@MaxIntensity" value="@_intensity" @oninput="OnIntensity" />
+    </div>
+
+    <div class="slider-block">
+        <label>
+            <span>Duration</span>
+            <span>@_durationSec.ToString("0.0", CultureInfo.InvariantCulture)s</span>
+        </label>
+        <input type="range" min="0.3" max="@MaxSec.ToString(CultureInfo.InvariantCulture)" step="0.1"
+               value="@_durationSec.ToString(CultureInfo.InvariantCulture)" @oninput="OnDuration" />
+    </div>
+
+    <div class="btn-row">
+        <button class="btn danger" type="button" disabled="@(Busy || !Shocker.CanShock || Shocker.Paused)" @onclick='() => Fire("shock")'>Shock</button>
+        <button class="btn" type="button" disabled="@(Busy || !Shocker.CanVibrate || Shocker.Paused)" @onclick='() => Fire("vibrate")'>Vibrate</button>
+        <button class="btn secondary" type="button" disabled="@(Busy || !Shocker.CanBeep || Shocker.Paused)" @onclick='() => Fire("beep")'>Beep</button>
+        <button class="btn accent" type="button" disabled="@(Busy || !Shocker.CanHold || Shocker.Paused)" @onclick='() => Fire("hold")'>Hold</button>
+        <button class="btn ghost" type="button" disabled="@(Busy || !Shocker.CanVibrate || Shocker.Paused)" @onclick='() => Fire("warning")'>Warn</button>
+        @if (Shocker.CanPause && Shocker.ShareId is not null && OnPauseShare.HasDelegate)
+        {
+            <button class="btn ghost" type="button" disabled="@Busy" @onclick="() => OnPauseShare.InvokeAsync(Shocker.ShareId.Value)">Pause share</button>
+        }
+    </div>
+</article>
+
+@code {
+    [Parameter, EditorRequired] public ShockerView Shocker { get; set; } = new();
+    [Parameter] public bool Busy { get; set; }
+    [Parameter] public EventCallback<OfficialOperateInput> OnOperate { get; set; }
+    [Parameter] public EventCallback<int> OnPauseShare { get; set; }
+
+    private int _intensity;
+    private double _durationSec;
+    private bool _seeded;
+
+    private int MaxIntensity => Shocker.MaxIntensity > 0 ? Shocker.MaxIntensity : 100;
+    private double MaxSec => Math.Max(0.3, (Shocker.MaxDuration > 0 ? Shocker.MaxDuration : 15000) / 1000.0);
+
+    protected override void OnParametersSet()
+    {
+        if (_seeded) return;
+        _seeded = true;
+        _intensity = Math.Min(25, MaxIntensity);
+        _durationSec = Math.Min(1, MaxSec);
+    }
+
+    private void OnIntensity(ChangeEventArgs e)
+    {
+        if (int.TryParse(Convert.ToString(e.Value, CultureInfo.InvariantCulture), out var v)) _intensity = v;
+    }
+
+    private void OnDuration(ChangeEventArgs e)
+    {
+        if (double.TryParse(Convert.ToString(e.Value, CultureInfo.InvariantCulture), NumberStyles.Float, CultureInfo.InvariantCulture, out var v))
+            _durationSec = v;
+    }
+
+    private Task Fire(string operation) => OnOperate.InvokeAsync(new OfficialOperateInput
+    {
+        ShockerId = Shocker.Id,
+        ShareCode = Shocker.ShareCode,
+        ClientId = Shocker.ClientId,
+        TargetDiscordUserId = Shocker.TargetDiscordUserId,
+        Operation = operation,
+        Intensity = _intensity,
+        DurationMs = (int)Math.Round(_durationSec * 1000),
+        CanShock = Shocker.CanShock,
+        CanVibrate = Shocker.CanVibrate,
+        CanBeep = Shocker.CanBeep,
+        CanHold = Shocker.CanHold,
+        MaxIntensity = Shocker.MaxIntensity,
+        MaxDuration = Shocker.MaxDuration,
+    });
+}

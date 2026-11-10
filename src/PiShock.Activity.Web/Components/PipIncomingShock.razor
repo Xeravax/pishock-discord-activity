@@ -1,0 +1,76 @@
+@* PIP-only surface: avatar + last action intensity/duration. No chrome. *@
+@if (Hit is null)
+{
+    <div class="pip-incoming" role="status" aria-live="polite">
+        <div class="pip-incoming__empty">No recent shocks yet</div>
+    </div>
+}
+else
+{
+    var activity = Hit.Kind == "activity";
+    var targetName = Hit.TargetDisplayName?.Trim();
+    var showTarget = activity && !string.IsNullOrEmpty(targetName) && Hit.TargetDiscordUserId != Hit.ExecutorDiscordUserId;
+    <div class="pip-incoming @((Hit.Success ? "" : "pip-incoming--failed") + (activity ? " pip-incoming--activity" : ""))"
+         role="status" aria-live="polite">
+        <img class="pip-incoming__avatar" src="@Hit.AvatarUrl" alt="" />
+        <div class="pip-incoming__copy">
+            @if (activity)
+            {
+                <div class="pip-incoming__eyebrow">Latest from log</div>
+            }
+            <div class="pip-incoming__name ellipsis" title="@Hit.DisplayName">@Hit.DisplayName</div>
+            <div class="pip-incoming__action">@FormatAction(Hit.Action)</div>
+            @if (showTarget)
+            {
+                <div class="pip-incoming__target" title="@targetName">
+                    <span class="pip-incoming__target-label">to</span>
+                    @if (!string.IsNullOrEmpty(Hit.TargetAvatarUrl))
+                    {
+                        <img class="pip-incoming__target-avatar" src="@Hit.TargetAvatarUrl" alt="" />
+                    }
+                    <span class="pip-incoming__target-name ellipsis">@targetName</span>
+                </div>
+            }
+            <div class="pip-incoming__stats">
+                @if (Hit.Intensity is not null)
+                {
+                    <span>@(Hit.Intensity)%</span>
+                }
+                @if (Hit.Intensity is not null && Hit.DurationMs is not null)
+                {
+                    <span class="pip-incoming__dot" aria-hidden="true">·</span>
+                }
+                @if (Hit.DurationMs is not null)
+                {
+                    <span>@FormatDuration(Hit.DurationMs.Value)</span>
+                }
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    [Parameter] public IncomingShockHit? Hit { get; set; }
+
+    private static string FormatAction(string action)
+    {
+        var raw = action.ToLowerInvariant();
+        if (raw.StartsWith("participant_")) raw = raw["participant_".Length..];
+        return raw switch
+        {
+            "shock" or "hold" => "SHOCK",
+            "vibrate" or "warning" => "VIBRATE",
+            "beep" => "BEEP",
+            "" => "HIT",
+            _ => raw.ToUpperInvariant(),
+        };
+    }
+
+    private static string FormatDuration(int ms)
+    {
+        var s = ms / 1000.0;
+        return Math.Abs(s - Math.Round(s)) < 1e-9
+            ? $"{(int)Math.Round(s)}s"
+            : $"{s.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture)}s";
+    }
+}

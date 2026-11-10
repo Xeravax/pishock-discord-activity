@@ -1,0 +1,227 @@
+{
+  "openapi": "3.0.1",
+  "info": {
+    "title": "PiShock Activity API",
+    "version": "1.0.0",
+    "description": "Contract stub aligned with Minimal API `.WithName(...)` operationIds. Prefer OpenApiGenerateDocuments output when available."
+  },
+  "paths": {
+    "/api/health": {
+      "get": {
+        "operationId": "GetHealth",
+        "tags": ["Meta"],
+        "responses": { "200": { "description": "OK" }, "503": { "description": "Shutting down" } }
+      }
+    },
+    "/api/version": {
+      "get": {
+        "operationId": "GetVersion",
+        "tags": ["Meta"],
+        "responses": { "200": { "description": "OK" }, "503": { "description": "Shutting down" } }
+      }
+    },
+    "/api/auth/discord": {
+      "post": {
+        "operationId": "ExchangeDiscordCode",
+        "tags": ["Auth"],
+        "responses": { "200": { "description": "OK" }, "400": { "description": "Missing code" } }
+      }
+    },
+    "/api/me": {
+      "get": {
+        "operationId": "GetMe",
+        "tags": ["Auth"],
+        "responses": { "200": { "description": "OK" } }
+      }
+    },
+    "/api/consent": {
+      "post": {
+        "operationId": "AcceptConsent",
+        "tags": ["Auth"],
+        "responses": { "200": { "description": "OK" }, "400": { "description": "Invalid consent" } }
+      },
+      "delete": {
+        "operationId": "RevokeConsent",
+        "tags": ["Auth"],
+        "responses": { "200": { "description": "OK" } }
+      }
+    },
+    "/api/announcements": {
+      "get": {
+        "operationId": "GetAnnouncements",
+        "tags": ["Announcements"],
+        "responses": { "200": { "description": "OK" }, "502": { "description": "Upstream failure" } }
+      }
+    },
+    "/api/pishock/login/start": {
+      "post": {
+        "operationId": "StartPiShockLogin",
+        "tags": ["PiShockSession"],
+        "responses": { "200": { "description": "OK" }, "403": { "description": "Consent required" } }
+      }
+    },
+    "/api/pishock/login/status": {
+      "get": {
+        "operationId": "GetPiShockLoginStatus",
+        "tags": ["PiShockSession"],
+        "responses": { "200": { "description": "OK" } }
+      }
+    },
+    "/api/pishock/login/confirm": {
+      "post": {
+        "operationId": "ConfirmPiShockLogin",
+        "tags": ["PiShockSession"],
+        "responses": { "200": { "description": "OK" }, "404": { "description": "No pending confirm" } }
+      }
+    },
+    "/api/pishock/login/cancel": {
+      "post": {
+        "operationId": "CancelPiShockLogin",
+        "tags": ["PiShockSession"],
+        "responses": { "200": { "description": "OK" } }
+      }
+    },
+    "/api/pishock/session": {
+      "delete": {
+        "operationId": "DeletePiShockSession",
+        "tags": ["PiShockSession"],
+        "responses": { "200": { "description": "OK" } }
+      }
+    },
+    "/api/devices": {
+      "get": {
+        "operationId": "ListDevices",
+        "tags": ["Control"],
+        "responses": { "200": { "description": "OK" } }
+      }
+    },
+    "/api/emergency-stop": {
+      "put": {
+        "operationId": "SetEmergencyStop",
+        "tags": ["Control"],
+        "responses": { "200": { "description": "OK" }, "400": { "description": "Bad request" } }
+      }
+    },
+    "/api/operate": {
+      "post": {
+        "operationId": "Operate",
+        "tags": ["Control"],
+        "responses": { "200": { "description": "OK" } }
+      }
+    },
+    "/api/pause": {
+      "post": {
+        "operationId": "Pause",
+        "tags": ["Control"],
+        "responses": { "200": { "description": "OK" } }
+      }
+    },
+    "/api/links": {
+      "get": {
+        "operationId": "ListLinks",
+        "tags": ["Control"],
+        "responses": { "200": { "description": "OK" } }
+      },
+      "post": {
+        "operationId": "CreateLink",
+        "tags": ["Control"],
+        "responses": { "200": { "description": "OK" } }
+      }
+    },
+    "/api/links/{linkId}": {
+      "delete": {
+        "operationId": "DeleteLink",
+        "tags": ["Control"],
+        "parameters": [
+          { "name": "linkId", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": { "200": { "description": "OK" } }
+      }
+    },
+    "/api/shares": {
+      "post": {
+        "operationId": "CreateShare",
+        "tags": ["Control"],
+        "responses": { "200": { "description": "OK" } }
+      },
+      "put": {
+        "operationId": "ClaimShare",
+        "tags": ["Control"],
+        "responses": { "200": { "description": "OK" } }
+      }
+    },
+    "/api/shares/{shareId}": {
+      "delete": {
+        "operationId": "DeleteShare",
+        "tags": ["Control"],
+        "parameters": [
+          { "name": "shareId", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": { "200": { "description": "OK" } }
+      }
+    },
+    "/api/logs": {
+      "get": {
+        "operationId": "ListLogs",
+        "tags": ["Control"],
+        "parameters": [
+          { "name": "limit", "in": "query", "required": false, "schema": { "type": "integer" } }
+        ],
+        "responses": { "200": { "description": "OK" } }
+      }
+    },
+    "/api/broker/status": {
+      "get": {
+        "operationId": "GetBrokerStatus",
+        "tags": ["Control"],
+        "responses": { "200": { "description": "OK" } }
+      }
+    },
+    "/api/activity/share": {
+      "get": {
+        "operationId": "GetActivityShare",
+        "tags": ["ActivityShare"],
+        "responses": { "200": { "description": "OK" } }
+      },
+      "put": {
+        "operationId": "UpdateActivityShare",
+        "tags": ["ActivityShare"],
+        "responses": { "200": { "description": "OK" } }
+      }
+    },
+    "/api/activity/settings": {
+      "get": {
+        "operationId": "GetActivitySettings",
+        "tags": ["ActivityShare"],
+        "responses": { "200": { "description": "OK" } }
+      },
+      "put": {
+        "operationId": "UpdateActivitySettings",
+        "tags": ["ActivityShare"],
+        "responses": { "200": { "description": "OK" } }
+      }
+    },
+    "/api/participants/status": {
+      "post": {
+        "operationId": "GetParticipantStatus",
+        "tags": ["Participants"],
+        "responses": { "200": { "description": "OK" } }
+      }
+    },
+    "/api/participants/{targetDiscordUserId}/operate": {
+      "post": {
+        "operationId": "OperateParticipant",
+        "tags": ["Participants"],
+        "parameters": [
+          {
+            "name": "targetDiscordUserId",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": { "200": { "description": "OK" } }
+      }
+    }
+  }
+}

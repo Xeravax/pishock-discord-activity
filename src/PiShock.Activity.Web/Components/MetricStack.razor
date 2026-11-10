@@ -1,0 +1,50 @@
+<div class="flex column" style="border-radius: 3px;">
+    <button type="button"
+            disabled="@Disabled"
+            @onclick="HandleClick"
+            @onpointerdown="HandleDown"
+            @onpointerup="HandleUp"
+            @onpointercancel="HandleUp"
+            @onpointerleave="HandleUp"
+            @oncontextmenu:preventDefault="Hold"
+            class="q-btn q-btn-item non-selectable no-outline q-btn--@(Filled ? "standard bg-secondary text-dark" : "outline text-secondary") q-btn--rectangle q-btn--actionable q-focusable q-hoverable q-btn--wrap"
+            style="border-bottom-left-radius: 0; border-bottom-right-radius: 0;@((Active ? " box-shadow: inset 0 0 0 2px #fff;" : "") + (Hold ? " touch-action: none; user-select: none;" : ""))">
+        <span class="q-btn__wrapper col row q-anchor--skip">
+            <span class="q-btn__content text-center col items-center q-anchor--skip justify-center column">
+                <i class="q-icon mdi @Icon" aria-hidden="true"></i>
+                <span class="block">@Value</span>
+            </span>
+        </span>
+    </button>
+    <div class="q-chip row inline no-wrap items-center text-center no-margin @(Filled ? "bg-dark text-secondary" : "bg-secondary text-dark") border-color-secondary q-chip--dense q-chip--square"
+         style="font-size: 10px; border-top-left-radius: 0; border-top-right-radius: 0; border: 1px solid;">
+        <div class="q-chip__content col row no-wrap items-center q-anchor--skip">
+            <div class="full-width text-center text-caption">
+                <span>@Label</span>
+            </div>
+        </div>
+    </div>
+</div>
+
+@code {
+    [Parameter, EditorRequired] public string Icon { get; set; } = "";
+    [Parameter] public string Value { get; set; } = "";
+    [Parameter] public string Label { get; set; } = "";
+    [Parameter] public bool Filled { get; set; }
+    [Parameter] public bool Active { get; set; }
+    [Parameter] public bool Disabled { get; set; }
+
+    /// <summary>Press-and-hold mode: pointer events drive begin/end instead of click.</summary>
+    [Parameter] public bool Hold { get; set; }
+
+    [Parameter] public EventCallback OnClick { get; set; }
+    [Parameter] public EventCallback OnHoldStart { get; set; }
+    [Parameter] public EventCallback OnHoldEnd { get; set; }
+
+    private Task HandleClick() => Hold ? Task.CompletedTask : OnClick.InvokeAsync();
+
+    private Task HandleDown(PointerEventArgs e) =>
+        Hold && !Disabled && e.Button == 0 ? OnHoldStart.InvokeAsync() : Task.CompletedTask;
+
+    private Task HandleUp() => Hold ? OnHoldEnd.InvokeAsync() : Task.CompletedTask;
+}

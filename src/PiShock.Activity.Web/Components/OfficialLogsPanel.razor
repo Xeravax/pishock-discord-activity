@@ -1,0 +1,115 @@
+@* Public who→whom activity log (official PiShock look). *@
+@if (Open)
+{
+    var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+    <div class="ps-dialog-root" style="z-index: 7200;">
+        <div class="ps-dialog-backdrop" @onclick="OnClose"></div>
+        <div class="ps-dialog-inner" role="dialog" aria-modal="true" aria-label="Logs">
+            <div class="official-logs-card q-card q-card--dark q-dark bg-dark">
+                <div class="official-logs-banner row items-center justify-between no-wrap">
+                    <span>Recent activity across all sessions</span>
+                    <button type="button"
+                            class="q-btn q-btn-item non-selectable no-outline q-btn--flat q-btn--round text-dark q-btn--dense"
+                            @onclick="OnClose" aria-label="Close">
+                        <span class="q-btn__wrapper col row q-anchor--skip">
+                            <span class="q-btn__content text-center col items-center q-anchor--skip justify-center row">
+                                <i class="q-icon mdi mdi-close" aria-hidden="true"></i>
+                            </span>
+                        </span>
+                    </button>
+                </div>
+                <div class="official-logs-list">
+                    @if (Entries.Count == 0)
+                    {
+                        <div class="text-grey-5 q-pa-md text-center">No log entries yet.</div>
+                    }
+                    else
+                    {
+                        @foreach (var row in Entries)
+                        {
+                            <div @key="row.Id" class="official-log-row">
+                                <div class="official-log-row__top">
+                                    <OfficialLogPersonChip Person="row.From" Tone="from" />
+                                    <i class="q-icon mdi mdi-arrow-right official-log-arrow" aria-hidden="true"></i>
+                                    <OfficialLogPersonChip Person="row.To" Tone="to" />
+                                </div>
+                                <div class="official-log-row__bottom">
+                                    <div class="official-log-row__meta">
+                                        @if (row.Source == "website")
+                                        {
+                                            <span class="official-log-source official-log-source--website" title="PiShock website / panel">Website</span>
+                                        }
+                                        else
+                                        {
+                                            <span class="official-log-source official-log-source--discord" title="Discord Activity app">App</span>
+                                        }
+                                        @if (row.Location?.Name is { Length: > 0 } locName)
+                                        {
+                                            <span class="official-log-location" title="@locName">
+                                                @if (!string.IsNullOrEmpty(row.Location.IconUrl))
+                                                {
+                                                    <img src="@row.Location.IconUrl" alt="" class="official-log-location__icon" />
+                                                }
+                                                else
+                                                {
+                                                    <i class="q-icon mdi @(string.IsNullOrEmpty(row.Location.GuildId) ? "mdi-message-text" : "mdi-discord")" aria-hidden="true"></i>
+                                                }
+                                                <span class="ellipsis">@locName</span>
+                                            </span>
+                                        }
+                                        @if (row.Intensity is not null)
+                                        {
+                                            <span class="official-log-stat">
+                                                <i class="q-icon mdi @ActionIcon(row.Action)" aria-hidden="true"></i>
+                                                @row.Intensity
+                                            </span>
+                                        }
+                                        @if (row.DurationSec is not null)
+                                        {
+                                            <span class="official-log-stat">
+                                                <i class="q-icon mdi mdi-clock-outline" aria-hidden="true"></i>
+                                                @FormatDuration(row.DurationSec.Value)
+                                            </span>
+                                        }
+                                    </div>
+                                    <span class="official-log-ago">@FormatAgo(row.At, now)</span>
+                                </div>
+                            </div>
+                        }
+                    }
+                </div>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    [Parameter] public bool Open { get; set; }
+    [Parameter] public List<OfficialLogEntry> Entries { get; set; } = [];
+    [Parameter] public EventCallback OnClose { get; set; }
+
+    private static string FormatAgo(long at, long now)
+    {
+        var sec = Math.Max(0, (int)Math.Round((now - at) / 1000.0));
+        if (sec < 45) return "just now";
+        var min = (int)Math.Round(sec / 60.0);
+        if (min < 60) return $"{min} minute{(min == 1 ? "" : "s")} ago";
+        var hr = (int)Math.Round(min / 60.0);
+        if (hr < 48) return $"{hr} hour{(hr == 1 ? "" : "s")} ago";
+        var day = (int)Math.Round(hr / 24.0);
+        return $"{day} day{(day == 1 ? "" : "s")} ago";
+    }
+
+    private static string ActionIcon(string action) => action switch
+    {
+        "vibrate" => "mdi-vibrate",
+        "beep" => "mdi-bell",
+        "shock" => "mdi-lightning-bolt",
+        _ => "mdi-circle-outline",
+    };
+
+    private static string FormatDuration(double sec) =>
+        Math.Abs(sec - Math.Round(sec)) < 1e-9
+            ? ((int)Math.Round(sec)).ToString()
+            : (Math.Round(sec * 10) / 10).ToString(System.Globalization.CultureInfo.InvariantCulture);
+}

@@ -1,0 +1,9 @@
+{
+  "name": "pishock-discord-sdk-bundle",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@discord/embedded-app-sdk": "^2.5.0",
+    "esbuild": "^0.25.0"
+  }
+}

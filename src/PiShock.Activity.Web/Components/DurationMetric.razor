@@ -1,0 +1,76 @@
+@using System.Globalization
+@{
+    var presets = PresetsSec.Where(sec => (int)Math.Round(sec * 1000) <= MaxMs).ToList();
+    var showLimits = LimitMarkers.Count > 1 && MaxMs > 0;
+}
+<div class="official-duration-wrap" @onmousedown:stopPropagation>
+    <MetricStack Icon="mdi-clock"
+                 Value="@FormatSec(ValueMs)"
+                 Label="Duration"
+                 Disabled="Disabled"
+                 OnClick="OnToggle" />
+    @if (showLimits)
+    {
+        <div class="official-duration-limits" aria-label="Per-shocker duration limits">
+            @foreach (var m in LimitMarkers.OrderBy(x => x.DurationMs))
+            {
+                var over = ValueMs > m.DurationMs;
+                <span @key="m.Key"
+                      class="official-duration-limit-circle@(over ? " is-over" : "")"
+                      title="@($"{m.Label}: {FormatSec(m.DurationMs)}s max")"
+                      style="border-color: @m.Color; color: @m.Color;@(over ? $" box-shadow: 0 0 0 1px {m.Color};" : "")">
+                    @FormatSec(m.DurationMs)s
+                </span>
+            }
+        </div>
+    }
+    @if (Open && !Disabled)
+    {
+        <div class="official-duration-menu official-duration-menu--@Side" role="listbox" aria-label="Duration presets">
+            @foreach (var sec in presets)
+            {
+                var ms = (int)Math.Round(sec * 1000);
+                var label = sec < 1 ? "." + sec.ToString("0.0", CultureInfo.InvariantCulture).Split('.')[1] : sec.ToString(CultureInfo.InvariantCulture);
+                var selected = ValueMs == ms;
+                var matching = showLimits ? LimitMarkers.Where(m => m.DurationMs == ms).ToList() : [];
+                var overLimit = showLimits ? LimitMarkers.Where(m => ms > m.DurationMs).ToList() : [];
+                var ring = matching.Count > 0
+                    ? $"box-shadow: 0 0 0 2px {matching[0].Color}{(matching.Count > 1 ? $", 0 0 0 4px {matching[1].Color}" : "")};"
+                    : "";
+                var title = matching.Count > 0
+                    ? $"Limit for: {string.Join(", ", matching.Select(m => m.Label))}"
+                    : overLimit.Count > 0 ? $"Over limit for: {string.Join(", ", overLimit.Select(m => m.Label))}" : null;
+                <button @key="sec" type="button" role="option"
+                        aria-selected="@(selected ? "true" : "false")"
+                        class="official-duration-chip@((selected ? " is-selected" : "") + (matching.Count > 0 ? " has-limit-ring" : "") + (overLimit.Count > 0 ? " has-over-limit" : ""))"
+                        title="@title"
+                        style="@ring"
+                        @onclick="() => OnSelect.InvokeAsync(ms)">
+                    @label
+                </button>
+            }
+        </div>
+    }
+</div>
+
+@code {
+    /// <summary>Official remote duration chips (seconds).</summary>
+    private static readonly double[] PresetsSec = [0.1, 0.3, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+
+    [Parameter] public int ValueMs { get; set; }
+    [Parameter] public int MaxMs { get; set; }
+    [Parameter] public bool Open { get; set; }
+    [Parameter] public bool Disabled { get; set; }
+    [Parameter] public string Side { get; set; } = "right";
+    [Parameter] public List<LimitMarker> LimitMarkers { get; set; } = [];
+    [Parameter] public EventCallback OnToggle { get; set; }
+    [Parameter] public EventCallback<int> OnSelect { get; set; }
+
+    public static string FormatSec(int ms)
+    {
+        var s = ms / 1000.0;
+        return Math.Abs(s - Math.Round(s)) < 1e-9
+            ? ((int)Math.Round(s)).ToString(CultureInfo.InvariantCulture)
+            : s.ToString("0.0", CultureInfo.InvariantCulture);
+    }
+}

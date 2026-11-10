@@ -1,0 +1,38 @@
+@if (Compact)
+{
+    <div class="official-safety-banner">
+        <div class="row items-center no-wrap justify-center q-gutter-xs">
+            <i class="q-icon mdi mdi-shield-alert-outline" aria-hidden="true" style="font-size: 14px;"></i>
+            <div class="text-caption ellipsis official-safety-banner__text">
+                <strong>Safety</strong>
+                <span class="official-safety-banner__sep">·</span>
+                start low
+                <span class="official-safety-banner__sep">·</span>
+                keep STOP ready
+                <span class="official-safety-banner__sep">·</span>
+                actions are logged
+            </div>
+        </div>
+    </div>
+}
+else
+{
+    <div class="safety-reminders">
+        <div class="safety-reminders-inner">
+            <span class="safety-reminders-icon" aria-hidden="true">⚠</span>
+            <div>
+                <h3>Safety Reminders</h3>
+                <div class="safety-reminders-grid">
+                    <span>• Always ensure explicit consent</span>
+                    <span>• Start with lowest intensity</span>
+                    <span>• Have emergency procedures ready</span>
+                    <span>• All actions are publicly logged</span>
+                </div>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    [Parameter] public bool Compact { get; set; }
+}

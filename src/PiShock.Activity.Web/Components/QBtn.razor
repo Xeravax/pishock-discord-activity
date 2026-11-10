@@ -1,0 +1,29 @@
+<button type="button"
+        class="q-btn q-btn-item non-selectable no-outline @Class"
+        disabled="@Disabled"
+        title="@Title"
+        style="@Style"
+        aria-label="@AriaLabel"
+        @onclick="OnClick">
+    <span class="q-btn__wrapper col row q-anchor--skip">
+        <span class="q-btn__content text-center col items-center q-anchor--skip justify-center @ContentClass">@ChildContent</span>
+    </span>
+</button>
+
+@code {
+    /// <summary>Quasar variant classes, e.g. "bg-secondary text-dark q-btn--standard q-btn--rectangle q-btn--actionable".</summary>
+    [Parameter] public string Class { get; set; } = "";
+    [Parameter] public string ContentClass { get; set; } = "row";
+    [Parameter] public bool Disabled { get; set; }
+    [Parameter] public string? Title { get; set; }
+    [Parameter] public string? Style { get; set; }
+    [Parameter] public string? AriaLabel { get; set; }
+    [Parameter] public EventCallback OnClick { get; set; }
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+
+    // Common variants used across the React client
+    public const string Primary =
+        "bg-secondary text-dark q-btn--standard q-btn--rectangle q-btn--actionable";
+    public const string Outline =
+        "text-secondary bg-dark q-btn--outline q-btn--rectangle q-btn--actionable";
+}

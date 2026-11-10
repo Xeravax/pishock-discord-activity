@@ -1,0 +1,20 @@
+@* Tiny FAB that opens the public who→whom activity log. *@
+@{
+    var badge = Count > 99 ? "99+" : Count > 0 ? Count.ToString() : null;
+}
+<button type="button"
+        class="official-logs-fab"
+        @onclick="OnClick"
+        aria-label="@($"Open logs{(Count > 0 ? $", {Count} entries" : "")}")"
+        title="Logs">
+    <i class="q-icon mdi mdi-message-text-clock" aria-hidden="true"></i>
+    @if (badge is not null)
+    {
+        <span class="official-logs-fab__badge">@badge</span>
+    }
+</button>
+
+@code {
+    [Parameter] public int Count { get; set; }
+    [Parameter] public EventCallback OnClick { get; set; }
+}

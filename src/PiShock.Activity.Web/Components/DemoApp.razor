@@ -1,0 +1,436 @@
+@using System.Text.Json
+@using System.Threading
+@implements IDisposable
+
+@* Mock-data UI demo (?demo / #/demo). Never touches the Discord SDK or the API. *@
+@if (_screen == "terms")
+{
+    <TermsOfService OnBack="@(() => Go("consent"))" />
+}
+else if (_screen == "privacy")
+{
+    <PrivacyPolicy OnBack="@(() => Go("consent"))" />
+}
+else
+{
+    <div>
+        <div class="demo-chrome">
+            <h2>UI demo — official controller clone</h2>
+            <p>Mock data only. Switch screens; Control/PIP use the real PiShock layout.</p>
+            <div class="btn-row">
+                @foreach (var (id, label) in Screens)
+                {
+                    var target = id;
+                    <button @key="id" type="button" class="btn @(_screen == id ? "active" : "")" @onclick="() => Go(target)">
+                        @label
+                    </button>
+                }
+            </div>
+        </div>
+
+        @if (_toast is not null)
+        {
+            <div class="error-banner" style="border-color: var(--ps-cyan); color: var(--ps-cyan);">@_toast</div>
+        }
+
+        @if (_screen == "consent")
+        {
+            <div class="app-shell">
+                <SafetyWarning OnAccept="@(() => Go("login"))"
+                               Busy="false"
+                               OnOpenTerms="@(() => Go("terms"))"
+                               OnOpenPrivacy="@(() => Go("privacy"))" />
+            </div>
+        }
+
+        @if (_screen == "login")
+        {
+            <div class="app-shell">
+                <SafetyNotice />
+                <LoginPanel Linking="false"
+                            LoginUrl="https://login.pishock.com?proto=socket&channel=demo"
+                            Error="@null"
+                            OnStart="@(() => Flash("Would open PiShock Discord login"))"
+                            OnOpen="@(() => Flash("Would reopen login URL"))"
+                            OnRefresh="@(() => Flash("Would poll login status"))" />
+                <div class="btn-row">
+                    <button type="button" class="btn secondary" @onclick="@(() => Go("terms"))">Terms</button>
+                    <button type="button" class="btn secondary" @onclick="@(() => Go("privacy"))">Privacy</button>
+                </div>
+            </div>
+        }
+
+        @if (_screen == "pip")
+        {
+            <div style="height: 160px; width: 280px; margin: 16px; border: 1px solid #333;">
+                <PipIncomingShock Hit="_pipHit" />
+            </div>
+        }
+
+        @if (_screen is "shares" or "logs" or "control")
+        {
+            var shockers = _friendsOpen ? FriendShockers() : DemoShockers.Where(s => s.Owned).ToList();
+            var selectedName = Participants.FirstOrDefault(p => p.Id == _selectedTargetIds.FirstOrDefault())?.DisplayName;
+            var hub = new HubInfo
+            {
+                Id = _friendsOpen ? (_selectedTargetIds.FirstOrDefault() ?? "friends") : "16583",
+                Name = _friendsOpen ? (selectedName ?? "Discord Shockers") : "DevShock",
+                Online = _friendsOpen ? shockers.Count > 0 : true,
+                LastSeen = _friendsOpen ? "Activity share" : "Seen a few seconds ago",
+            };
+            <div class="official-activity-root">
+                <OfficialController Hub="hub"
+                                    Shockers="shockers"
+                                    FriendsOpen="_friendsOpen"
+                                    ShowOwnMode="true"
+                                    OnOperate="OnOperate"
+                                    OnOpenFriends="OpenFriends"
+                                    OnOpenOwnShockers="OpenOwn"
+                                    OnOpenMenu="@(() => SetOverlay("menu"))"
+                                    OnOpenShockerSettings="OpenSettings"
+                                    OnSelectHub="@(_ => Flash("Hub selector"))"
+                                    OnShareShocker="ShareShocker"
+                                    OnPair="@(s => Flash($"Would pair {s.Name}"))">
+                    <SafetyBanner>
+                        <SafetyNoticeBar />
+                    </SafetyBanner>
+                    <FriendsPanel Context="ctx">
+                        <FriendsParticipantList Participants="Participants"
+                                                Statuses="Status"
+                                                CurrentUserId="dev-user"
+                                                SelectedTargetId="@_selectedTargetIds.FirstOrDefault()"
+                                                SelectedTargetIds="_selectedTargetIds"
+                                                MultiSelect="ctx.MultiShock"
+                                                OnToggleMultiSelect="ctx.OnToggleMultiShock"
+                                                IndividualIntensity="ctx.IndividualIntensity"
+                                                OnToggleIndividualIntensity="ctx.OnToggleIndividualIntensity"
+                                                OnSelect="@(id => SelectTarget(id, ctx.MultiShock))"
+                                                OnRefresh="@(() => Flash("Would refresh Discord participants"))" />
+                    </FriendsPanel>
+                </OfficialController>
+
+                <PsDialog Open="@(_overlay == "menu")" Title="Menu" OnClose="@(() => SetOverlay(null))">
+                    <div class="q-list q-list--dark">
+                        <button type="button" class="q-item q-item-type row no-wrap full-width bg-transparent text-left cursor-pointer"
+                                @onclick="@(() => SetOverlay("availability"))">
+                            <div class="q-item__label text-grey-3">Available in Discord</div>
+                        </button>
+                        <button type="button" class="q-item q-item-type row no-wrap full-width bg-transparent text-left cursor-pointer"
+                                @onclick="@(() => SetOverlay("shares"))">
+                            <div class="q-item__label text-grey-3">Shares &amp; links</div>
+                        </button>
+                        <button type="button" class="q-item q-item-type row no-wrap full-width bg-transparent text-left cursor-pointer"
+                                @onclick="@(() => SetOverlay("logs"))">
+                            <div class="q-item__label text-grey-3">Command log</div>
+                        </button>
+                    </div>
+                </PsDialog>
+
+                <PsDialog Open="@(_overlay == "shares" || _screen == "shares")" Title="Shares &amp; links"
+                          OnClose="CloseShares" Wide="true">
+                    <SharesPanel Links="DemoLinks"
+                                 Shared="@(new List<JsonElement>())"
+                                 Shockers="@(DemoShockers.Where(s => s.Owned).ToList())"
+                                 Busy="false"
+                                 OnCreate="@(_ => Flash("Would create link"))"
+                                 OnPause="@(_ => Flash("Would pause link"))"
+                                 OnDelete="@(_ => Flash("Would delete link"))"
+                                 OnCreateShare="@(_ => Flash("Would create share code"))"
+                                 OnClaimShare="@(_ => Flash("Would redeem share code"))" />
+                </PsDialog>
+
+                <PsDialog Open="@(_overlay == "logs" || _screen == "logs")" Title="Command log"
+                          OnClose="CloseLogs" Wide="true">
+                    <CommandLog Rows="DemoLogs" />
+                </PsDialog>
+
+                <PsDialog Open="@(_overlay == "availability" || _overlay == "settings")"
+                          Title="@(_overlay == "settings" ? "Activity Limits" : "Available in Discord")"
+                          OnClose="@(() => SetOverlay(null))" Wide="true">
+                    <div class="text-grey-5 text-body2">
+                        Demo only — availability and limit settings open here in the live app.
+                    </div>
+                </PsDialog>
+            </div>
+        }
+    </div>
+}
+
+@code {
+    private static readonly (string Id, string Label)[] Screens =
+    [
+        ("consent", "Safety"),
+        ("login", "Link PiShock"),
+        ("control", "Control"),
+        ("shares", "Shares"),
+        ("logs", "Logs"),
+        ("pip", "PIP layout"),
+        ("terms", "Terms"),
+        ("privacy", "Privacy"),
+    ];
+
+    private static readonly List<DiscordParticipant> Participants =
+    [
+        Person("dev-user", "DevUser", "Local Dev"),
+        Person("111", "roger", "RogerfireFox"),
+        Person("222", "offline", "NotLinked"),
+    ];
+
+    private static readonly Dictionary<string, ParticipantStatus> Status = new()
+    {
+        ["111"] = new ParticipantStatus
+        {
+            DiscordUserId = "111",
+            Username = "roger",
+            GlobalName = "RogerfireFox",
+            Linked = true,
+            Consent = true,
+            Available = true,
+            Shockers =
+            [
+                new ParticipantShockerStatus
+                {
+                    ShockerId = 11663,
+                    ShockerName = "Leg",
+                    HubClientId = "7343",
+                    DeviceMaxIntensity = 100,
+                    DeviceMaxDurationMs = 15_000,
+                    MaxIntensity = 80,
+                    MaxDurationMs = 10_000,
+                    CanShock = true,
+                    CanVibrate = true,
+                    CanBeep = true,
+                    CanHold = true,
+                },
+            ],
+        },
+        ["222"] = new ParticipantStatus
+        {
+            DiscordUserId = "222",
+            Username = "offline",
+            GlobalName = "NotLinked",
+        },
+    };
+
+    private static readonly List<ShockerView> DemoShockers =
+    [
+        new ShockerView
+        {
+            Id = 26515,
+            Name = "XeraShocker",
+            HubName = "DevShock",
+            ClientId = "16583",
+            Owned = true,
+            DeviceMaxIntensity = 100,
+            DeviceMaxDuration = 15_000,
+            ActivityMaxIntensity = 70,
+            ActivityMaxDuration = 8_000,
+            MaxIntensity = 70,
+            MaxDuration = 8_000,
+            Online = true,
+        },
+        new ShockerView
+        {
+            Id = 11663,
+            Name = "Leg",
+            HubName = "RogerfireFox",
+            ClientId = "7343",
+            Owned = false,
+            ShareCode = "74EC835FF88",
+            ShareId = 16260,
+            DeviceMaxIntensity = 100,
+            DeviceMaxDuration = 15_000,
+            ActivityMaxIntensity = 100,
+            ActivityMaxDuration = 15_000,
+            MaxIntensity = 100,
+            MaxDuration = 15_000,
+            Online = false,
+        },
+    ];
+
+    private static readonly List<JsonElement> DemoLinks =
+    [
+        JsonSerializer.SerializeToElement(new Dictionary<string, object?>
+        {
+            ["LinkId"] = 5158,
+            ["ShockerId"] = 26515,
+            ["Code"] = "58a93a7b-demo",
+            ["Name"] = "Lemonade",
+            ["Paused"] = false,
+            ["ShockEnabled"] = true,
+            ["VibrateEnabled"] = false,
+            ["BeepEnabled"] = false,
+        }),
+    ];
+
+    private static readonly List<CommandLogRow> DemoLogs =
+    [
+        new CommandLogRow
+        {
+            Id = "1", Action = "vibrate", ShockerId = 26515, Intensity = 20, DurationMs = 1000,
+            Success = true, CreatedAt = DateTime.UtcNow,
+        },
+        new CommandLogRow
+        {
+            Id = "2", Action = "beep", ShockerId = 26515, Intensity = 1, DurationMs = 300,
+            Success = true, CreatedAt = DateTime.UtcNow.AddMinutes(-1),
+        },
+    ];
+
+    private readonly IncomingShockHit _pipHit = new()
+    {
+        ExecutorDiscordUserId = "111",
+        DisplayName = "RogerfireFox",
+        AvatarUrl = ParticipantUtil.AvatarUrl("111"),
+        Action = "participant_shock",
+        Intensity = 42,
+        DurationMs = 1000,
+        At = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() - 4000,
+        Success = true,
+        Kind = "activity",
+        TargetDiscordUserId = "222",
+        TargetDisplayName = "NotLinked",
+        TargetAvatarUrl = ParticipantUtil.AvatarUrl("222"),
+    };
+
+    private string _screen = "control";
+    private string? _toast;
+    private bool _friendsOpen = true;
+    private List<string> _selectedTargetIds = ["111"];
+    private string? _overlay;
+    private CancellationTokenSource? _toastCts;
+
+    private static DiscordParticipant Person(string id, string username, string display) => new()
+    {
+        Id = id,
+        Username = username,
+        GlobalName = display,
+        DisplayName = display,
+        AvatarUrl = ParticipantUtil.AvatarUrl(id),
+    };
+
+    private void Go(string screen) => _screen = screen;
+    private void SetOverlay(string? overlay) => _overlay = overlay;
+
+    private void CloseShares()
+    {
+        _overlay = null;
+        if (_screen == "shares") _screen = "control";
+    }
+
+    private void CloseLogs()
+    {
+        _overlay = null;
+        if (_screen == "logs") _screen = "control";
+    }
+
+    private void Flash(string message)
+    {
+        _toast = message;
+        _toastCts?.Cancel();
+        var cts = _toastCts = new CancellationTokenSource();
+        _ = HideToastLater(cts);
+    }
+
+    private async Task HideToastLater(CancellationTokenSource cts)
+    {
+        try
+        {
+            await Task.Delay(1800, cts.Token);
+        }
+        catch (OperationCanceledException)
+        {
+            return;
+        }
+        _toast = null;
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private List<ShockerView> FriendShockers()
+    {
+        var list = new List<ShockerView>();
+        foreach (var targetId in _selectedTargetIds)
+        {
+            if (!Status.TryGetValue(targetId, out var status) || !status.Available) continue;
+            foreach (var s in status.Shockers)
+            {
+                list.Add(new ShockerView
+                {
+                    Id = s.ShockerId,
+                    Name = s.ShockerName,
+                    HubName = status.GlobalName ?? "Friend",
+                    ClientId = s.HubClientId,
+                    Owned = false,
+                    TargetDiscordUserId = targetId,
+                    CanShock = s.CanShock,
+                    CanVibrate = s.CanVibrate,
+                    CanBeep = s.CanBeep,
+                    CanHold = s.CanHold,
+                    DeviceMaxIntensity = s.DeviceMaxIntensity,
+                    DeviceMaxDuration = s.DeviceMaxDurationMs,
+                    ActivityMaxIntensity = s.MaxIntensity,
+                    ActivityMaxDuration = s.MaxDurationMs,
+                    MaxIntensity = s.MaxIntensity,
+                    MaxDuration = s.MaxDurationMs,
+                    Online = true,
+                });
+            }
+        }
+        return list;
+    }
+
+    private void SelectTarget(string? id, bool multi)
+    {
+        if (string.IsNullOrEmpty(id))
+        {
+            _selectedTargetIds = [];
+        }
+        else if (multi)
+        {
+            _selectedTargetIds = _selectedTargetIds.Contains(id)
+                ? _selectedTargetIds.Where(x => x != id).ToList()
+                : [.. _selectedTargetIds, id];
+        }
+        else
+        {
+            _selectedTargetIds = _selectedTargetIds.Count == 1 && _selectedTargetIds[0] == id ? [] : [id];
+        }
+    }
+
+    private void OpenFriends()
+    {
+        _friendsOpen = true;
+        Flash("Showing Discord Shockers");
+    }
+
+    private void OpenOwn()
+    {
+        _friendsOpen = false;
+        Flash("Showing owned hub");
+    }
+
+    private void OpenSettings(ShockerView s)
+    {
+        _overlay = "settings";
+        Flash($"Would open settings for {s.Name}");
+    }
+
+    private void ShareShocker(ShockerView s)
+    {
+        Flash($"Would share {s.Name}");
+        _overlay = "shares";
+    }
+
+    private void OnOperate(OfficialOperateInput input) =>
+        Flash(
+            $"{(_friendsOpen ? "participant " : "")}{input.Operation} · id {input.ShockerId}" +
+            $"{(input.TargetDiscordUserId is not null ? $" · user {input.TargetDiscordUserId}" : "")}" +
+            $" · {input.Intensity}% · {input.DurationMs}ms" +
+            $"{(input.Hold ? " · hold" : "")}{(input.Warning is not null ? " · warn" : "")}");
+
+    public void Dispose()
+    {
+        _toastCts?.Cancel();
+        _toastCts = null;
+    }
+}

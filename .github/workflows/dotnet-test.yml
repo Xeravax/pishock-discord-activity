@@ -1,0 +1,27 @@
+name: .NET tests
+
+on:
+  push:
+    branches: [develop, release, main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+      - name: Restore
+        run: dotnet restore PiShock.Activity.sln
+        working-directory: .
+      - name: Test
+        run: dotnet test PiShock.Activity.sln --configuration Release --no-restore
+        working-directory: .
+        env:
+          DATABASE_URL: postgresql://pishock:pishock@127.0.0.1:5432/pishock
+          DISCORD_CLIENT_ID: test
+          DISCORD_CLIENT_SECRET: test
+          TOKEN_KEY: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+          PUBLIC_URL: http://localhost:3000

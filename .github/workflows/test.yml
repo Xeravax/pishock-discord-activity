@@ -1,9 +1,9 @@
-name: Tests (optional)
+name: Tests
 
 on:
   pull_request:
   push:
-    branches: [release, develop]
+    branches: [release, develop, main]
   workflow_dispatch:
 
 concurrency:
@@ -12,35 +12,22 @@ concurrency:
 
 jobs:
   test:
-    name: Safety gates + typecheck
-    # Pin until ready for ubuntu-26 (ubuntu-latest migrates Oct 2026)
+    name: Safety gates (xUnit)
     runs-on: ubuntu-24.04
-    # Keep this check visible without blocking merges unless you later make it required.
-    continue-on-error: true
     permissions:
       contents: read
-
     steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v6
+      - uses: actions/checkout@v6
+      - uses: actions/setup-dotnet@v4
         with:
-          node-version: '22'
-          cache: npm
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Generate Prisma client
+          dotnet-version: "10.0.x"
+      - name: Restore
+        run: dotnet restore PiShock.Activity.sln
+      - name: Test
+        run: dotnet test PiShock.Activity.sln --configuration Release --no-restore
         env:
-          # Generate only — Prisma does not connect during generate.
-          DATABASE_URL: postgresql://build:build@127.0.0.1:5432/build?schema=public
-        run: npx prisma generate
-
-      - name: Run safety gate tests
-        run: npm test
-
-      - name: Typecheck server and client
-        run: npm run typecheck
+          DATABASE_URL: postgresql://pishock:pishock@127.0.0.1:5432/pishock
+          DISCORD_CLIENT_ID: test
+          DISCORD_CLIENT_SECRET: test
+          TOKEN_KEY: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+          PUBLIC_URL: http://localhost:3000

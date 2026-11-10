@@ -1,10 +1,3 @@
-# deps / build output
-node_modules
-dist
-client-dist
-coverage
-*.log
-
 # git / IDE
 .git
 .github
@@ -20,14 +13,20 @@ coverage
 .env.version
 version.json
 
-# docs / misc not needed to build
+# docs / compose (not needed inside the image build context extras)
 README.md
 docker-compose*.yml
-agent-transcripts
 **/*.md
 !prisma/migrations/**/*.sql
+
+# build outputs
+**/bin/
+**/obj/
+TestResults/
+sdk-bundle/node_modules/
 
 # local data
 data
 *.db
 *.db-journal
+*.log

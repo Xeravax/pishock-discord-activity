@@ -1,0 +1,101 @@
+@using System.Text.Json
+@inject ActivityApiService Api
+@inject DiscordActivity Discord
+@inject IJSRuntime Js
+
+@* Matches pishock.com control-page live announcement card. *@
+@{
+    var visible = _items.Where(a => !string.IsNullOrEmpty(a.Text) && !_dismissed.Contains(a.Key)).ToList();
+}
+@if (visible.Count > 0)
+{
+    <div class="official-announcements q-mt-md">
+        <div class="column q-gutter-sm items-center" style="width: 100%; max-width: 560px;">
+            @foreach (var a in visible)
+            {
+                var item = a;
+                <div @key="item.Key"
+                     class="q-card q-card--dark q-dark q-card--bordered border-color-secondary relative-position full-width"
+                     style="background: #1a1a1a; text-align: center;">
+                    <button type="button"
+                            aria-label="Dismiss announcement"
+                            class="q-btn q-btn-item non-selectable no-outline q-btn--flat q-btn--round text-grey-5 q-btn--dense"
+                            style="position: absolute; top: 2px; right: 2px; z-index: 1;"
+                            @onclick="() => Dismiss(item)">
+                        <span class="q-btn__wrapper col row q-anchor--skip">
+                            <span class="q-btn__content text-center col items-center q-anchor--skip justify-center row">
+                                <i class="q-icon mdi mdi-close" aria-hidden="true"></i>
+                            </span>
+                        </span>
+                    </button>
+                    <div class="q-card__section q-card__section--vert q-pa-md text-center text-white">
+                        @{ var lines = item.Text.Split('\n'); }
+                        @for (var i = 0; i < lines.Length; i++)
+                        {
+                            <div class="@(i == 0 ? "text-body1" : "text-body2 q-mt-xs")" style="text-align: center;">@lines[i]</div>
+                        }
+                        @if (!string.IsNullOrEmpty(item.Link))
+                        {
+                            <div class="row justify-center q-mt-sm">
+                                <button type="button"
+                                        class="q-btn q-btn-item non-selectable no-outline q-btn--flat q-btn--dense text-secondary"
+                                        style="font-size: 12px; text-decoration: underline;"
+                                        @onclick="() => OpenLink(item.Link!)">
+                                    <span class="q-btn__wrapper col row q-anchor--skip">
+                                        <span class="q-btn__content text-center col items-center q-anchor--skip justify-center row">
+                                            <span class="block">Click here to view</span>
+                                        </span>
+                                    </span>
+                                </button>
+                            </div>
+                        }
+                    </div>
+                </div>
+            }
+        </div>
+    </div>
+}
+
+@code {
+    private const string DismissKey = "pishock.announcements.dismissed";
+
+    private List<AnnouncementItem> _items = [];
+    private readonly HashSet<string> _dismissed = [];
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            var raw = await Js.InvokeAsync<string?>("sessionStorage.getItem", DismissKey);
+            if (!string.IsNullOrEmpty(raw))
+            {
+                using var doc = JsonDocument.Parse(raw);
+                if (doc.RootElement.ValueKind == JsonValueKind.Array)
+                {
+                    foreach (var e in doc.RootElement.EnumerateArray()) _dismissed.Add(e.ToString());
+                }
+            }
+        }
+        catch
+        {
+            // best-effort
+        }
+
+        _items = await Api.GetAnnouncementsAsync();
+    }
+
+    private async Task Dismiss(AnnouncementItem item)
+    {
+        _dismissed.Add(item.Key);
+        try
+        {
+            await Js.InvokeVoidAsync("sessionStorage.setItem", DismissKey, JsonSerializer.Serialize(_dismissed));
+        }
+        catch
+        {
+            // ignore
+        }
+    }
+
+    private Task OpenLink(string url) => Discord.OpenExternalAsync(url).AsTask();
+}

@@ -66,9 +66,8 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           # Build-time only. Runtime secrets come from .env / compose (never bake secrets into the image).
           # Required repo Variable: Settings → Secrets and variables → Actions → Variables → DISCORD_CLIENT_ID
-          # (Dockerfile refuses to build if VITE_DISCORD_CLIENT_ID is empty.)
           build-args: |
-            VITE_DISCORD_CLIENT_ID=${{ vars.DISCORD_CLIENT_ID }}
+            DISCORD_CLIENT_ID=${{ vars.DISCORD_CLIENT_ID }}
             GIT_SHA=${{ github.sha }}
             GIT_REF_NAME=${{ github.ref_name }}
             GIT_REF_TYPE=${{ github.ref_type }}

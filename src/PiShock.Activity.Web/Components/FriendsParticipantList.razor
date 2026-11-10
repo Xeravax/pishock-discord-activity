@@ -1,0 +1,144 @@
+@* Discord Shockers roster styled like the official PISHOCKS FAB list *@
+@{
+    var others = Participants.Where(p => p.Id != CurrentUserId).ToList();
+    var selectedIds = SelectedTargetIds ?? (SelectedTargetId is not null ? new List<string> { SelectedTargetId } : new List<string>());
+    var selectedSet = new HashSet<string>(selectedIds);
+}
+<div class="column flex q-mt-xs official-friends-list">
+    <div class="row items-center justify-between official-friends-header">
+        <div class="text-secondary official-friends-title">
+            DISCORD SHOCKERS@(MultiSelect ? (IndividualIntensity ? " · MULTI · EACH" : " · MULTI") : "")
+        </div>
+        <div class="row items-center no-wrap q-gutter-xs">
+            @if (OnToggleMultiSelect.HasDelegate)
+            {
+                <MultiShockToggle Active="MultiSelect" OnToggle="OnToggleMultiSelect" Compact="true"
+                                  Title="Select several people and operate them together" />
+            }
+            @if (MultiSelect && OnToggleIndividualIntensity.HasDelegate)
+            {
+                <IndividualIntensityToggle Active="IndividualIntensity" OnToggle="OnToggleIndividualIntensity" Compact="true" />
+            }
+            @if (OnRefresh.HasDelegate)
+            {
+                <button type="button"
+                        class="q-btn q-btn-item non-selectable no-outline q-btn--flat q-btn--round text-secondary q-btn--dense q-btn--actionable"
+                        @onclick="OnRefresh"
+                        aria-label="Refresh participants"
+                        style="min-height: 22px; min-width: 22px; padding: 0;">
+                    <span class="q-btn__wrapper col row q-anchor--skip">
+                        <span class="q-btn__content text-center col items-center q-anchor--skip justify-center row">
+                            <i class="q-icon mdi mdi-refresh" style="font-size: 14px;" aria-hidden="true"></i>
+                        </span>
+                    </span>
+                </button>
+            }
+        </div>
+    </div>
+
+    @if (others.Count == 0)
+    {
+        <div class="text-grey-5 official-friends-empty">No other participants</div>
+    }
+    else
+    {
+        @foreach (var p in others)
+        {
+            var participant = p;
+            Statuses.TryGetValue(participant.Id, out var status);
+            var banned = status?.BannedYou == true;
+            var eStop = status is not null && (status.EmergencyStop || status.Shockers.Any(s => s.EmergencyStop));
+            var notLoggedIn = status is not null && !status.Linked;
+            var selectable = status is not null && !notLoggedIn &&
+                             (banned || eStop || status.Available || status.Shockers.Count > 0);
+            var active = selectedSet.Contains(participant.Id);
+            var primary = !banned && !notLoggedIn ? status?.Shockers.FirstOrDefault() : null;
+            var detail = StatusDetail(status);
+            var flags = primary is null ? null : string.Concat(
+                primary.CanShock ? "S" : "", primary.CanVibrate ? "V" : "", primary.CanBeep ? "B" : "");
+            var multiColor = MultiSelect && active ? MultiColors.ForUser($"u:{participant.Id}") : null;
+            var btnClass = $"official-friend-btn {(active && !MultiSelect ? "active" : "")} {(selectable ? "" : "disabled")} {(banned ? "blocked" : "")} {(eStop && !banned ? "estop" : "")} {(notLoggedIn ? "not-logged-in" : "")}";
+            var btnStyle = multiColor is null ? null : $"background: {multiColor}; border-color: {multiColor}; color: #121212;";
+            var statusBad = banned || eStop || notLoggedIn || status?.Available != true;
+
+            <button type="button"
+                    @key="participant.Id"
+                    disabled="@(!selectable)"
+                    class="@btnClass"
+                    style="@btnStyle"
+                    @onclick="() => Select(participant.Id, active)">
+                <img src="@participant.AvatarUrl" alt="" class="official-friend-avatar" />
+                <span class="official-friend-meta">
+                    <span class="official-friend-name ellipsis">@participant.DisplayName</span>
+                    <span class="official-friend-status @(statusBad ? "bad" : "ok")">@StatusLabel(status)</span>
+                    @if (detail is not null)
+                    {
+                        <span class="official-friend-limits ellipsis">@detail</span>
+                    }
+                    else if (primary is not null)
+                    {
+                        <span class="official-friend-limits ellipsis">@primary.ShockerName@(FormatLimits(primary) is { } l ? $" · {l}" : "")@(!string.IsNullOrEmpty(flags) ? $" · {flags}" : "")@(primary.EmergencyStop ? " · E-STOP" : "")</span>
+                    }
+                </span>
+            </button>
+        }
+    }
+</div>
+
+@code {
+    [Parameter] public List<DiscordParticipant> Participants { get; set; } = [];
+    [Parameter] public Dictionary<string, ParticipantStatus> Statuses { get; set; } = [];
+    [Parameter] public string CurrentUserId { get; set; } = "";
+
+    /// <summary>Single-select (legacy) — ignored when SelectedTargetIds is provided.</summary>
+    [Parameter] public string? SelectedTargetId { get; set; }
+    [Parameter] public List<string>? SelectedTargetIds { get; set; }
+    [Parameter] public bool MultiSelect { get; set; }
+    [Parameter] public EventCallback OnToggleMultiSelect { get; set; }
+    [Parameter] public bool IndividualIntensity { get; set; }
+    [Parameter] public EventCallback OnToggleIndividualIntensity { get; set; }
+    [Parameter] public EventCallback<string?> OnSelect { get; set; }
+    [Parameter] public EventCallback OnRefresh { get; set; }
+
+    private Task Select(string id, bool active)
+    {
+        if (!MultiSelect && active) return OnSelect.InvokeAsync(null);
+        return OnSelect.InvokeAsync(id);
+    }
+
+    private static string StatusLabel(ParticipantStatus? status)
+    {
+        if (status is null) return "Unknown";
+        if (status.BannedYou) return "Blocked";
+        if (status.EmergencyStop || status.Shockers.Any(s => s.EmergencyStop)) return "E-STOP";
+        if (!status.Linked) return "Not logged in · Disabled";
+        if (status.Available) return "Available";
+        if (status.Paused) return "Paused";
+        if (!status.Consent) return "No consent · Disabled";
+        return "Unavailable · Disabled";
+    }
+
+    private static string? StatusDetail(ParticipantStatus? status)
+    {
+        if (status is null) return null;
+        if (status.BannedYou) return "You are blocked — cannot view or use their shockers";
+        if (status.EmergencyStop || (status.Shockers.Count > 0 && status.Shockers.All(s => s.EmergencyStop)))
+            return "Emergency stop armed — controls disabled";
+        if (!status.Linked) return "They are not logged in to PiShock — control is disabled";
+        if (!status.Consent) return "They have not consented — control is disabled";
+        return null;
+    }
+
+    private static string FormatMs(int ms) =>
+        $"{(ms / 1000.0).ToString(ms % 1000 == 0 ? "0" : "0.0", System.Globalization.CultureInfo.InvariantCulture)}s";
+
+    private static string FormatLimits(ParticipantShockerStatus primary)
+    {
+        var activity = $"{primary.MaxIntensity}% · {FormatMs(primary.MaxDurationMs)}";
+        var deviceHigher = primary.DeviceMaxIntensity > primary.MaxIntensity ||
+                           primary.DeviceMaxDurationMs > primary.MaxDurationMs;
+        return deviceHigher
+            ? $"{activity} (PiShock {primary.DeviceMaxIntensity}% · {FormatMs(primary.DeviceMaxDurationMs)})"
+            : activity;
+    }
+}

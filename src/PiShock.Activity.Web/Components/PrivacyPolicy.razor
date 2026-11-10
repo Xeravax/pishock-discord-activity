@@ -1,0 +1,80 @@
+<div class="legal-page">
+    <button type="button" class="btn secondary" @onclick="OnBack">← Back to Application</button>
+
+    <h1>Privacy Policy</h1>
+    <p class="muted">PiShock Discord Activity · Last updated @DateTime.Now.ToShortDateString()</p>
+
+    <section class="panel">
+        <h2>Introduction</h2>
+        <p class="muted">
+            This Privacy Policy describes how PiShock Discord Activity collects, uses, and
+            protects information when you control PiShock devices through Discord. Your privacy
+            and safety are priorities.
+        </p>
+    </section>
+
+    <section class="panel">
+        <h2>PiShock authentication</h2>
+        <p class="muted">
+            Linking your account <strong>requests an authentication (session) token</strong> from
+            PiShock via their login page. This activity does <strong>not</strong> use a classic
+            PiShock API key for your account. Other people's devices are only available when
+            those users have logged in with their own PiShock accounts. Authentication tokens are
+            encrypted at rest in the database (AES-256-GCM) and are never exposed to other
+            participants' browsers. Your PiShock password is never stored here.
+        </p>
+    </section>
+
+    <section class="panel">
+        <h2>Information We Store</h2>
+        <ul class="legal-list">
+            <li>Discord user id and profile fields needed for the activity session</li>
+            <li>
+                Encrypted PiShock authentication / session token (not an API key) linked to your Discord
+                user
+            </li>
+            <li>Consent acknowledgment status</li>
+            <li>Command activity logs for accountability (action, intensity, duration, success)</li>
+        </ul>
+    </section>
+
+    <section class="panel">
+        <h2>How We Use Information</h2>
+        <ul class="legal-list">
+            <li>Authenticate you inside Discord and authorize PiShock control requests</li>
+            <li>Enforce consent and safety gates before device control</li>
+            <li>Proxy commands to PiShock APIs without exposing your PiShock token to other clients</li>
+            <li>Maintain activity logs for transparency and abuse investigation</li>
+        </ul>
+    </section>
+
+    <section class="panel">
+        <h2>What We Do Not Do</h2>
+        <ul class="legal-list">
+            <li>We do not store your PiShock password</li>
+            <li>We do not sell personal data</li>
+            <li>We do not share PiShock tokens with other activity participants</li>
+        </ul>
+    </section>
+
+    <section class="panel">
+        <h2>Third Parties</h2>
+        <p class="muted">
+            Discord and PiShock process data under their own policies when you authenticate or
+            control devices. Review Discord's and PiShock's privacy policies for those
+            services.
+        </p>
+    </section>
+
+    <section class="panel">
+        <h2>Retention</h2>
+        <p class="muted">
+            Sessions and logs are retained only as long as needed for operation, safety, and
+            abuse prevention. You can unlink your PiShock session from the activity at any time.
+        </p>
+    </section>
+</div>
+
+@code {
+    [Parameter] public EventCallback OnBack { get; set; }
+}

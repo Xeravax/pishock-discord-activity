@@ -1,0 +1,58 @@
+@* Accessible range control for activity / share ceilings. *@
+@{
+    var safeMax = Math.Max(Min, Max);
+    var clamped = Math.Max(Min, Math.Min(safeMax, Value));
+    var display = FormatValue is null ? clamped.ToString() : FormatValue(clamped);
+}
+<label class="limit-slider@(Disabled ? " is-disabled" : "")">
+    <span class="limit-slider__head">
+        <span class="limit-slider__label">@Label</span>
+        <span class="limit-slider__value">@display</span>
+    </span>
+    <input type="range"
+           class="limit-slider__input"
+           min="@Min"
+           max="@safeMax"
+           step="@Step"
+           value="@clamped"
+           disabled="@Disabled"
+           aria-valuemin="@Min"
+           aria-valuemax="@safeMax"
+           aria-valuenow="@clamped"
+           aria-valuetext="@display"
+           @oninput="OnInput" />
+    @if (!string.IsNullOrEmpty(Hint))
+    {
+        <span class="limit-slider__hint">@Hint</span>
+    }
+</label>
+
+@code {
+    [Parameter] public string Label { get; set; } = "";
+    [Parameter] public int Value { get; set; }
+    [Parameter] public EventCallback<int> ValueChanged { get; set; }
+    [Parameter] public int Min { get; set; }
+    [Parameter] public int Max { get; set; }
+    [Parameter] public int Step { get; set; } = 1;
+
+    /// <summary>Shown next to the label; defaults to the raw value.</summary>
+    [Parameter] public Func<int, string>? FormatValue { get; set; }
+    [Parameter] public string? Hint { get; set; }
+    [Parameter] public bool Disabled { get; set; }
+
+    private Task OnInput(ChangeEventArgs e) =>
+        int.TryParse(Convert.ToString(e.Value, System.Globalization.CultureInfo.InvariantCulture), out var v)
+            ? ValueChanged.InvokeAsync(v)
+            : Task.CompletedTask;
+
+    public static string FormatIntensityPct(int value) => $"{value}%";
+
+    public static string FormatDurationMs(int value)
+    {
+        var sec = value / 1000.0;
+        var text = Math.Abs(sec - Math.Round(sec)) < 1e-9
+            ? ((int)Math.Round(sec)).ToString()
+            : sec.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture);
+        return $"{text}s";
+    }
+}

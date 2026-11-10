@@ -1,0 +1,11 @@
+<span class="official-log-person official-log-person--@Tone" title="@Person.DisplayName">
+    <img src="@Person.AvatarUrl" alt="" class="official-log-avatar" />
+    <span class="ellipsis">@Person.DisplayName</span>
+</span>
+
+@code {
+    [Parameter, EditorRequired] public OfficialLogPerson Person { get; set; } = new();
+
+    /// <summary>"from" or "to".</summary>
+    [Parameter] public string Tone { get; set; } = "from";
+}

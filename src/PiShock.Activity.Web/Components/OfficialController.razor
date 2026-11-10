@@ -1,0 +1,525 @@
+@implements IDisposable
+@* Exact Quasar DOM structure + classes from pishock.com/#/control (port of OfficialController.tsx). *@
+@if (_ready)
+{
+    var active = Active;
+    var markers = MultiLimitMarkers;
+    var eStop = EStop;
+    var selected = SelectedShockers;
+    var randomActive = RandomActive;
+    var maxInt = MaxInt;
+    var maxDur = MaxDur;
+    var editCap = ShockEditCap;
+    var hubList = Hubs.Count > 0 ? Hubs : new List<HubInfo> { Hub };
+    var tap = _tapMode;
+
+    <div class="bg-dark q-layout q-layout--standard official-root" @onmousedown="CloseMenus">
+        <header class="q-header q-layout__section--marginal custom-header fixed-top"
+                style="border-bottom: 1px solid rgb(121, 198, 219);">
+            <div role="toolbar"
+                 class="q-toolbar row no-wrap items-center bg-secondary no-padding row justify-between official-header-toolbar">
+                <div class="official-header-version">
+                    <AppVersionBadge />
+                </div>
+                <div class="official-header-brand">
+                    <div class="text-dark text-h3 q-toolbar__title" style="margin: 0;">
+                        <div class="official-header-brand__row" style="font-family: geo, Oxanium, sans-serif;">
+                            <span class="text-grey-3">PiShock</span>
+                        </div>
+                    </div>
+                </div>
+                <div class="flex row no-wrap items-center">
+                    @if (ShowLinkAccount)
+                    {
+                        <button type="button"
+                                class="q-btn q-btn-item non-selectable no-outline q-ml-sm q-btn--standard q-btn--rectangle bg-dark text-secondary q-btn--actionable q-focusable q-hoverable q-btn--wrap q-btn--dense"
+                                @onclick="OnOpenLinkAccount">
+                            <span class="q-btn__wrapper col row q-anchor--skip">
+                                <span class="q-btn__content text-center col items-center q-anchor--skip justify-center row no-wrap">
+                                    <i class="q-icon on-left mdi mdi-link-variant" aria-hidden="true"></i>
+                                    <span class="block">Link</span>
+                                </span>
+                            </span>
+                        </button>
+                    }
+                    <button type="button"
+                            class="q-btn q-btn-item non-selectable no-outline q-mx-sm q-btn--outline q-btn--rectangle text-dark q-btn--actionable q-focusable q-hoverable q-btn--wrap"
+                            @onclick="OnOpenMenu">
+                        <span class="q-btn__wrapper col row q-anchor--skip">
+                            <span class="q-btn__content text-center col items-center q-anchor--skip justify-center row">
+                                <span class="block">Menu</span>
+                            </span>
+                        </span>
+                    </button>
+                </div>
+            </div>
+            @SafetyBanner
+        </header>
+
+        <div class="q-page-container">
+            <main class="q-page flex column items-center justify-start">
+                <div class="text-h4 flex q-pa-sm col-md-8 col-xs-12 full-height full-width">
+                    <div class="full-width">
+                        <div class="column">
+                            <div class="row justify-between items-start">
+                                <div class="column">
+                                    <span class="text-secondary">@Hub.Name</span>
+                                    <div class="flex row q-gutter-xs items-center">
+                                        <button type="button" title="Ping hub"
+                                                disabled="@(Pinging || !OnPingHub.HasDelegate)"
+                                                class="q-btn q-btn-item non-selectable no-outline q-btn--outline q-btn--rectangle text-secondary q-btn--actionable q-focusable q-hoverable q-btn--wrap q-btn--dense"
+                                                style="font-size: 8px;"
+                                                @onclick="OnPingHub">
+                                            <span class="q-btn__wrapper col row q-anchor--skip">
+                                                <span class="q-btn__content text-center col items-center q-anchor--skip justify-center row">
+                                                    <i class="q-icon mdi @(Pinging ? "mdi-loading mdi-spin" : "mdi-exclamation")" aria-hidden="true"></i>
+                                                </span>
+                                            </span>
+                                        </button>
+                                        <span class="text-overline @(Hub.Online ? "text-positive" : !string.IsNullOrEmpty(Hub.LastSeen) ? "text-grey-3" : "text-grey-5")">
+                                            @(Pinging ? "Pinging…" : Hub.Online ? (string.IsNullOrEmpty(Hub.LastSeen) ? "Seen a few seconds ago" : Hub.LastSeen) : (string.IsNullOrEmpty(Hub.LastSeen) ? "Offline" : Hub.LastSeen))
+                                        </span>
+                                    </div>
+                                </div>
+                                <div class="relative-position official-hub-menu-wrap" @onmousedown:stopPropagation>
+                                    <button type="button"
+                                            class="q-btn q-btn-item non-selectable no-outline q-btn--flat q-btn--rectangle text-secondary q-btn--actionable q-focusable q-hoverable q-btn--wrap"
+                                            @onclick="() => _hubMenuOpen = !_hubMenuOpen"
+                                            aria-label="Hub menu"
+                                            aria-expanded="@(_hubMenuOpen ? "true" : "false")">
+                                        <span class="q-btn__wrapper col row q-anchor--skip">
+                                            <span class="q-btn__content text-center col items-center q-anchor--skip justify-center row">
+                                                <i class="q-icon mdi mdi-dots-vertical" aria-hidden="true"></i>
+                                            </span>
+                                        </span>
+                                    </button>
+                                    @if (_hubMenuOpen)
+                                    {
+                                        <div class="q-menu q-position-engine scroll q-menu--dark official-hub-menu"
+                                             style="position: absolute; right: 0; top: 100%; z-index: 6000; min-width: 180px; background: #1e1e1e; border: 1px solid rgba(121,198,219,.35); border-radius: 4px;">
+                                            <div class="q-list q-list--dark" style="padding: 4px;">
+                                                <div class="q-item q-item-type row no-wrap q-item--dark full-width">
+                                                    <div class="q-item__section column q-item__section--main justify-center">
+                                                        <div class="q-item__label text-secondary">Hub ID</div>
+                                                        <div class="q-item__label q-item__label--caption text-grey-5"
+                                                             style="font-family: ui-monospace, monospace; user-select: all;">
+                                                            @Hub.Id
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                                <button type="button"
+                                                        class="q-item q-item-type row no-wrap q-item--dark q-item--clickable full-width bg-transparent text-left"
+                                                        @onclick="PingHubFromMenu">
+                                                    <div class="q-item__section column q-item__section--main justify-center">
+                                                        <div class="q-item__label text-grey-3">Ping hub</div>
+                                                    </div>
+                                                </button>
+                                            </div>
+                                        </div>
+                                    }
+                                </div>
+                            </div>
+
+                            @AccessBanner
+                            @if (AccessBanner is null && eStop)
+                            {
+                                <div class="access-banner access-banner--estop q-mt-sm q-pa-sm">
+                                    <div class="text-negative text-subtitle2">Emergency stop armed</div>
+                                    <div class="text-grey-4 text-body2">
+                                        All commands are blocked on this shocker until you press STOP out.
+                                    </div>
+                                </div>
+                            }
+
+                            @if (!FriendsOpen && active is { Owned: true, DiscordShareEnabled: true, DiscordShareMaxIntensity: not null, DiscordShareMaxDuration: not null })
+                            {
+                                <div class="access-banner access-banner--share-bypass q-mt-sm q-pa-sm">
+                                    <div class="text-secondary text-subtitle2">
+                                        Discord share limit · @(active.DiscordShareMaxIntensity)% · @(DurationMetric.FormatSec(active.DiscordShareMaxDuration!.Value))s
+                                    </div>
+                                    <div class="text-grey-4 text-body2">
+                                        @(maxInt > active.DiscordShareMaxIntensity || maxDur > active.DiscordShareMaxDuration
+                                            ? "You set Activity Limits for this shared shocker, and your personal control panel can go higher — you are bypassing those shared limits here."
+                                            : "Guests in Discord Shockers are capped to this Activity Limit on this shocker.")
+                                    </div>
+                                </div>
+                            }
+
+                            @if (FriendsOpen || Shockers.Count > 1)
+                            {
+                                <div class="column q-gutter-xs q-mt-sm">
+                                    @if (!FriendsOpen && Shockers.Count > 1)
+                                    {
+                                        <div class="row items-center q-gutter-sm" style="flex-wrap: wrap;">
+                                            <MultiShockToggle Active="_multiShock" OnToggle="ToggleMultiShock"
+                                                              Title="Select several shockers and operate them together" />
+                                            @if (_multiShock)
+                                            {
+                                                <IndividualIntensityToggle Active="_individualIntensity" OnToggle="ToggleIndividualIntensity" />
+                                                <span class="text-caption text-grey-5">
+                                                    @selected.Count selected@(_individualIntensity ? " · tap a person, then set their intensity" : " · each capped to their own limit")
+                                                </span>
+                                            }
+                                        </div>
+                                    }
+                                    else if (_multiShock)
+                                    {
+                                        <div class="row items-center q-gutter-sm" style="flex-wrap: wrap;">
+                                            <IndividualIntensityToggle Active="_individualIntensity" OnToggle="ToggleIndividualIntensity" />
+                                            <span class="text-caption text-grey-5">
+                                                @selected.Count selected@(_individualIntensity ? " · tap a person, then set their intensity" : " · each capped to their own limit")
+                                            </span>
+                                        </div>
+                                    }
+
+                                    @if (_multiShock && markers.Count > 1)
+                                    {
+                                        <div class="row q-gutter-xs items-center" style="flex-wrap: wrap;">
+                                            @foreach (var m in markers)
+                                            {
+                                                <span @key="m.Key" class="text-caption"
+                                                      style="display: inline-flex; align-items: center; gap: 4px; color: @m.Color;">
+                                                    <span aria-hidden="true"
+                                                          style="width: 8px; height: 8px; border-radius: 999px; background: @m.Color; flex-shrink: 0;"></span>
+                                                    @m.Label · @(_individualIntensity && m.Value is not null ? $"{m.Value}/{m.Intensity}%" : $"{m.Intensity}%") · @(DurationMetric.FormatSec(m.DurationMs))s
+                                                </span>
+                                            }
+                                        </div>
+                                    }
+
+                                    @if (Shockers.Count > 0)
+                                    {
+                                        <div class="row q-gutter-sm">
+                                            @foreach (var s in Shockers)
+                                            {
+                                                var chip = s;
+                                                var isSelected = _multiShock ? _selectedIds.Contains(chip.Id) : chip.Id == active?.Id;
+                                                var focused = chip.Id == active?.Id;
+                                                var chipKey = chip.TargetDiscordUserId is not null ? $"{chip.TargetDiscordUserId}:{chip.Id}" : chip.Id.ToString();
+                                                var limit = chip.UsableIntensity;
+                                                int? setInt = IndividualMode ? Clamp(_perShock.GetValueOrDefault(chip.MultiColorKey, _shockIntensity), 0, limit) : null;
+                                                var variant = isSelected && !_multiShock ? "standard bg-secondary text-dark"
+                                                    : _multiShock ? "standard" : "outline text-secondary";
+                                                <button @key="chipKey" type="button"
+                                                        class="q-btn q-btn-item non-selectable no-outline q-btn--@variant q-btn--rectangle q-btn--actionable q-btn--dense"
+                                                        style="@ChipStyle(chip, isSelected, focused)"
+                                                        @onclick="() => ChipClick(chip)">
+                                                    <span class="q-btn__wrapper col row q-anchor--skip">
+                                                        <span class="q-btn__content text-center col items-center q-anchor--skip justify-center row">
+                                                            <span class="block">@ChipLabel(chip, _multiShock, setInt, limit)</span>
+                                                        </span>
+                                                    </span>
+                                                </button>
+                                            }
+                                        </div>
+                                    }
+                                </div>
+                            }
+
+                            @if (active is not null)
+                            {
+                                var shockDisabled = (Busy && _holdingOp is null) || ControlsLocked || !active.CanShock || active.Paused;
+                                var vibDisabled = (Busy && _holdingOp is null) || ControlsLocked || !active.CanVibrate || active.Paused;
+                                var beepDisabled = (Busy && _holdingOp is null) || ControlsLocked || !active.CanBeep || active.Paused;
+                                <div class="q-my-sm q-gutter-sm full-width">
+                                    <div class="full-width flex column">
+                                        <div class="flex column q-ma-xl" style="scale: 1.25;">
+                                            <div class="full-width flex row justify-center q-px-md">
+                                                <div class="q-my-sm q-card q-card--dark q-dark q-card--flat no-shadow col-sm-9 col-xs-12">
+                                                    <div class="full-width no-padding q-card__section q-card__section--vert">
+                                                        <div class="flex row justify-between items-center no-wrap">
+                                                            <span class="cursor-pointer text-h6 q-ml-sm">@active.Name</span>
+                                                            <div class="flex row justify-center items-center">
+                                                                @if (active.Owned && OnShareShocker.HasDelegate)
+                                                                {
+                                                                    <button type="button"
+                                                                            class="q-btn q-btn-item non-selectable no-outline q-btn--flat q-btn--rectangle text-secondary q-btn--actionable q-focusable q-hoverable q-btn--wrap q-btn--dense"
+                                                                            @onclick="() => OnShareShocker.InvokeAsync(active)"
+                                                                            title="Create a PiShock share code for this shocker">
+                                                                        <span class="q-btn__wrapper col row q-anchor--skip">
+                                                                            <span class="q-btn__content text-center col items-center q-anchor--skip justify-center row">
+                                                                                <i class="q-icon on-left mdi mdi-share-variant" aria-hidden="true"></i>
+                                                                                <span class="block">Code</span>
+                                                                            </span>
+                                                                        </span>
+                                                                    </button>
+                                                                }
+                                                                <button type="button"
+                                                                        class="q-btn q-btn-item non-selectable no-outline q-btn--flat q-btn--rectangle text-secondary q-btn--actionable q-focusable q-hoverable q-btn--wrap q-btn--dense"
+                                                                        @onclick="() => OnPair.InvokeAsync(active)">
+                                                                    <span class="q-btn__wrapper col row q-anchor--skip">
+                                                                        <span class="q-btn__content text-center col items-center q-anchor--skip justify-center row">
+                                                                            <i class="q-icon on-left mdi mdi-human-greeting-proximity" aria-hidden="true"></i>
+                                                                            <span class="block">Pair</span>
+                                                                        </span>
+                                                                    </span>
+                                                                </button>
+                                                            </div>
+                                                        </div>
+
+                                                        <div class="flex row no-wrap justify-center q-mt-md">
+                                                            @* SHOCK *@
+                                                            <div class="flex col-4 justify-end">
+                                                                <div class="official-panel-shell">
+                                                                    <div class="border-color-secondary q-card q-card--dark q-dark q-card--bordered">
+                                                                        <div class="q-item__label text-center bg-dark text-secondary q-mb-xs border-color-secondary q-item__label--overline text-overline">
+                                                                            SHOCK
+                                                                        </div>
+                                                                        <div class="q-card__section q-card__section--horiz row no-wrap">
+                                                                            <div class="column justify-between items-center q-ml-xs">
+                                                                                <div class="flex column q-gutter-sm">
+                                                                                    <MetricStack Icon="mdi-flash"
+                                                                                                 Value="@IntensityLabel(randomActive, _shockIntensity, _shockMin, _shockMax)"
+                                                                                                 Label="@(IndividualMode ? active.Name : tap ? "Hold" : "Operate")"
+                                                                                                 Filled="true"
+                                                                                                 Active="@(_holdingOp == "shock")"
+                                                                                                 Disabled="shockDisabled"
+                                                                                                 Hold="tap"
+                                                                                                 OnClick="ShockClick"
+                                                                                                 OnHoldStart="ShockHoldStart"
+                                                                                                 OnHoldEnd="EndHoldAsync" />
+                                                                                    <DurationMetric ValueMs="_shockDurationMs"
+                                                                                                    MaxMs="maxDur"
+                                                                                                    Open="@(_durationMenu == "shock")"
+                                                                                                    Disabled="tap"
+                                                                                                    Side="right"
+                                                                                                    LimitMarkers="markers"
+                                                                                                    OnToggle="@(() => ToggleDurationMenu("shock"))"
+                                                                                                    OnSelect="SelectShockDuration" />
+                                                                                </div>
+                                                                                <div class="q-mt-sm q-mb-xs flex column">
+                                                                                    <button type="button"
+                                                                                            class="q-btn q-btn-item non-selectable no-outline q-btn--push q-btn--round text-accent q-btn--actionable q-focusable q-hoverable q-btn--wrap"
+                                                                                            disabled="@ControlsLocked"
+                                                                                            title="Vibrate before shock: None → SMALL → MID → LONG"
+                                                                                            @onclick="CycleWarning">
+                                                                                        <span class="q-btn__wrapper col row q-anchor--skip">
+                                                                                            <span class="q-btn__content text-center col items-center q-anchor--skip justify-center column">
+                                                                                                <i class="q-icon mdi mdi-car-brake-alert" aria-hidden="true"></i>
+                                                                                                <span class="block">@WarningPresets.ButtonLabel(_warningLevel)</span>
+                                                                                            </span>
+                                                                                        </span>
+                                                                                    </button>
+                                                                                    <div class="q-chip row inline no-wrap items-center text-center no-margin bg-secondary text-dark q-chip--colored q-chip--dense q-chip--square"
+                                                                                         style="font-size: 10px;">
+                                                                                        <div class="q-chip__content col row no-wrap items-center q-anchor--skip">
+                                                                                            <div class="full-width text-center text-caption">
+                                                                                                <span>Warning</span>
+                                                                                            </div>
+                                                                                        </div>
+                                                                                    </div>
+                                                                                </div>
+                                                                            </div>
+                                                                            <VerticalQuasarSlider Value="_shockIntensity"
+                                                                                                  MinValue="_shockMin"
+                                                                                                  MaxValue="_shockMax"
+                                                                                                  Random="randomActive"
+                                                                                                  DeviceMax="DeviceMaxInt"
+                                                                                                  ActivityMax="editCap"
+                                                                                                  LimitMarkers="markers"
+                                                                                                  OnChange="SetActiveShockIntensity"
+                                                                                                  OnChangeMin="SetShockMin"
+                                                                                                  OnChangeMax="SetShockMax"
+                                                                                                  Disabled="@(ControlsLocked || !active.CanShock)" />
+                                                                        </div>
+                                                                    </div>
+                                                                    <IntensityEdgeRail Side="right"
+                                                                                       Disabled="@(ControlsLocked || !active.CanShock)"
+                                                                                       Random="randomActive"
+                                                                                       ShowRandom="!IndividualMode"
+                                                                                       OnUp="() => NudgeShock(1)"
+                                                                                       OnDown="() => NudgeShock(-1)"
+                                                                                       OnToggleRandom="ToggleShockRandom" />
+                                                                </div>
+                                                            </div>
+
+                                                            @* CENTER *@
+                                                            <div class="flex col-auto items-center justify-around column q-mx-sm" style="min-width: 60px;">
+                                                                <CenterControl Icon="mdi-cursor-pointer" Caption="Tap" Chip="Use Mode"
+                                                                               Outline="true"
+                                                                               Active="tap"
+                                                                               Disabled="@(!active.CanHold || _multiShock)"
+                                                                               OnClick="ToggleTapMode" />
+                                                                @if (active.Owned)
+                                                                {
+                                                                    <CenterControl Icon="mdi-alert-octagon"
+                                                                                   Chip="@(eStop ? "ARMED" : "STOP")"
+                                                                                   Danger="true"
+                                                                                   Padding="16"
+                                                                                   Active="eStop"
+                                                                                   Disabled="@(Busy || !OnEmergencyStop.HasDelegate)"
+                                                                                   OnClick="EmergencyStopClick" />
+                                                                }
+                                                                else if (eStop)
+                                                                {
+                                                                    <CenterControl Icon="mdi-alert-octagon" Chip="E-STOP"
+                                                                                   Danger="true" Padding="16" Active="true" Disabled="true" />
+                                                                }
+                                                                <CenterControl Icon="mdi-bell-alert" Chip="Beep"
+                                                                               Padding="8"
+                                                                               Active="@(_holdingOp == "beep")"
+                                                                               Disabled="beepDisabled"
+                                                                               Hold="tap"
+                                                                               OnClick="BeepClick"
+                                                                               OnHoldStart="BeepHoldStart"
+                                                                               OnHoldEnd="EndHoldAsync" />
+                                                                <CenterControl Icon="mdi-cogs" Chip="SO" Flat="true"
+                                                                               Disabled="@(!OnOpenShockerSettings.HasDelegate)"
+                                                                               OnClick="OpenSettingsClick" />
+                                                            </div>
+
+                                                            @* VIBRATE *@
+                                                            <div class="flex col-4 justify-start">
+                                                                <div class="official-panel-shell">
+                                                                    <IntensityEdgeRail Side="left"
+                                                                                       Disabled="@(ControlsLocked || !active.CanVibrate)"
+                                                                                       OnUp="() => NudgeVibrate(1)"
+                                                                                       OnDown="() => NudgeVibrate(-1)" />
+                                                                    <div class="border-color-secondary q-card q-card--dark q-dark q-card--bordered">
+                                                                        <div class="q-item__label text-center bg-dark text-secondary q-mb-xs q-item__label--overline text-overline">
+                                                                            VIBRATE
+                                                                        </div>
+                                                                        <div class="q-card__section q-card__section--horiz row no-wrap">
+                                                                            <VerticalQuasarSlider Value="_vibIntensity"
+                                                                                                  DeviceMax="DeviceMaxInt"
+                                                                                                  ActivityMax="maxInt"
+                                                                                                  LimitMarkers="markers"
+                                                                                                  OnChange="SetVibIntensity"
+                                                                                                  Disabled="@(ControlsLocked || !active.CanVibrate)" />
+                                                                            <div class="column justify-between items-center q-mr-xs">
+                                                                                <div class="flex column q-gutter-sm">
+                                                                                    <MetricStack Icon="mdi-vibrate"
+                                                                                                 Value="@_vibIntensity.ToString()"
+                                                                                                 Label="@(tap ? "Hold" : "Operate")"
+                                                                                                 Filled="true"
+                                                                                                 Active="@(_holdingOp == "vibrate")"
+                                                                                                 Disabled="vibDisabled"
+                                                                                                 Hold="tap"
+                                                                                                 OnClick="VibrateClick"
+                                                                                                 OnHoldStart="VibrateHoldStart"
+                                                                                                 OnHoldEnd="EndHoldAsync" />
+                                                                                    <DurationMetric ValueMs="_vibDurationMs"
+                                                                                                    MaxMs="maxDur"
+                                                                                                    Open="@(_durationMenu == "vibrate")"
+                                                                                                    Disabled="tap"
+                                                                                                    Side="left"
+                                                                                                    LimitMarkers="markers"
+                                                                                                    OnToggle="@(() => ToggleDurationMenu("vibrate"))"
+                                                                                                    OnSelect="SelectVibDuration" />
+                                                                                </div>
+                                                                            </div>
+                                                                        </div>
+                                                                    </div>
+                                                                </div>
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            }
+                            else
+                            {
+                                <div class="text-grey-3 q-pa-xl text-center" style="max-width: 420px; margin: 0 auto;">
+                                    @EmptyMessage
+                                </div>
+                            }
+
+                            <AnnouncementBanner />
+                        </div>
+                    </div>
+                </div>
+            </main>
+        </div>
+
+        @* Mode switcher + hub/friends panels (collapses on compact / phone) *@
+        <div class="fixed-bottom-left q-pa-md official-mode-dock@((_compactDock ? " official-mode-dock--compact" : "") + (_modeDockOpen ? " is-open" : ""))"
+             style="z-index: 2000;">
+            @if (_compactDock)
+            {
+                <button type="button"
+                        class="q-btn q-btn-item non-selectable no-outline official-mode-fab q-btn--@(_modeDockOpen ? "standard bg-secondary text-dark" : "outline text-secondary") q-btn--round q-btn--actionable"
+                        aria-label="@(_modeDockOpen ? "Hide mode menu" : "Show mode menu")"
+                        aria-expanded="@(_modeDockOpen ? "true" : "false")"
+                        @onclick="() => _modeDockOpen = !_modeDockOpen">
+                    <span class="q-btn__wrapper col row q-anchor--skip">
+                        <span class="q-btn__content text-center col items-center q-anchor--skip justify-center row">
+                            <i class="q-icon mdi @(_modeDockOpen ? "mdi-close" : "mdi-menu")" aria-hidden="true"></i>
+                        </span>
+                    </span>
+                </button>
+            }
+
+            @if (_modeDockOpen || !_compactDock)
+            {
+                <div class="official-mode-switch">
+                    @if (ShowOwnMode)
+                    {
+                        <button type="button"
+                                class="q-btn q-btn-item non-selectable no-outline official-mode-btn q-btn--@(!FriendsOpen ? "standard bg-secondary text-dark" : "outline text-secondary") q-btn--rectangle q-btn--rounded q-btn--actionable q-btn--wrap"
+                                @onclick="OwnModeClick">
+                            <span class="q-btn__wrapper col row q-anchor--skip">
+                                <span class="q-btn__content text-center col items-center q-anchor--skip justify-start row no-wrap">
+                                    <i class="q-icon on-left mdi mdi-access-point" style="font-size: 16px;" aria-hidden="true"></i>
+                                    <div style="text-align: left;">
+                                        <div class="mode-title">My Shockers</div>
+                                        <div class="mode-sub">Your hubs &amp; devices</div>
+                                    </div>
+                                </span>
+                            </span>
+                        </button>
+                    }
+
+                    <button type="button"
+                            class="q-btn q-btn-item non-selectable no-outline official-mode-btn q-btn--@(FriendsOpen ? "standard bg-secondary text-dark" : "outline text-secondary") q-btn--rectangle q-btn--rounded q-btn--actionable q-btn--wrap"
+                            @onclick="OnOpenFriends">
+                        <span class="q-btn__wrapper col row q-anchor--skip">
+                            <span class="q-btn__content text-center col items-center q-anchor--skip justify-start row no-wrap">
+                                <i class="q-icon on-left mdi mdi-account-group" style="font-size: 16px;" aria-hidden="true"></i>
+                                <div style="text-align: left;">
+                                    <div class="mode-title">Discord Shockers</div>
+                                    <div class="mode-sub">Friends in this activity</div>
+                                </div>
+                            </span>
+                        </span>
+                    </button>
+
+                    @if (FriendsOpen && FriendsPanel is not null)
+                    {
+                        @FriendsPanel(new FriendsPanelContext(
+                            _multiShock,
+                            EventCallback.Factory.Create(this, ToggleMultiShock),
+                            _individualIntensity,
+                            EventCallback.Factory.Create(this, ToggleIndividualIntensity)))
+                    }
+
+                    @if (ShowOwnMode && !FriendsOpen && _hubsOpen)
+                    {
+                        <div class="column flex q-pa-xs bg-dark"
+                             style="border-radius: 14px; border: 1px solid rgba(121,198,219,.35);">
+                            <div class="text-caption text-secondary q-px-xs q-pb-xs">Your hubs</div>
+                            @foreach (var h in hubList)
+                            {
+                                var hub = h;
+                                var hubSelected = !string.IsNullOrEmpty(SelectedHubId) ? SelectedHubId == hub.Id : hub.Id == Hub.Id;
+                                <button @key="hub.Id" type="button"
+                                        class="q-btn q-btn-item non-selectable no-outline full-width q-my-xs q-btn--@(hubSelected ? "standard bg-secondary text-dark" : "outline text-secondary") q-btn--rectangle q-btn--rounded q-btn--actionable q-btn--wrap"
+                                        @onclick="() => OnSelectHub.InvokeAsync(hub.Id)">
+                                    <span class="q-btn__wrapper col row q-anchor--skip">
+                                        <span class="q-btn__content text-center col items-center q-anchor--skip justify-between row no-wrap">
+                                            <span class="block ellipsis">@hub.Name</span>
+                                            <span class="q-icon mdi mdi-circle @(hub.Online ? "text-positive" : "text-grey-6")"
+                                                  style="font-size: 8px;" aria-hidden="true"></span>
+                                        </span>
+                                    </span>
+                                </button>
+                            }
+                        </div>
+                    }
+                </div>
+            }
+        </div>
+    </div>
+}

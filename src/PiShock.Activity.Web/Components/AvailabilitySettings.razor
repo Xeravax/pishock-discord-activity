@@ -1,0 +1,175 @@
+@if (!_loaded)
+{
+    <div class="text-grey-5 q-pa-md">Loading…</div>
+}
+else
+{
+    var others = Participants.Where(p => p.Id != CurrentUserId).ToList();
+    <div class="column q-gutter-md">
+        <div class="text-grey-5 text-body2">
+            Opt shockers into Discord Shockers so people in this activity can control them. We create a
+            PiShock share code when possible so shocks from linked executors go through the official
+            share API; otherwise the server uses your session with an attributed agent name. Your token
+            never leaves the server.
+        </div>
+
+        @if (!string.IsNullOrEmpty(_error))
+        {
+            <div class="bg-negative text-white q-pa-sm" style="border-radius: 4px;">@_error</div>
+        }
+
+        <div>
+            <div class="text-secondary text-subtitle2 q-mb-sm">Your shockers</div>
+            @if (OwnedShockers.Count == 0)
+            {
+                <div class="text-grey-5">No owned shockers loaded.</div>
+            }
+            else
+            {
+                <div class="q-list q-list--dark">
+                    @foreach (var s in OwnedShockers)
+                    {
+                        var shocker = s;
+                        var cfg = _shares.FirstOrDefault(x => x.ShockerId == shocker.Id);
+                        var on = cfg is not null;
+                        <div @key="shocker.Id" class="q-item q-item-type column q-pa-sm"
+                             style="border: 1px solid hsla(0,0%,100%,.12); margin-bottom: 8px;">
+                            <label class="row items-center no-wrap cursor-pointer">
+                                <div class="q-checkbox cursor-pointer no-outline row inline no-wrap items-center q-checkbox--dark q-mr-sm @(on ? "text-secondary" : "")">
+                                    <input type="checkbox" checked="@on" @onchange="() => ToggleShocker(shocker)"
+                                           style="width: 18px; height: 18px; accent-color: #79c6db;" />
+                                </div>
+                                <div class="column">
+                                    <div class="q-item__label">@shocker.Name</div>
+                                    @if (!string.IsNullOrEmpty(shocker.HubName))
+                                    {
+                                        <div class="q-item__label q-item__label--caption text-grey-5">@shocker.HubName</div>
+                                    }
+                                </div>
+                            </label>
+                            @if (cfg is not null)
+                            {
+                                <div class="column q-gutter-sm q-mt-sm">
+                                    <LimitSlider Label="Max intensity"
+                                                 @bind-Value="cfg.MaxIntensity"
+                                                 Min="1"
+                                                 Max="@Math.Min(100, cfg.DeviceMaxIntensity ?? 100)"
+                                                 FormatValue="LimitSlider.FormatIntensityPct" />
+                                    <LimitSlider Label="Max duration"
+                                                 @bind-Value="cfg.MaxDurationMs"
+                                                 Min="16"
+                                                 Max="@Math.Min(15_000, cfg.DeviceMaxDurationMs ?? 15_000)"
+                                                 Step="100"
+                                                 FormatValue="LimitSlider.FormatDurationMs" />
+                                    <label class="row items-center text-caption text-grey-5 cursor-pointer">
+                                        <input type="checkbox" checked="@cfg.Paused" class="q-mr-xs"
+                                               style="accent-color: #79c6db;"
+                                               @onchange="e => cfg.Paused = (bool)(e.Value ?? false)" />
+                                        Paused
+                                    </label>
+                                </div>
+                            }
+                        </div>
+                    }
+                </div>
+            }
+        </div>
+
+        <div>
+            <div class="text-secondary text-subtitle2 q-mb-sm">Block participants</div>
+            @if (others.Count == 0)
+            {
+                <div class="text-grey-5">No other participants yet.</div>
+            }
+            else
+            {
+                <div class="q-list q-list--dark">
+                    @foreach (var p in others)
+                    {
+                        var participant = p;
+                        <label @key="participant.Id" class="q-item q-item-type row items-center no-wrap cursor-pointer q-pa-sm">
+                            <input type="checkbox" checked="@_banned.Contains(participant.Id)" class="q-mr-sm"
+                                   style="accent-color: #79c6db;"
+                                   @onchange="() => ToggleBan(participant.Id)" />
+                            <span class="q-item__label">@participant.DisplayName</span>
+                        </label>
+                    }
+                </div>
+            }
+        </div>
+
+        <div class="row justify-end">
+            <QBtn Class="@QBtn.Primary" Disabled="@(Busy || _saving)" OnClick="Save">
+                <span class="block">@(_saving ? "Saving…" : "Save")</span>
+            </QBtn>
+        </div>
+    </div>
+}
+
+@code {
+    [Parameter] public List<ShockerView> OwnedShockers { get; set; } = [];
+    [Parameter] public List<DiscordParticipant> Participants { get; set; } = [];
+    [Parameter] public string CurrentUserId { get; set; } = "";
+    [Parameter] public bool Busy { get; set; }
+    [Parameter] public Func<Task<ActivityShareResponse>>? OnLoad { get; set; }
+    [Parameter] public Func<List<ShareLimitRow>, List<string>, Task>? OnSave { get; set; }
+
+    private List<ShareLimitRow> _shares = [];
+    private List<string> _banned = [];
+    private bool _loaded;
+    private bool _saving;
+    private string? _error;
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            if (OnLoad is not null)
+            {
+                var data = await OnLoad();
+                _shares = data.Shares;
+                _banned = data.BannedDiscordUserIds;
+            }
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        _loaded = true;
+    }
+
+    private void ToggleShocker(ShockerView s)
+    {
+        var existing = _shares.FirstOrDefault(x => x.ShockerId == s.Id);
+        if (existing is not null)
+        {
+            _shares.Remove(existing);
+            return;
+        }
+        _shares.Add(ShareLimitRow.FromShocker(s));
+    }
+
+    private void ToggleBan(string id)
+    {
+        if (!_banned.Remove(id)) _banned.Add(id);
+    }
+
+    private async Task Save()
+    {
+        if (OnSave is null) return;
+        _saving = true;
+        _error = null;
+        try
+        {
+            await OnSave(_shares, _banned);
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+}

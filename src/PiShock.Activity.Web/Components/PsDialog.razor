@@ -1,0 +1,41 @@
+@* Quasar dialog shell matching pishock.com dark cards *@
+@if (Open)
+{
+    <div class="ps-dialog-root">
+        <div class="ps-dialog-backdrop" @onclick="OnClose"></div>
+        <div class="ps-dialog-inner"
+             role="dialog"
+             aria-modal="true"
+             aria-label="@Title"
+             @onclick:stopPropagation="true"
+             @onmousedown:stopPropagation="true">
+            <div class="q-card q-card--dark q-dark bg-dark"
+                 style="width: @(Wide ? "min(720px, 94vw)" : "min(480px, 94vw)"); max-height: 88vh; display: flex; flex-direction: column; border: 1px solid rgba(121, 198, 219, 0.35); pointer-events: auto;">
+                <div class="q-card__section q-card__section--vert row items-center justify-between no-wrap">
+                    <div class="text-h6 text-secondary" style="font-family: geo, Oxanium, sans-serif;">@Title</div>
+                    <button type="button"
+                            class="q-btn q-btn-item non-selectable no-outline q-btn--flat q-btn--round text-secondary q-btn--actionable q-btn--dense"
+                            @onclick="OnClose"
+                            aria-label="Close">
+                        <span class="q-btn__wrapper col row q-anchor--skip">
+                            <span class="q-btn__content text-center col items-center q-anchor--skip justify-center row">
+                                <i class="q-icon mdi mdi-close" aria-hidden="true"></i>
+                            </span>
+                        </span>
+                    </button>
+                </div>
+                <div class="q-card__section q-card__section--vert" style="overflow: auto; padding-top: 0;">
+                    @ChildContent
+                </div>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    [Parameter] public bool Open { get; set; }
+    [Parameter] public string Title { get; set; } = "";
+    [Parameter] public EventCallback OnClose { get; set; }
+    [Parameter] public bool Wide { get; set; }
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+}

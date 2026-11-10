@@ -1,0 +1,13 @@
+@inject ActivitySession Session
+
+@* Body of the "Link PiShock" dialog: disclaimer + Connect CTA wired to the session's link flow. *@
+<LoginPanel Linking="Session.Linking"
+            LoginUrl="@null"
+            Error="@null"
+            OnStart="Session.StartPiShockLoginAsync"
+            OnOpen="Noop"
+            OnRefresh="Noop" />
+
+@code {
+    private Task Noop() => Task.CompletedTask;
+}

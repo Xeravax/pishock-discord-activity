@@ -1,0 +1,33 @@
+<div class="official-edge-rail official-edge-rail--@Side">
+    <button type="button" class="official-edge-btn" disabled="@Disabled"
+            aria-label="Increase intensity" @onclick="OnUp">
+        <i class="q-icon mdi mdi-chevron-double-up" aria-hidden="true"></i>
+    </button>
+    @if (ShowRandom)
+    {
+        <button type="button"
+                class="official-edge-btn official-edge-btn--dice@(Random ? " is-active" : "")"
+                disabled="@Disabled"
+                aria-pressed="@(Random ? "true" : "false")"
+                aria-label="Random intensity"
+                title="Random intensity"
+                @onclick="OnToggleRandom">
+            <i class="q-icon mdi mdi-dice-multiple" aria-hidden="true"></i>
+        </button>
+    }
+    <button type="button" class="official-edge-btn" disabled="@Disabled"
+            aria-label="Decrease intensity" @onclick="OnDown">
+        <i class="q-icon mdi mdi-chevron-double-down" aria-hidden="true"></i>
+    </button>
+</div>
+
+@code {
+    /// <summary>"left" or "right".</summary>
+    [Parameter] public string Side { get; set; } = "right";
+    [Parameter] public bool Disabled { get; set; }
+    [Parameter] public bool Random { get; set; }
+    [Parameter] public bool ShowRandom { get; set; }
+    [Parameter] public EventCallback OnUp { get; set; }
+    [Parameter] public EventCallback OnDown { get; set; }
+    [Parameter] public EventCallback OnToggleRandom { get; set; }
+}

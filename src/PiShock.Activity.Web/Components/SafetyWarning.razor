@@ -1,0 +1,61 @@
+<section class="safety-gate">
+    <div class="safety-gate-card">
+        <div class="safety-gate-header">
+            <div class="safety-gate-icon" aria-hidden="true">⚠</div>
+            <h1>Safety Warning</h1>
+            <p>
+                This application controls electrical shock devices. Read and acknowledge these terms
+                to proceed.
+            </p>
+        </div>
+
+        <div class="safety-gate-list">
+            @for (var i = 0; i < SafetyAck.Items.Length; i++)
+            {
+                var index = i;
+                <label class="safety-gate-item">
+                    <input type="checkbox" checked="@_acknowledged[index]" @onchange="() => Toggle(index)" />
+                    <span>@SafetyAck.Items[index]</span>
+                </label>
+            }
+        </div>
+
+        <div class="safety-gate-important">
+            <strong>Important:</strong> Use at your own risk. Developers assume no responsibility
+            for harm or injury. You must be 18+, obtain explicit consent, establish safe words /
+            emergency stop procedures, start at the lowest intensity, and comply with local laws.
+        </div>
+
+        <div class="safety-gate-links">
+            @if (OnOpenTerms.HasDelegate)
+            {
+                <button type="button" class="btn secondary" @onclick="OnOpenTerms">Terms of Service</button>
+            }
+            @if (OnOpenPrivacy.HasDelegate)
+            {
+                <button type="button" class="btn secondary" @onclick="OnOpenPrivacy">Privacy Policy</button>
+            }
+        </div>
+
+        <button type="button" class="btn accent safety-gate-accept"
+                disabled="@(!AllAcknowledged || Busy)"
+                @onclick="Accept">
+            I Acknowledge and Accept All Terms
+        </button>
+    </div>
+</section>
+
+@code {
+    [Parameter] public EventCallback OnAccept { get; set; }
+    [Parameter] public bool Busy { get; set; }
+    [Parameter] public EventCallback OnOpenTerms { get; set; }
+    [Parameter] public EventCallback OnOpenPrivacy { get; set; }
+
+    private readonly bool[] _acknowledged = new bool[SafetyAck.Items.Length];
+
+    private bool AllAcknowledged => _acknowledged.All(v => v);
+
+    private void Toggle(int index) => _acknowledged[index] = !_acknowledged[index];
+
+    private Task Accept() => AllAcknowledged && !Busy ? OnAccept.InvokeAsync() : Task.CompletedTask;
+}

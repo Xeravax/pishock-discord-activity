@@ -1,0 +1,16 @@
+@* Soft pill toggle for multishock selection. *@
+<button type="button"
+        class="multi-shock-toggle@((Active ? " is-on" : "") + (Compact ? " is-compact" : ""))"
+        title="@Title"
+        aria-pressed="@(Active ? "true" : "false")"
+        @onclick="OnToggle">
+    <i class="q-icon mdi mdi-checkbox-multiple-marked-outline" aria-hidden="true"></i>
+    <span>Multi</span>
+</button>
+
+@code {
+    [Parameter] public bool Active { get; set; }
+    [Parameter] public EventCallback OnToggle { get; set; }
+    [Parameter] public string Title { get; set; } = "Select several people / shockers and operate them together";
+    [Parameter] public bool Compact { get; set; }
+}

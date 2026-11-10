@@ -1,0 +1,28 @@
+@implements IDisposable
+@inject AppHealthService Health
+
+@if (!Hidden)
+{
+    <span class="app-version-badge app-version-badge--@StatusKey"
+          title="@($"Build {Health.Label} · client {Health.BootVersion} · {Health.StatusLabel}")">
+        <span class="app-version-badge__dot" aria-hidden="true"></span>
+        <span class="app-version-badge__text">@Health.Label</span>
+    </span>
+}
+
+@code {
+    /// <summary>Hide during PIP so the last-hit UI stays clean.</summary>
+    [Parameter] public bool Hidden { get; set; }
+
+    private string StatusKey => Health.Status.ToString().ToLowerInvariant();
+
+    protected override void OnInitialized()
+    {
+        Health.Changed += OnHealthChanged;
+        Health.Start();
+    }
+
+    private void OnHealthChanged() => _ = InvokeAsync(StateHasChanged);
+
+    public void Dispose() => Health.Changed -= OnHealthChanged;
+}

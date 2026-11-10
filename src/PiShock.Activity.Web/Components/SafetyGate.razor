@@ -1,0 +1,47 @@
+@* Consent shell (App.tsx's non-consented return): brand + user pill + local-preview card + ConsentGate. *@
+<div class="app-shell official-preflight consent-shell @(Pip ? "pip" : "")">
+    <div class="consent-shell__brand">
+        <h1 class="auth-boot__brand auth-boot__brand-row">
+            <span class="auth-boot__brand-name">Pi<span>Shock</span></span>
+            <AppVersionBadge />
+        </h1>
+        <p class="auth-boot__sub">Discord Activity</p>
+        <span class="status-pill consent-shell__user">
+            <span class="dot on"></span>
+            @UserName
+        </span>
+    </div>
+
+    @if (!Embedded)
+    {
+        <div class="q-card q-card--dark q-dark q-pa-md"
+             style="border: 1px solid rgba(121,198,219,.35); max-width: 480px; width: 100%;">
+            <div class="text-secondary text-h6" style="font-family: geo, Oxanium, sans-serif;">Local preview</div>
+            <p class="text-grey-5 text-body2">
+                Open this activity inside Discord for real auth. Use <code>/?demo=1</code> for the
+                official UI clone.
+            </p>
+        </div>
+    }
+
+    @if (!string.IsNullOrEmpty(Error))
+    {
+        <div class="error-banner">@Error</div>
+    }
+
+    <ConsentGate OnAccept="OnAccepted"
+                 Busy="Busy"
+                 OnOpenTerms="OnOpenTerms"
+                 OnOpenPrivacy="OnOpenPrivacy" />
+</div>
+
+@code {
+    [Parameter] public string UserName { get; set; } = "";
+    [Parameter] public bool Embedded { get; set; }
+    [Parameter] public bool Pip { get; set; }
+    [Parameter] public bool Busy { get; set; }
+    [Parameter] public string? Error { get; set; }
+    [Parameter] public EventCallback OnAccepted { get; set; }
+    [Parameter] public EventCallback OnOpenTerms { get; set; }
+    [Parameter] public EventCallback OnOpenPrivacy { get; set; }
+}
