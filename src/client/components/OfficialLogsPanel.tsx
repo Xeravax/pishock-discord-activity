@@ -1,8 +1,18 @@
 import { useMemo } from 'react';
 
+export type OfficialLogPerson = {
+  id: string;
+  displayName: string;
+  avatarUrl: string;
+};
+
 export type OfficialLogEntry = {
   id: string;
+  from: OfficialLogPerson;
+  to: OfficialLogPerson;
+  /** @deprecated use from.displayName */
   fromLabel: string;
+  /** @deprecated use to.displayName */
   toLabel: string;
   viaApi: boolean;
   action: 'shock' | 'vibrate' | 'beep' | 'other';
@@ -42,7 +52,25 @@ function formatDuration(sec: number): string {
   return String(t);
 }
 
-/** Tiny FAB + official-style log list (who → whom, API, intensity, duration, ago). */
+function PersonChip({
+  person,
+  tone,
+}: {
+  person: OfficialLogPerson;
+  tone: 'from' | 'to';
+}) {
+  return (
+    <span
+      className={`official-log-person official-log-person--${tone}`}
+      title={person.displayName}
+    >
+      <img src={person.avatarUrl} alt="" className="official-log-avatar" />
+      <span className="ellipsis">{person.displayName}</span>
+    </span>
+  );
+}
+
+/** Tiny FAB + public who→whom activity log. */
 export function OfficialLogsFab({
   count,
   onClick,
@@ -80,7 +108,7 @@ export function OfficialLogsPanel({ open, entries, onClose }: Omit<Props, 'onOpe
       >
         <div className="official-logs-card q-card q-card--dark q-dark bg-dark">
           <div className="official-logs-banner row items-center justify-between no-wrap">
-            <span>Logs are a work in progress.</span>
+            <span>Recent activity across all sessions</span>
             <button
               type="button"
               className="q-btn q-btn-item non-selectable no-outline q-btn--flat q-btn--round text-dark q-btn--dense"
@@ -101,18 +129,12 @@ export function OfficialLogsPanel({ open, entries, onClose }: Omit<Props, 'onOpe
               entries.map((row) => (
                 <div key={row.id} className="official-log-row">
                   <div className="official-log-row__top">
-                    <span className="official-log-pill official-log-pill--from ellipsis" title={row.fromLabel}>
-                      {row.fromLabel}
-                    </span>
-                    <span className="official-log-pill official-log-pill--to ellipsis" title={row.toLabel}>
-                      {row.toLabel}
-                    </span>
+                    <PersonChip person={row.from} tone="from" />
+                    <i className="q-icon mdi mdi-arrow-right official-log-arrow" aria-hidden />
+                    <PersonChip person={row.to} tone="to" />
                   </div>
                   <div className="official-log-row__bottom">
                     <div className="official-log-row__meta">
-                      {row.viaApi ? (
-                        <span className="official-log-pill official-log-pill--api">API</span>
-                      ) : null}
                       {row.intensity != null ? (
                         <span className="official-log-stat">
                           <i className={`q-icon mdi ${actionIcon(row.action)}`} aria-hidden />
@@ -138,26 +160,6 @@ export function OfficialLogsPanel({ open, entries, onClose }: Omit<Props, 'onOpe
   );
 }
 
-function pickString(row: Record<string, unknown>, keys: string[]): string | null {
-  for (const key of keys) {
-    const v = row[key];
-    if (v == null) continue;
-    const s = String(v).trim();
-    if (s) return s;
-  }
-  return null;
-}
-
-function pickNumber(row: Record<string, unknown>, keys: string[]): number | null {
-  for (const key of keys) {
-    const v = row[key];
-    if (v == null || v === '') continue;
-    const n = Number(v);
-    if (Number.isFinite(n)) return n;
-  }
-  return null;
-}
-
 function normalizeAction(raw: string | null, intensity: number | null): OfficialLogEntry['action'] {
   const a = (raw ?? '').toLowerCase();
   if (a.includes('vib') || a === 'v' || a === '1' || a.includes('warning')) return 'vibrate';
@@ -167,169 +169,131 @@ function normalizeAction(raw: string | null, intensity: number | null): Official
   return 'other';
 }
 
-function looksLikeApi(row: Record<string, unknown>, fromLabel: string): boolean {
-  const ty = pickString(row, ['Type', 'type', 'OriginType', 'originType', 'ty', 'Via', 'via']);
-  if (ty && /api/i.test(ty)) return true;
-  for (const key of ['IsApi', 'isApi', 'Api', 'api', 'FromApi', 'fromApi']) {
-    const v = row[key];
-    if (v === true || v === 1 || v === '1' || String(v).toLowerCase() === 'true') return true;
-  }
-  if (/api/i.test(fromLabel) && !/discord/i.test(fromLabel)) return true;
-  return false;
+type PublicLogPersonApi = {
+  id?: string;
+  displayName?: string;
+  username?: string | null;
+  globalName?: string | null;
+  avatarUrl?: string;
+  avatar?: string | null;
+};
+
+type PublicLogApiRow = {
+  id?: string;
+  action?: string;
+  intensity?: number | null;
+  durationMs?: number | null;
+  createdAt?: string;
+  executor?: PublicLogPersonApi;
+  target?: PublicLogPersonApi;
+};
+
+function personFromApi(
+  raw: PublicLogPersonApi | undefined,
+  fallbackId: string,
+  avatarUrlFn: (id: string, avatar?: string | null) => string,
+): OfficialLogPerson {
+  const id = String(raw?.id ?? fallbackId);
+  const displayName =
+    raw?.displayName ||
+    raw?.globalName ||
+    raw?.username ||
+    'Unknown';
+  const avatarUrl =
+    raw?.avatarUrl ||
+    avatarUrlFn(id, raw?.avatar ?? null);
+  return { id, displayName: String(displayName), avatarUrl };
 }
 
-function parseTimestamp(row: Record<string, unknown>): number {
-  const raw = pickString(row, [
-    'Time',
-    'time',
-    'Timestamp',
-    'timestamp',
-    'Date',
-    'date',
-    'Created',
-    'created',
-    'CreatedAt',
-    'createdAt',
-    'LogTime',
-    'logTime',
-  ]);
-  if (!raw) return Date.now();
-  // PiShock sometimes returns /Date(ms)/
-  const msMatch = /\/Date\((\d+)/.exec(raw);
-  if (msMatch) return Number(msMatch[1]);
-  const asNum = Number(raw);
-  if (Number.isFinite(asNum) && asNum > 1_000_000_000) {
-    return asNum < 1e12 ? asNum * 1000 : asNum;
-  }
-  const parsed = Date.parse(raw);
-  return Number.isFinite(parsed) ? parsed : Date.now();
+/** Normalize the global public activity feed from GET /api/logs */
+export function normalizePublicLogs(
+  rows: PublicLogApiRow[],
+  avatarUrlFn: (id: string, avatar?: string | null) => string,
+): OfficialLogEntry[] {
+  const out: OfficialLogEntry[] = [];
+  rows.forEach((row, idx) => {
+    const actionRaw = String(row.action ?? '').toLowerCase();
+    if (
+      actionRaw === 'end' ||
+      actionRaw === 'stop' ||
+      actionRaw.endsWith('_end') ||
+      actionRaw.startsWith('emergency_stop') ||
+      actionRaw.startsWith('pause_')
+    ) {
+      return;
+    }
+    const executorId = String(row.executor?.id ?? '');
+    const targetId = String(row.target?.id ?? '');
+    if (!executorId || !targetId) return;
+    const from = personFromApi(row.executor, executorId, avatarUrlFn);
+    const to = personFromApi(row.target, targetId, avatarUrlFn);
+    const intensity = typeof row.intensity === 'number' ? row.intensity : null;
+    const durationMs = typeof row.durationMs === 'number' ? row.durationMs : null;
+    const at = new Date(String(row.createdAt ?? '')).getTime() || Date.now() - idx;
+    out.push({
+      id: String(row.id ?? `public-${at}-${idx}`),
+      from,
+      to,
+      fromLabel: from.displayName,
+      toLabel: to.displayName,
+      viaApi: false,
+      action: normalizeAction(actionRaw, intensity),
+      intensity,
+      durationSec: durationMs != null ? Math.round((durationMs / 1000) * 10) / 10 : null,
+      at,
+    });
+  });
+  return out.sort((a, b) => b.at - a.at);
 }
 
-function durationToSec(row: Record<string, unknown>): number | null {
-  const ms = pickNumber(row, ['DurationMs', 'durationMs', 'duration_ms']);
-  if (ms != null) return Math.round((ms / 1000) * 10) / 10;
-  const dur = pickNumber(row, ['Duration', 'duration', 'Dur', 'dur', 'd']);
-  if (dur == null) return null;
-  // Heuristic: values > 30 are almost certainly milliseconds
-  if (dur > 30) return Math.round((dur / 1000) * 10) / 10;
-  return dur;
+/** @deprecated device website logs are no longer shown in the activity log panel */
+export function normalizeDeviceLogs(_raw: unknown): OfficialLogEntry[] {
+  return [];
 }
 
-/** Normalize PiShock LoadLogs payloads into display rows */
-export function normalizeDeviceLogs(raw: unknown): OfficialLogEntry[] {
-  const list = Array.isArray(raw)
-    ? raw
-    : raw && typeof raw === 'object'
-      ? (() => {
-          const obj = raw as Record<string, unknown>;
-          for (const key of ['Logs', 'logs', 'Items', 'items', 'Data', 'data', 'Entries', 'entries']) {
-            if (Array.isArray(obj[key])) return obj[key] as unknown[];
-          }
-          return [];
-        })()
-      : [];
-
-  return list
-    .map((item, idx) => {
-      if (!item || typeof item !== 'object') return null;
-      const row = item as Record<string, unknown>;
-      const fromLabel =
-        pickString(row, [
-          'Username',
-          'UserName',
-          'username',
-          'userName',
-          'From',
-          'from',
-          'FromUser',
-          'fromUser',
-          'Origin',
-          'origin',
-          'AgentName',
-          'agentName',
-          'Name',
-          'name',
-          'Owner',
-          'owner',
-        ]) ?? 'Unknown';
-      const toLabel =
-        pickString(row, [
-          'ShockerName',
-          'shockerName',
-          'Shocker',
-          'shocker',
-          'Target',
-          'target',
-          'To',
-          'to',
-          'DeviceName',
-          'deviceName',
-        ]) ?? 'Shocker';
-      const intensity = pickNumber(row, ['Intensity', 'intensity', 'Int', 'int', 'i']);
-      const action = normalizeAction(
-        pickString(row, ['Type', 'type', 'Mode', 'mode', 'Op', 'op', 'Operation', 'operation', 'm']),
-        intensity,
-      );
-      const at = parseTimestamp(row);
-      const id =
-        pickString(row, ['Id', 'id', 'LogId', 'logId']) ?? `device-${at}-${idx}-${fromLabel}-${toLabel}`;
-      return {
-        id,
-        fromLabel,
-        toLabel,
-        viaApi: looksLikeApi(row, fromLabel),
-        action,
-        intensity,
-        durationSec: durationToSec(row),
-        at,
-      } satisfies OfficialLogEntry;
-    })
-    .filter((r): r is OfficialLogEntry => Boolean(r))
-    .sort((a, b) => b.at - a.at);
-}
-
-/** Normalize activity CommandLog rows (Discord activity audit) */
+/** Fallback for legacy personal activity rows without nested executor/target objects */
 export function normalizeActivityLogs(
   rows: Array<Record<string, unknown>>,
   nameByDiscordId: Record<string, string>,
+  avatarByDiscordId: Record<string, string> = {},
+  avatarUrlFn?: (id: string, avatar?: string | null) => string,
 ): OfficialLogEntry[] {
-  return rows
-    .map((row, idx) => {
-      const actionRaw = String(row.action ?? '').toLowerCase();
-      if (actionRaw === 'end' || actionRaw === 'stop' || actionRaw.endsWith('_end')) return null;
-      const executorId = row.executorDiscordUserId != null ? String(row.executorDiscordUserId) : '';
-      const targetId = row.targetDiscordUserId != null ? String(row.targetDiscordUserId) : '';
-      const fromLabel =
-        (executorId && nameByDiscordId[executorId]) ||
-        (executorId ? `${executorId} · Discord` : 'Activity');
-      const toLabel =
-        (targetId && nameByDiscordId[targetId]) ||
-        (row.shockerId != null ? `Shocker ${row.shockerId}` : 'Shocker');
-      let viaApi = false;
-      if (typeof row.detail === 'string') {
-        try {
-          const detail = JSON.parse(row.detail) as Record<string, unknown>;
-          viaApi =
-            String(detail.via ?? '').toLowerCase().includes('api') ||
-            String(detail.path ?? '').toLowerCase().includes('api');
-        } catch {
-          // ignore
-        }
-      }
-      const intensity = typeof row.intensity === 'number' ? row.intensity : null;
-      const durationMs = typeof row.durationMs === 'number' ? row.durationMs : null;
-      const at = new Date(String(row.createdAt ?? '')).getTime() || Date.now() - idx;
-      return {
-        id: String(row.id ?? `activity-${at}-${idx}`),
-        fromLabel,
-        toLabel,
-        viaApi,
-        action: normalizeAction(actionRaw, intensity),
-        intensity,
-        durationSec: durationMs != null ? Math.round((durationMs / 1000) * 10) / 10 : null,
-        at,
-      } satisfies OfficialLogEntry;
-    })
-    .filter((r): r is OfficialLogEntry => Boolean(r))
-    .sort((a, b) => b.at - a.at);
+  const fallbackAvatar =
+    avatarUrlFn ??
+    ((id: string) => `https://cdn.discordapp.com/embed/avatars/${Number(id) % 6}.png`);
+
+  const out: OfficialLogEntry[] = [];
+  rows.forEach((row, idx) => {
+    const actionRaw = String(row.action ?? '').toLowerCase();
+    if (actionRaw === 'end' || actionRaw === 'stop' || actionRaw.endsWith('_end')) return;
+    const executorId = row.executorDiscordUserId != null ? String(row.executorDiscordUserId) : '';
+    const targetId = row.targetDiscordUserId != null ? String(row.targetDiscordUserId) : '';
+    if (!executorId || !targetId) return;
+    const from: OfficialLogPerson = {
+      id: executorId,
+      displayName: nameByDiscordId[executorId] || 'Someone',
+      avatarUrl: avatarByDiscordId[executorId] || fallbackAvatar(executorId),
+    };
+    const to: OfficialLogPerson = {
+      id: targetId,
+      displayName: nameByDiscordId[targetId] || 'Someone',
+      avatarUrl: avatarByDiscordId[targetId] || fallbackAvatar(targetId),
+    };
+    const intensity = typeof row.intensity === 'number' ? row.intensity : null;
+    const durationMs = typeof row.durationMs === 'number' ? row.durationMs : null;
+    const at = new Date(String(row.createdAt ?? '')).getTime() || Date.now() - idx;
+    out.push({
+      id: String(row.id ?? `activity-${at}-${idx}`),
+      from,
+      to,
+      fromLabel: from.displayName,
+      toLabel: to.displayName,
+      viaApi: false,
+      action: normalizeAction(actionRaw, intensity),
+      intensity,
+      durationSec: durationMs != null ? Math.round((durationMs / 1000) * 10) / 10 : null,
+      at,
+    });
+  });
+  return out.sort((a, b) => b.at - a.at);
 }

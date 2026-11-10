@@ -2,6 +2,12 @@ import type { FastifyPluginAsync } from 'fastify';
 import type { AppEnv } from '../env.js';
 import { createShare } from '../pishock/client.js';
 import {
+  ABS_MAX_DURATION_MS,
+  ABS_MAX_INTENSITY,
+  ABS_MIN_DURATION_MS,
+  resolveDeviceCeilingsFromPiShock,
+} from '../operate-policy.js';
+import {
   getPersonalActivityLimits,
   listActivityBans,
   listActivityShares,
@@ -10,6 +16,120 @@ import {
   setPersonalActivityLimits,
 } from '../session.js';
 import { broadcastRealtimeAll } from '../realtime.js';
+
+type IncomingShare = {
+  shockerId?: number;
+  shockerName?: string;
+  hubClientId?: string | null;
+  shareCode?: string | null;
+  deviceMaxIntensity?: number;
+  deviceMaxDurationMs?: number;
+  enabled?: boolean;
+  paused?: boolean;
+  maxIntensity?: number;
+  maxDurationMs?: number;
+  canShock?: boolean;
+  canVibrate?: boolean;
+  canBeep?: boolean;
+  canHold?: boolean;
+};
+
+type ExistingShare = Awaited<ReturnType<typeof listActivityShares>>[number];
+
+async function normalizeShareRow(
+  s: IncomingShare,
+  prev: ExistingShare | undefined,
+  creds: NonNullable<import('../pishock/client.js').PiShockCreds>,
+): Promise<
+  | { ok: true; row: Parameters<typeof replaceActivityShares>[1][number] }
+  | { ok: false; error: string }
+> {
+  const shockerId = Number(s.shockerId);
+  if (!Number.isFinite(shockerId) || shockerId <= 0) {
+    return { ok: false, error: 'Each share requires a valid shockerId' };
+  }
+
+  const ceilings = await resolveDeviceCeilingsFromPiShock(creds, shockerId);
+  const deviceMaxIntensity = ceilings.found
+    ? ceilings.deviceMaxIntensity
+    : Math.max(
+        1,
+        Math.min(ABS_MAX_INTENSITY, Number(prev?.deviceMaxIntensity ?? ABS_MAX_INTENSITY)),
+      );
+  const deviceMaxDurationMs = ceilings.found
+    ? ceilings.deviceMaxDurationMs
+    : Math.max(
+        ABS_MIN_DURATION_MS,
+        Math.min(ABS_MAX_DURATION_MS, Number(prev?.deviceMaxDurationMs ?? ABS_MAX_DURATION_MS)),
+      );
+  // Prefer live PiShock hub id; fall back to previously stored value only
+  const hubClientId = ceilings.hubClientId ?? prev?.hubClientId ?? null;
+
+  const canShock = s.canShock !== false;
+  const canVibrate = s.canVibrate !== false;
+  const canBeep = s.canBeep !== false;
+  const canHold = s.canHold !== false;
+
+  const maxIntensity = Math.max(
+    1,
+    Math.min(deviceMaxIntensity, Number(s.maxIntensity ?? prev?.maxIntensity ?? deviceMaxIntensity)),
+  );
+  const maxDurationMs = Math.max(
+    ABS_MIN_DURATION_MS,
+    Math.min(
+      deviceMaxDurationMs,
+      Number(s.maxDurationMs ?? prev?.maxDurationMs ?? deviceMaxDurationMs),
+    ),
+  );
+
+  // Never accept a client-supplied share code — only keep prior server-created codes
+  let shareCode = prev?.shareCode ?? null;
+  const capsChanged =
+    !shareCode ||
+    (prev != null &&
+      (prev.maxIntensity !== maxIntensity ||
+        prev.maxDurationMs !== maxDurationMs ||
+        prev.canShock !== canShock ||
+        prev.canVibrate !== canVibrate ||
+        prev.canBeep !== canBeep));
+
+  if (!shareCode || capsChanged) {
+    try {
+      const created = await createShare(creds, {
+        ShockerId: shockerId,
+        MaxIntensity: maxIntensity,
+        MaxDuration: Math.max(1, Math.min(15, Math.round(maxDurationMs / 1000))),
+        CanShock: canShock,
+        CanVibrate: canVibrate,
+        CanBeep: canBeep,
+      });
+      const nextCode = extractShareCode(created.data);
+      if (nextCode) shareCode = nextCode;
+    } catch {
+      // Fall back to target-session OperateById when share creation fails
+    }
+  }
+
+  return {
+    ok: true,
+    row: {
+      shockerId,
+      shockerName: String(s.shockerName || prev?.shockerName || `Shocker ${shockerId}`).slice(0, 120),
+      hubClientId,
+      shareCode,
+      deviceMaxIntensity,
+      deviceMaxDurationMs,
+      enabled: s.enabled !== false,
+      paused: Boolean(s.paused),
+      maxIntensity,
+      maxDurationMs,
+      canShock,
+      canVibrate,
+      canBeep,
+      canHold,
+    },
+  };
+}
 
 export const activityShareRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app) => {
   app.get('/api/activity/share', async (req, reply) => {
@@ -59,22 +179,7 @@ export const activityShareRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (a
 
     const body = req.body as {
       personal?: { activityMaxIntensity?: number; activityMaxDurationMs?: number };
-      shares?: Array<{
-        shockerId?: number;
-        shockerName?: string;
-        hubClientId?: string | null;
-        shareCode?: string | null;
-        deviceMaxIntensity?: number;
-        deviceMaxDurationMs?: number;
-        enabled?: boolean;
-        paused?: boolean;
-        maxIntensity?: number;
-        maxDurationMs?: number;
-        canShock?: boolean;
-        canVibrate?: boolean;
-        canBeep?: boolean;
-        canHold?: boolean;
-      }>;
+      shares?: IncomingShare[];
       bannedDiscordUserIds?: string[];
     };
 
@@ -90,56 +195,11 @@ export const activityShareRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (a
     if (incoming) {
       const normalized = [];
       for (const s of incoming) {
-        const shockerId = Number(s.shockerId);
-        if (!Number.isFinite(shockerId) || shockerId <= 0) {
-          return reply.code(400).send({ error: 'Each share requires a valid shockerId' });
+        const result = await normalizeShareRow(s, existingByShocker.get(Number(s.shockerId)), req.pishockCreds);
+        if (!result.ok) {
+          return reply.code(400).send({ error: result.error });
         }
-        const prev = existingByShocker.get(shockerId);
-        let shareCode = s.shareCode ?? prev?.shareCode ?? null;
-        const deviceMaxIntensity = Math.max(
-          1,
-          Math.min(100, Number(s.deviceMaxIntensity ?? prev?.deviceMaxIntensity ?? 100)),
-        );
-        const deviceMaxDurationMs = Math.max(
-          16,
-          Math.min(15_000, Number(s.deviceMaxDurationMs ?? prev?.deviceMaxDurationMs ?? 15_000)),
-        );
-
-        if (!shareCode && req.pishockCreds) {
-          try {
-            const created = await createShare(req.pishockCreds, {
-              ShockerId: shockerId,
-              MaxIntensity: Math.max(1, Math.min(deviceMaxIntensity, Number(s.maxIntensity ?? deviceMaxIntensity))),
-              MaxDuration: Math.max(
-                1,
-                Math.min(15, Math.round(Number(s.maxDurationMs ?? deviceMaxDurationMs) / 1000)),
-              ),
-              CanShock: s.canShock !== false,
-              CanVibrate: s.canVibrate !== false,
-              CanBeep: s.canBeep !== false,
-            });
-            shareCode = extractShareCode(created.data) ?? shareCode;
-          } catch {
-            // optional
-          }
-        }
-
-        normalized.push({
-          shockerId,
-          shockerName: String(s.shockerName || `Shocker ${shockerId}`).slice(0, 120),
-          hubClientId: s.hubClientId != null ? String(s.hubClientId) : null,
-          shareCode,
-          deviceMaxIntensity,
-          deviceMaxDurationMs,
-          enabled: s.enabled !== false,
-          paused: Boolean(s.paused),
-          maxIntensity: s.maxIntensity,
-          maxDurationMs: s.maxDurationMs,
-          canShock: s.canShock,
-          canVibrate: s.canVibrate,
-          canBeep: s.canBeep,
-          canHold: s.canHold,
-        });
+        normalized.push(result.row);
       }
       shares = await replaceActivityShares(req.discordUser.id, normalized);
     }
@@ -172,22 +232,7 @@ export const activityShareRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (a
     }
 
     const body = req.body as {
-      shares?: Array<{
-        shockerId?: number;
-        shockerName?: string;
-        hubClientId?: string | null;
-        shareCode?: string | null;
-        deviceMaxIntensity?: number;
-        deviceMaxDurationMs?: number;
-        enabled?: boolean;
-        paused?: boolean;
-        maxIntensity?: number;
-        maxDurationMs?: number;
-        canShock?: boolean;
-        canVibrate?: boolean;
-        canBeep?: boolean;
-        canHold?: boolean;
-      }>;
+      shares?: IncomingShare[];
       bannedDiscordUserIds?: string[];
     };
 
@@ -197,56 +242,11 @@ export const activityShareRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (a
     const incoming = Array.isArray(body.shares) ? body.shares : [];
     const normalized = [];
     for (const s of incoming) {
-      const shockerId = Number(s.shockerId);
-      if (!Number.isFinite(shockerId) || shockerId <= 0) {
-        return reply.code(400).send({ error: 'Each share requires a valid shockerId' });
+      const result = await normalizeShareRow(s, existingByShocker.get(Number(s.shockerId)), req.pishockCreds);
+      if (!result.ok) {
+        return reply.code(400).send({ error: result.error });
       }
-      const prev = existingByShocker.get(shockerId);
-      let shareCode = s.shareCode ?? prev?.shareCode ?? null;
-      const deviceMaxIntensity = Math.max(
-        1,
-        Math.min(100, Number(s.deviceMaxIntensity ?? prev?.deviceMaxIntensity ?? 100)),
-      );
-      const deviceMaxDurationMs = Math.max(
-        16,
-        Math.min(15_000, Number(s.deviceMaxDurationMs ?? prev?.deviceMaxDurationMs ?? 15_000)),
-      );
-
-      if (!shareCode && req.pishockCreds) {
-        try {
-          const created = await createShare(req.pishockCreds, {
-            ShockerId: shockerId,
-            MaxIntensity: Math.max(1, Math.min(deviceMaxIntensity, Number(s.maxIntensity ?? deviceMaxIntensity))),
-            MaxDuration: Math.max(
-              1,
-              Math.min(15, Math.round(Number(s.maxDurationMs ?? deviceMaxDurationMs) / 1000)),
-            ),
-            CanShock: s.canShock !== false,
-            CanVibrate: s.canVibrate !== false,
-            CanBeep: s.canBeep !== false,
-          });
-          shareCode = extractShareCode(created.data) ?? shareCode;
-        } catch {
-          // Fall back to target-session OperateById path when share creation fails
-        }
-      }
-
-      normalized.push({
-        shockerId,
-        shockerName: String(s.shockerName || `Shocker ${shockerId}`).slice(0, 120),
-        hubClientId: s.hubClientId != null ? String(s.hubClientId) : null,
-        shareCode,
-        deviceMaxIntensity,
-        deviceMaxDurationMs,
-        enabled: s.enabled !== false,
-        paused: Boolean(s.paused),
-        maxIntensity: s.maxIntensity,
-        maxDurationMs: s.maxDurationMs,
-        canShock: s.canShock,
-        canVibrate: s.canVibrate,
-        canBeep: s.canBeep,
-        canHold: s.canHold,
-      });
+      normalized.push(result.row);
     }
 
     const shares = await replaceActivityShares(req.discordUser.id, normalized);

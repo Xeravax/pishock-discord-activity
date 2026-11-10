@@ -1,22 +1,28 @@
 import { useState } from 'react';
 
-type Props = {
-  onAccept: () => void;
-  busy?: boolean;
-  onOpenTerms?: () => void;
-  onOpenPrivacy?: () => void;
-};
-
-const SAFETY_ITEMS = [
+export const SAFETY_ACK_ITEMS = [
   'I accept full responsibility for safe use and understand my actions will deliver real electronic shocks to other users',
   'I understand device owners can block me and developers cannot override these blocks or restore my access',
   'I understand this controls real electronic shock devices physically attached to other users',
   'I understand developers bear no liability for any harm, injury, or adverse effects from using this application',
   'I confirm voluntary participation with full knowledge of risks',
-];
+] as const;
+
+export const SAFETY_ACK_VERSION = 1;
+
+type Props = {
+  onAccept: (payload: {
+    acknowledged: true;
+    items: string[];
+    version: number;
+  }) => void;
+  busy?: boolean;
+  onOpenTerms?: () => void;
+  onOpenPrivacy?: () => void;
+};
 
 export function SafetyWarning({ onAccept, busy, onOpenTerms, onOpenPrivacy }: Props) {
-  const [acknowledged, setAcknowledged] = useState<boolean[]>(() => SAFETY_ITEMS.map(() => false));
+  const [acknowledged, setAcknowledged] = useState<boolean[]>(() => SAFETY_ACK_ITEMS.map(() => false));
   const allAcknowledged = acknowledged.every(Boolean);
 
   const toggle = (index: number) => {
@@ -38,7 +44,7 @@ export function SafetyWarning({ onAccept, busy, onOpenTerms, onOpenPrivacy }: Pr
         </div>
 
         <div className="safety-gate-list">
-          {SAFETY_ITEMS.map((item, index) => (
+          {SAFETY_ACK_ITEMS.map((item, index) => (
             <label key={item} className="safety-gate-item">
               <input
                 type="checkbox"
@@ -73,7 +79,13 @@ export function SafetyWarning({ onAccept, busy, onOpenTerms, onOpenPrivacy }: Pr
           type="button"
           className="btn accent safety-gate-accept"
           disabled={!allAcknowledged || busy}
-          onClick={onAccept}
+          onClick={() =>
+            onAccept({
+              acknowledged: true,
+              items: [...SAFETY_ACK_ITEMS],
+              version: SAFETY_ACK_VERSION,
+            })
+          }
         >
           I Acknowledge and Accept All Terms
         </button>

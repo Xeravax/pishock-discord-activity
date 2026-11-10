@@ -54,6 +54,29 @@ export async function setConsent(discordUserId: string) {
   });
 }
 
+export async function clearConsent(discordUserId: string) {
+  await prisma.discordUser.update({
+    where: { id: discordUserId },
+    data: { consentAt: null },
+  });
+}
+
+export async function findActivityShareByCode(shareCode: string) {
+  const code = shareCode.trim();
+  if (!code) return null;
+  return prisma.activityShare.findFirst({
+    where: { shareCode: code },
+  });
+}
+
+export async function findActivityShareByShocker(discordUserId: string, shockerId: number) {
+  return prisma.activityShare.findUnique({
+    where: {
+      discordUserId_shockerId: { discordUserId, shockerId },
+    },
+  });
+}
+
 export async function logCommand(input: {
   discordUserId: string;
   executorDiscordUserId?: string;
@@ -230,7 +253,7 @@ export async function isExecutorBanned(ownerDiscordUserId: string, executorDisco
 }
 
 export async function listCommandLogs(discordUserId: string, limit = 50) {
-  return prisma.commandLog.findMany({
+  const rows = await prisma.commandLog.findMany({
     where: {
       OR: [
         { discordUserId },
@@ -240,5 +263,129 @@ export async function listCommandLogs(discordUserId: string, limit = 50) {
     },
     orderBy: { createdAt: 'desc' },
     take: limit,
+  });
+
+  // Share codes are a capability — only the device owner's own log rows may see them.
+  return rows.map((row) => {
+    const deviceOwnerId = row.targetDiscordUserId ?? row.discordUserId;
+    const canSeeShareCode =
+      Boolean(row.shareCode) &&
+      deviceOwnerId === discordUserId &&
+      row.discordUserId === discordUserId;
+    return {
+      ...row,
+      shareCode: canSeeShareCode ? row.shareCode : null,
+      hasShareCode: Boolean(row.shareCode),
+    };
+  });
+}
+
+const PUBLIC_LOG_NOISE = new Set([
+  'end',
+  'stop',
+  'participant_end',
+  'emergency_stop_on',
+  'emergency_stop_off',
+  'pause_share',
+  'pause_link',
+]);
+
+function isPublicLogAction(action: string): boolean {
+  const a = action.toLowerCase();
+  if (PUBLIC_LOG_NOISE.has(a)) return false;
+  if (a.endsWith('_end')) return false;
+  return true;
+}
+
+function discordAvatarUrl(id: string, avatar: string | null | undefined): string {
+  if (avatar) {
+    return `https://cdn.discordapp.com/avatars/${id}/${avatar}.png?size=64`;
+  }
+  let hash = 0;
+  for (let i = 0; i < id.length; i++) hash = (hash * 31 + id.charCodeAt(i)) | 0;
+  return `https://cdn.discordapp.com/embed/avatars/${Math.abs(hash) % 6}.png`;
+}
+
+function publicLogPerson(user: {
+  id: string;
+  username: string | null;
+  globalName: string | null;
+  avatar: string | null;
+} | undefined, fallbackId: string) {
+  const id = user?.id ?? fallbackId;
+  return {
+    id,
+    username: user?.username ?? null,
+    globalName: user?.globalName ?? null,
+    displayName: user?.globalName || user?.username || 'Unknown',
+    avatar: user?.avatar ?? null,
+    avatarUrl: discordAvatarUrl(id, user?.avatar),
+  };
+}
+
+/**
+ * Global recent feed: who shocked/vibed/beeped whom, across all instances.
+ * Dedupes dual participant writes by keeping the target's copy only.
+ * Never returns share codes.
+ */
+export async function listPublicCommandLogs(limit = 200) {
+  const take = Math.max(1, Math.min(250, limit));
+  const rows = await prisma.commandLog.findMany({
+    where: {
+      success: true,
+      executorDiscordUserId: { not: null },
+      targetDiscordUserId: { not: null },
+    },
+    orderBy: { createdAt: 'desc' },
+    take: take * 3,
+    select: {
+      id: true,
+      discordUserId: true,
+      executorDiscordUserId: true,
+      targetDiscordUserId: true,
+      action: true,
+      shockerId: true,
+      intensity: true,
+      durationMs: true,
+      success: true,
+      createdAt: true,
+    },
+  });
+
+  const deduped = rows.filter(
+    (row) =>
+      row.executorDiscordUserId &&
+      row.targetDiscordUserId &&
+      row.discordUserId === row.targetDiscordUserId &&
+      isPublicLogAction(row.action),
+  ).slice(0, take);
+
+  const userIds = [
+    ...new Set(
+      deduped.flatMap((row) => [row.executorDiscordUserId!, row.targetDiscordUserId!]),
+    ),
+  ];
+  const users = userIds.length
+    ? await prisma.discordUser.findMany({
+        where: { id: { in: userIds } },
+        select: { id: true, username: true, globalName: true, avatar: true },
+      })
+    : [];
+  const byId = new Map(users.map((u) => [u.id, u]));
+
+  return deduped.map((row) => {
+    const executorId = row.executorDiscordUserId!;
+    const targetId = row.targetDiscordUserId!;
+    return {
+      id: row.id,
+      action: row.action,
+      shockerId: row.shockerId,
+      intensity: row.intensity,
+      durationMs: row.durationMs,
+      success: row.success,
+      createdAt: row.createdAt,
+      executor: publicLogPerson(byId.get(executorId), executorId),
+      target: publicLogPerson(byId.get(targetId), targetId),
+    };
   });
 }

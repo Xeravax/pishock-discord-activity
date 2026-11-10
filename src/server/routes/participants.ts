@@ -2,7 +2,11 @@ import type { FastifyPluginAsync } from 'fastify';
 import { ShockerOp } from '../../shared/constants.js';
 import type { AppEnv } from '../env.js';
 import { InstanceAuthError, verifyActivityInstance } from '../discord-instance.js';
-import { ProxyAuthError, validateDiscordProxyHeaders } from '../discord-proxy-auth.js';
+import {
+  ProxyAuthError,
+  assertProxyPayloadMatchesUser,
+  validateDiscordProxyHeaders,
+} from '../discord-proxy-auth.js';
 import {
   agentNameForExecutor,
   operateById,
@@ -10,6 +14,15 @@ import {
   PiShockApiError,
 } from '../pishock/client.js';
 import { publishOperate } from '../pishock/broker.js';
+import {
+  assertModeAllowed,
+  assertOperateRateLimit,
+  clearHoldAutoEnd,
+  clampDurationMs,
+  clampIntensity,
+  OperatePolicyError,
+  scheduleHoldAutoEnd,
+} from '../operate-policy.js';
 import {
   getConsent,
   getEmergencyStopShockerIds,
@@ -41,21 +54,24 @@ async function auditParticipantCommand(input: {
   success: boolean;
   detail: string;
 }) {
-  const payload = {
+  const base = {
     executorDiscordUserId: input.executorDiscordUserId,
     targetDiscordUserId: input.targetDiscordUserId,
     action: input.action,
     shockerId: input.shockerId,
-    shareCode: input.shareCode ?? undefined,
     intensity: input.intensity,
     durationMs: input.durationMs,
     success: input.success,
     detail: input.detail,
   };
-  // One row for the executor, one for the target — both appear in /api/logs.
+  // Executor log never receives the share code; owner/target row may store it server-side.
   await Promise.all([
-    logCommand({ discordUserId: input.executorDiscordUserId, ...payload }),
-    logCommand({ discordUserId: input.targetDiscordUserId, ...payload }),
+    logCommand({ discordUserId: input.executorDiscordUserId, ...base }),
+    logCommand({
+      discordUserId: input.targetDiscordUserId,
+      ...base,
+      shareCode: input.shareCode ?? undefined,
+    }),
   ]);
 
   const action = input.action.toLowerCase();
@@ -90,7 +106,8 @@ export const participantRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app
     const path = (req.url.split('?')[0] ?? req.url);
     if (!path.startsWith('/api/participants')) return;
     try {
-      validateDiscordProxyHeaders(opts.env, req);
+      const payload = validateDiscordProxyHeaders(opts.env, req);
+      assertProxyPayloadMatchesUser(payload, req.discordUser.id);
     } catch (err) {
       if (err instanceof ProxyAuthError) {
         return reply.code(err.status).send({ error: err.message, code: 'PROXY_AUTH' });
@@ -109,7 +126,7 @@ export const participantRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app
     try {
       await verifyActivityInstance(opts.env, instanceId, {
         requireUserId: req.discordUser.id,
-        allowMissingBot: process.env.NODE_ENV !== 'production' && !opts.env.discordBotToken,
+        allowMissingBot: true,
       });
     } catch (err) {
       if (err instanceof InstanceAuthError) {
@@ -134,7 +151,6 @@ export const participantRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app
       );
       const operable = active.filter((s: { shockerId: number }) => !eStops.has(s.shockerId));
       const allEStopped = active.length > 0 && operable.length === 0;
-      // Banned executors cannot view or use the owner's shockers
       const visibleShockers = bannedYou
         ? []
         : active.map(
@@ -193,7 +209,15 @@ export const participantRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app
     if (!req.hasConsent) {
       return reply.code(403).send({ error: 'Consent required', code: 'CONSENT_REQUIRED' });
     }
-    // Executor does not need a PiShock account — commands run with the target's stored session.
+
+    try {
+      assertOperateRateLimit(req.discordUser.id);
+    } catch (err) {
+      if (err instanceof OperatePolicyError) {
+        return reply.code(err.status).send({ error: err.message, code: err.code });
+      }
+      throw err;
+    }
 
     const targetDiscordUserId = String(
       (req.params as { targetDiscordUserId: string }).targetDiscordUserId,
@@ -213,7 +237,8 @@ export const participantRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app
     try {
       await verifyActivityInstance(opts.env, instanceId, {
         requireUserId: req.discordUser.id,
-        allowMissingBot: process.env.NODE_ENV !== 'production' && !opts.env.discordBotToken,
+        requireUserIds: [targetDiscordUserId],
+        allowMissingBot: true,
       });
     } catch (err) {
       if (err instanceof InstanceAuthError) {
@@ -262,16 +287,18 @@ export const participantRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app
         .send({ error: 'Emergency stop is only available to the device owner' });
     }
 
-    // Release a press-and-hold (Tap/Remote) without owner emergency-stop latch
+    // Only the stored hub — never body.clientId
+    const clientId = share.hubClientId ?? undefined;
+    const shareCode = share.shareCode ? String(share.shareCode) : null;
+    const agent = agentNameForExecutor(executorLabel(req.discordUser));
+    const executorCreds = req.pishockCreds;
+    const useSharePath = Boolean(shareCode && executorCreds);
+
     if (operation === 'end') {
-      const clientId = body.clientId ?? share.hubClientId ?? undefined;
       if (clientId == null) {
-        return reply.code(400).send({ error: 'end requires clientId' });
+        return reply.code(400).send({ error: 'end requires a stored hub client id on the share' });
       }
-      const shareCode = share.shareCode ? String(share.shareCode) : null;
-      const executorCreds = req.pishockCreds;
-      const useSharePath = Boolean(shareCode && executorCreds);
-      const agent = agentNameForExecutor(executorLabel(req.discordUser));
+      clearHoldAutoEnd(targetDiscordUserId, shockerId);
       const published = await publishOperate(useSharePath ? executorCreds! : targetCreds, {
         clientId,
         shockerId,
@@ -314,25 +341,33 @@ export const participantRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app
       });
     }
 
-    let intensity = Math.max(0, Math.min(100, Number(body.intensity ?? 1)));
-    let durationMs = Math.max(16, Math.min(15_000, Number(body.durationMs ?? 300)));
-    intensity = Math.min(intensity, share.maxIntensity);
-    durationMs = Math.min(durationMs, share.maxDurationMs);
     const hold = Boolean(body.hold) || operation === 'hold';
     const warning = Boolean(body.warning) || operation === 'warning';
+    try {
+      assertModeAllowed(operation, hold, {
+        canShock: share.canShock,
+        canVibrate: share.canVibrate,
+        canBeep: share.canBeep,
+        canHold: share.canHold,
+      });
+    } catch (err) {
+      if (err instanceof OperatePolicyError) {
+        return reply.code(err.status).send({ error: err.message, code: err.code });
+      }
+      throw err;
+    }
 
-    if ((operation === 'shock' || operation === 'hold') && !share.canShock) {
-      return reply.code(405).send({ error: 'Shock not allowed' });
+    const maxIntensity = Math.min(share.maxIntensity, share.deviceMaxIntensity);
+    const maxDurationMs = Math.min(share.maxDurationMs, share.deviceMaxDurationMs);
+    if (Number(body.intensity ?? 1) > maxIntensity) {
+      return reply.code(412).send({ error: 'Intensity exceeds allowed maximum' });
     }
-    if ((operation === 'vibrate' || operation === 'warning') && !share.canVibrate) {
-      return reply.code(405).send({ error: 'Vibrate not allowed' });
+    if (Number(body.durationMs ?? 300) > maxDurationMs) {
+      return reply.code(416).send({ error: 'Duration exceeds allowed maximum' });
     }
-    if (operation === 'beep' && !share.canBeep) {
-      return reply.code(405).send({ error: 'Beep not allowed' });
-    }
-    if (hold && !share.canHold) {
-      return reply.code(405).send({ error: 'Hold not allowed' });
-    }
+
+    const intensity = clampIntensity(body.intensity, maxIntensity);
+    const durationMs = clampDurationMs(body.durationMs, maxDurationMs);
 
     const op =
       operation === 'shock' || operation === 'hold'
@@ -340,13 +375,6 @@ export const participantRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app
         : operation === 'vibrate' || operation === 'warning'
           ? ShockerOp.Vibrate
           : ShockerOp.Beep;
-
-    const clientId = body.clientId ?? share.hubClientId ?? undefined;
-    const shareCode = share.shareCode ? String(share.shareCode) : null;
-    const agent = agentNameForExecutor(executorLabel(req.discordUser));
-    const executorCreds = req.pishockCreds;
-    /** Prefer OperateByShare with executor session when both share code + executor login exist */
-    const useSharePath = Boolean(shareCode && executorCreds);
 
     try {
       if ((hold || warning) && clientId != null) {
@@ -363,6 +391,16 @@ export const participantRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app
           agentName: agent,
         });
         if (published) {
+          if (hold) {
+            scheduleHoldAutoEnd(useSharePath ? executorCreds! : targetCreds, {
+              ownerDiscordUserId: targetDiscordUserId,
+              shockerId,
+              clientId,
+              durationMs,
+              shareCode: useSharePath ? shareCode : null,
+              agentName: agent,
+            });
+          }
           await auditParticipantCommand({
             executorDiscordUserId: req.discordUser.id,
             executorUsername: req.discordUser.username,

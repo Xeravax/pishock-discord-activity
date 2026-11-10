@@ -16,12 +16,10 @@ import { LoginPanel } from './components/LoginPanel';
 import { OfficialController } from './components/OfficialController';
 import type { ShockerView } from './components/ShockerCard';
 import { SharesPanel } from './components/SharesPanel';
-import { CommandLog } from './components/CommandLog';
 import {
   OfficialLogsFab,
   OfficialLogsPanel,
-  normalizeActivityLogs,
-  normalizeDeviceLogs,
+  normalizePublicLogs,
   type OfficialLogEntry,
 } from './components/OfficialLogsPanel';
 import { PipIncomingShock, type IncomingShockHit } from './components/PipIncomingShock';
@@ -91,7 +89,7 @@ export function App() {
   const [devices, setDevices] = useState<DevicesResponse | null>(null);
   const [online, setOnline] = useState<Record<string, boolean>>({});
   const [logs, setLogs] = useState<Array<Record<string, unknown>>>([]);
-  const [deviceLogsRaw, setDeviceLogsRaw] = useState<unknown>(null);
+  const [publicLogs, setPublicLogs] = useState<OfficialLogEntry[]>([]);
   const [logsOpen, setLogsOpen] = useState(false);
   const [overlay, setOverlay] = useState<Overlay>(null);
   const [settingsFocusShockerId, setSettingsFocusShockerId] = useState<number | null>(null);
@@ -148,11 +146,31 @@ export function App() {
 
   const refreshLogs = useCallback(async (accessToken: string) => {
     const data = await apiFetch<{
-      activity: Array<Record<string, unknown>>;
-      deviceLogs?: unknown;
-    }>('/logs', accessToken);
-    setLogs(data.activity ?? []);
-    if (data.deviceLogs != null) setDeviceLogsRaw(data.deviceLogs);
+      public?: Array<Record<string, unknown>>;
+      activity?: Array<Record<string, unknown>>;
+    }>('/logs?limit=200', accessToken);
+    const feed = normalizePublicLogs(
+      (data.public ?? []) as Parameters<typeof normalizePublicLogs>[0],
+      participantAvatarUrl,
+    );
+    setPublicLogs(feed);
+    // Personal rows still hydrate PIP when the public feed is empty/old
+    setLogs(
+      (data.public ?? data.activity ?? []).map((row) => {
+        const executor = row.executor as Record<string, unknown> | undefined;
+        const target = row.target as Record<string, unknown> | undefined;
+        if (executor || target) {
+          return {
+            ...row,
+            executorDiscordUserId: executor?.id ?? row.executorDiscordUserId,
+            targetDiscordUserId: target?.id ?? row.targetDiscordUserId,
+            executorAvatar: executor?.avatar ?? null,
+            executorDisplayName: executor?.displayName ?? executor?.globalName ?? executor?.username,
+          };
+        }
+        return row;
+      }),
+    );
   }, []);
 
   const refreshParticipantStatus = useCallback(
@@ -615,23 +633,30 @@ export function App() {
     if (!executorId) return;
     const fromRoster = participants.find((p) => p.id === executorId);
     const status = participantStatus[executorId];
+    const fromPublic = publicLogs.find((e) => e.id === String(row.id));
     setLastIncoming({
       executorDiscordUserId: executorId,
       displayName:
+        fromPublic?.from.displayName ||
+        (row.executorDisplayName as string | undefined) ||
         fromRoster?.displayName ||
         status?.globalName ||
         status?.username ||
         'Someone',
       avatarUrl:
+        fromPublic?.from.avatarUrl ||
         fromRoster?.avatarUrl ||
-        participantAvatarUrl(executorId, status?.avatar ?? null),
+        participantAvatarUrl(
+          executorId,
+          (row.executorAvatar as string | null | undefined) ?? status?.avatar ?? null,
+        ),
       action: String(row.action),
       intensity: (row.intensity as number | null | undefined) ?? null,
       durationMs: (row.durationMs as number | null | undefined) ?? null,
       at: at || Date.now(),
       success: Boolean(row.success),
     });
-  }, [logs, me?.user?.id, lastIncoming, participants, participantStatus]);
+  }, [logs, publicLogs, me?.user?.id, lastIncoming, participants, participantStatus]);
 
   // While PIP is open, refresh logs so hits still show if WS was missed
   useEffect(() => {
@@ -673,12 +698,31 @@ export function App() {
     }
   }, [me?.pishockLinked, me]);
 
-  const acceptConsent = async () => {
+  const acceptConsent = async (payload: {
+    acknowledged: true;
+    items: string[];
+    version: number;
+  }) => {
     if (!token) return;
     setBusy(true);
     setActionError(null);
     try {
-      await apiFetch('/consent', token, { method: 'POST', body: '{}' });
+      await apiFetch('/consent', token, { method: 'POST', body: JSON.stringify(payload) });
+      await refreshMe(token);
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const revokeConsent = async () => {
+    if (!token) return;
+    setBusy(true);
+    setActionError(null);
+    try {
+      await apiFetch('/consent', token, { method: 'DELETE' });
+      setOverlay(null);
       await refreshMe(token);
     } catch (err) {
       setActionError(err instanceof Error ? err.message : String(err));
@@ -1117,34 +1161,9 @@ export function App() {
   }
 
   if (me.consent) {
-    const logRows = logs.map((row) => ({
-      id: String(row.id),
-      action: String(row.action),
-      shockerId: row.shockerId as number | null | undefined,
-      intensity: row.intensity as number | null | undefined,
-      durationMs: row.durationMs as number | null | undefined,
-      success: Boolean(row.success),
-      detail: (row.detail as string | null | undefined) ?? null,
-      createdAt: String(row.createdAt),
-      executorDiscordUserId: (row.executorDiscordUserId as string | null | undefined) ?? null,
-      targetDiscordUserId: (row.targetDiscordUserId as string | null | undefined) ?? null,
-    }));
-
     const ownedShockers = ownedAndShared.filter((s) => s.owned);
 
-    const nameByDiscordId: Record<string, string> = {};
-    for (const p of participants) {
-      nameByDiscordId[p.id] = p.displayName;
-    }
-    if (me.user?.id) {
-      nameByDiscordId[me.user.id] = me.user.global_name || me.user.username || me.user.id;
-    }
-    const deviceEntries = normalizeDeviceLogs(deviceLogsRaw);
-    const activityEntries = normalizeActivityLogs(logs, nameByDiscordId);
-    // Prefer official website/device logs when present; otherwise show activity audit
-    const officialLogEntries: OfficialLogEntry[] = deviceEntries.length
-      ? deviceEntries
-      : activityEntries;
+    const officialLogEntries = publicLogs;
 
     const openOfficialLogs = () => {
       setLogsOpen(true);
@@ -1576,6 +1595,7 @@ export function App() {
             busy={busy}
             focusShockerId={settingsFocusShockerId}
             onLoad={loadSettings}
+            onRevokeConsent={revokeConsent}
             onSave={async (payload) => {
               await saveSettings(payload);
               setOverlay(null);
@@ -1673,15 +1693,14 @@ export function App() {
           />
         </PsDialog>
 
-        <PsDialog open={overlay === 'logs'} title="Command log" onClose={() => setOverlay(null)} wide>
-          <CommandLog rows={logRows} />
-        </PsDialog>
-
         <OfficialLogsFab count={officialLogEntries.length} onClick={openOfficialLogs} />
         <OfficialLogsPanel
-          open={logsOpen}
+          open={logsOpen || overlay === 'logs'}
           entries={officialLogEntries}
-          onClose={() => setLogsOpen(false)}
+          onClose={() => {
+            setLogsOpen(false);
+            if (overlay === 'logs') setOverlay(null);
+          }}
         />
       </div>
     );

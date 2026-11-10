@@ -514,9 +514,47 @@ html.pip-mode #root > * {
 .official-log-row__top {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   gap: 8px;
-  margin-bottom: 6px;
+  margin-bottom: 8px;
+  min-width: 0;
+}
+
+.official-log-person {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  max-width: calc(50% - 12px);
+  padding: 3px 10px 3px 3px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.2;
+}
+
+.official-log-person--from {
+  background: #79c6db;
+  color: #121212;
+}
+
+.official-log-person--to {
+  background: #e8e8e8;
+  color: #121212;
+}
+
+.official-log-avatar {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  object-fit: cover;
+  flex-shrink: 0;
+  background: rgba(0, 0, 0, 0.15);
+}
+
+.official-log-arrow {
+  flex-shrink: 0;
+  font-size: 16px;
+  color: rgba(255, 255, 255, 0.45);
 }
 
 .official-log-row__bottom {

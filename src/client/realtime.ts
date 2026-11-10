@@ -40,18 +40,19 @@ export type RealtimeEvent =
       at: number;
     }
   | {
+      type: 'auth_required';
+      at: number;
+    }
+  | {
       type: 'ping';
       at: number;
     };
 
-function wsUrl(accessToken: string): string {
+function wsUrl(): string {
   const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-  // apiBase() is "/.proxy/api" or "/api" — strip trailing path to build WS path
   const api = apiBase(); // e.g. /.proxy/api
   const path = `${api}/ws`;
-  const url = new URL(`${proto}//${window.location.host}${path}`);
-  url.searchParams.set('access_token', accessToken);
-  return url.toString();
+  return `${proto}//${window.location.host}${path}`;
 }
 
 export type RealtimeHandle = {
@@ -60,7 +61,7 @@ export type RealtimeHandle = {
 
 /**
  * Live activity panel channel through Discord's proxy (WebSocket-supported).
- * Reconnects with backoff while the token is valid.
+ * Authenticates with a first-message token so the Discord access token stays out of the URL.
  */
 export function connectRealtime(
   accessToken: string,
@@ -71,6 +72,7 @@ export function connectRealtime(
   let reconnectTimer: number | null = null;
   let attempt = 0;
   let pingTimer: number | null = null;
+  let authed = false;
 
   const clearTimers = () => {
     if (reconnectTimer != null) {
@@ -90,35 +92,53 @@ export function connectRealtime(
     reconnectTimer = window.setTimeout(open, delay);
   };
 
+  const sendAuthAndJoin = () => {
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    ws.send(JSON.stringify({ type: 'auth', access_token: accessToken }));
+  };
+
+  const afterAuth = () => {
+    authed = true;
+    attempt = 0;
+    const instanceId = getActivityInstanceId();
+    if (instanceId) {
+      ws?.send(JSON.stringify({ type: 'join', instanceId }));
+    }
+    pingTimer = window.setInterval(() => {
+      if (ws?.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'ping' }));
+      }
+    }, 20_000);
+  };
+
   const open = () => {
     if (closed) return;
     clearTimers();
+    authed = false;
     try {
-      ws = new WebSocket(wsUrl(accessToken));
+      ws = new WebSocket(wsUrl());
     } catch {
       scheduleReconnect();
       return;
     }
 
     ws.onopen = () => {
-      attempt = 0;
-      const instanceId = getActivityInstanceId();
-      if (instanceId) {
-        ws?.send(JSON.stringify({ type: 'join', instanceId }));
-      }
-      pingTimer = window.setInterval(() => {
-        if (ws?.readyState === WebSocket.OPEN) {
-          ws.send(JSON.stringify({ type: 'ping' }));
-        }
-      }, 20_000);
+      // Send auth immediately; server may also emit auth_required
+      sendAuthAndJoin();
     };
 
     ws.onmessage = (ev) => {
       try {
         const data = JSON.parse(String(ev.data)) as RealtimeEvent;
-        if (data && typeof data === 'object' && 'type' in data) {
-          onEvent(data);
+        if (!data || typeof data !== 'object' || !('type' in data)) return;
+        if (data.type === 'auth_required') {
+          sendAuthAndJoin();
+          return;
         }
+        if (data.type === 'hello_ok' && !authed) {
+          afterAuth();
+        }
+        onEvent(data);
       } catch {
         // ignore malformed
       }
@@ -131,7 +151,6 @@ export function connectRealtime(
     };
 
     ws.onerror = () => {
-      // close handler reconnects
       try {
         ws?.close();
       } catch {

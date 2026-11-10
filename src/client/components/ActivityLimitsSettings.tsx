@@ -36,6 +36,7 @@ type Props = {
     personal: PersonalLimits;
     shares: ShareLimitRow[];
   }) => Promise<void>;
+  onRevokeConsent?: () => Promise<void> | void;
 };
 
 const fieldStyle: CSSProperties = {
@@ -53,6 +54,7 @@ export function ActivityLimitsSettings({
   focusShockerId = null,
   onLoad,
   onSave,
+  onRevokeConsent,
 }: Props) {
   const [personal, setPersonal] = useState<PersonalLimits>({
     activityMaxIntensity: 100,
@@ -296,7 +298,31 @@ export function ActivityLimitsSettings({
         )}
       </div>
 
-      <div className="row justify-end">
+      <div className="row justify-between items-center q-gutter-sm">
+        {onRevokeConsent ? (
+          <button
+            type="button"
+            className="q-btn q-btn-item non-selectable no-outline text-negative q-btn--flat q-btn--rectangle q-btn--actionable"
+            disabled={busy || saving}
+            onClick={() => {
+              if (
+                window.confirm(
+                  'Revoke safety consent? You will need to re-acknowledge the safety warning before sending or receiving commands.',
+                )
+              ) {
+                void onRevokeConsent();
+              }
+            }}
+          >
+            <span className="q-btn__wrapper col row q-anchor--skip">
+              <span className="q-btn__content text-center col items-center q-anchor--skip justify-center row">
+                <span className="block">Revoke consent</span>
+              </span>
+            </span>
+          </button>
+        ) : (
+          <span />
+        )}
         <button
           type="button"
           className="q-btn q-btn-item non-selectable no-outline bg-secondary text-dark q-btn--standard q-btn--rectangle q-btn--actionable"

@@ -42,6 +42,10 @@ export type RealtimeEvent =
       at: number;
     }
   | {
+      type: 'auth_required';
+      at: number;
+    }
+  | {
       type: 'ping';
       at: number;
     };
@@ -53,6 +57,7 @@ type RealtimeClient = {
 };
 
 const clients = new Set<RealtimeClient>();
+const AUTH_TIMEOUT_MS = 5_000;
 
 function pathOnly(url: string | undefined): string {
   if (!url) return '';
@@ -67,7 +72,12 @@ function isRealtimePath(pathname: string): boolean {
   );
 }
 
+/** Prefer Authorization header; query-string tokens are legacy fallback only. */
 function extractToken(req: IncomingMessage): string | null {
+  const header = req.headers.authorization;
+  if (header?.startsWith('Bearer ')) {
+    return header.slice('Bearer '.length).trim() || null;
+  }
   try {
     const host = req.headers.host ?? 'localhost';
     const url = new URL(req.url ?? '/', `http://${host}`);
@@ -75,10 +85,6 @@ function extractToken(req: IncomingMessage): string | null {
     if (fromQuery) return fromQuery;
   } catch {
     // ignore
-  }
-  const header = req.headers.authorization;
-  if (header?.startsWith('Bearer ')) {
-    return header.slice('Bearer '.length).trim() || null;
   }
   return null;
 }
@@ -95,8 +101,6 @@ export function broadcastRealtime(event: RealtimeEvent, filter?: {
   for (const client of clients) {
     if (filter?.discordUserId && client.discordUserId !== filter.discordUserId) continue;
     if (filter?.instanceId && client.instanceId && client.instanceId !== filter.instanceId) {
-      // Still deliver instance-scoped events to clients that haven't joined an instance yet
-      // only when they match user filter; otherwise require same instance when both set.
       if (!filter.discordUserId) continue;
     }
     send(client.ws, event);
@@ -113,6 +117,41 @@ export function broadcastRealtimeAll(event: RealtimeEvent) {
   }
 }
 
+function attachAuthenticatedClient(ws: WebSocket, discordUserId: string) {
+  const client: RealtimeClient = {
+    ws,
+    discordUserId,
+    instanceId: null,
+  };
+  clients.add(client);
+  send(ws, { type: 'hello_ok', discordUserId, at: Date.now() });
+
+  ws.on('message', (raw) => {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(String(raw));
+    } catch {
+      return;
+    }
+    if (!parsed || typeof parsed !== 'object') return;
+    const msg = parsed as { type?: string; instanceId?: string };
+    if (msg.type === 'join' && typeof msg.instanceId === 'string' && msg.instanceId) {
+      client.instanceId = msg.instanceId;
+      send(ws, { type: 'hello_ok', discordUserId, at: Date.now() });
+    }
+    if (msg.type === 'ping') {
+      send(ws, { type: 'ping', at: Date.now() });
+    }
+  });
+
+  ws.on('close', () => {
+    clients.delete(client);
+  });
+  ws.on('error', () => {
+    clients.delete(client);
+  });
+}
+
 export function attachRealtime(server: HttpServer) {
   const wss = new WebSocketServer({ noServer: true });
 
@@ -124,33 +163,43 @@ export function attachRealtime(server: HttpServer) {
 
     void (async () => {
       const token = extractToken(req);
-      if (!token) {
-        socket.write('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n');
-        socket.destroy();
+
+      if (token) {
+        let discordUserId: string;
+        try {
+          const user = await resolveBearerUser(token);
+          discordUserId = user.id;
+        } catch (err) {
+          const status = err instanceof DiscordAuthError ? err.status : 401;
+          socket.write(`HTTP/1.1 ${status} Unauthorized\r\nConnection: close\r\n\r\n`);
+          socket.destroy();
+          return;
+        }
+
+        wss.handleUpgrade(req, socket, head, (ws) => {
+          attachAuthenticatedClient(ws, discordUserId);
+        });
         return;
       }
 
-      let discordUserId: string;
-      try {
-        const user = await resolveBearerUser(token);
-        discordUserId = user.id;
-      } catch (err) {
-        const status = err instanceof DiscordAuthError ? err.status : 401;
-        socket.write(`HTTP/1.1 ${status} Unauthorized\r\nConnection: close\r\n\r\n`);
-        socket.destroy();
-        return;
-      }
-
+      // No query/header token — accept and require a first-message auth frame
       wss.handleUpgrade(req, socket, head, (ws) => {
-        const client: RealtimeClient = {
-          ws,
-          discordUserId,
-          instanceId: null,
-        };
-        clients.add(client);
-        send(ws, { type: 'hello_ok', discordUserId, at: Date.now() });
+        let authed = false;
+        const timeout = setTimeout(() => {
+          if (!authed) {
+            try {
+              ws.close(4401, 'auth timeout');
+            } catch {
+              // ignore
+            }
+          }
+        }, AUTH_TIMEOUT_MS);
+        timeout.unref?.();
+
+        send(ws, { type: 'auth_required', at: Date.now() });
 
         ws.on('message', (raw) => {
+          if (authed) return;
           let parsed: unknown;
           try {
             parsed = JSON.parse(String(raw));
@@ -158,21 +207,33 @@ export function attachRealtime(server: HttpServer) {
             return;
           }
           if (!parsed || typeof parsed !== 'object') return;
-          const msg = parsed as { type?: string; instanceId?: string };
-          if (msg.type === 'join' && typeof msg.instanceId === 'string' && msg.instanceId) {
-            client.instanceId = msg.instanceId;
-            send(ws, { type: 'hello_ok', discordUserId, at: Date.now() });
+          const msg = parsed as { type?: string; access_token?: string; token?: string };
+          if (msg.type !== 'auth') return;
+          const accessToken = String(msg.access_token ?? msg.token ?? '').trim();
+          if (!accessToken) {
+            ws.close(4401, 'missing token');
+            return;
           }
-          if (msg.type === 'ping') {
-            send(ws, { type: 'ping', at: Date.now() });
-          }
+          void resolveBearerUser(accessToken)
+            .then((user) => {
+              if (authed) return;
+              authed = true;
+              clearTimeout(timeout);
+              // Replace listeners by attaching the authenticated client handlers
+              ws.removeAllListeners('message');
+              attachAuthenticatedClient(ws, user.id);
+            })
+            .catch(() => {
+              try {
+                ws.close(4401, 'unauthorized');
+              } catch {
+                // ignore
+              }
+            });
         });
 
         ws.on('close', () => {
-          clients.delete(client);
-        });
-        ws.on('error', () => {
-          clients.delete(client);
+          clearTimeout(timeout);
         });
       });
     })();

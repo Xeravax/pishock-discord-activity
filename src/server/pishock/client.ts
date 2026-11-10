@@ -227,7 +227,14 @@ async function softList(
   return [];
 }
 
-export async function fetchControlSnapshot(creds: PiShockCreds) {
+export type ControlSnapshot = {
+  hubs: unknown[];
+  shockers: unknown[];
+  shared: unknown[];
+  links: unknown[];
+};
+
+export async function fetchControlSnapshot(creds: PiShockCreds): Promise<ControlSnapshot> {
   const [hubs, shockers, shared, links] = await Promise.all([
     softList('Hub', () => getHubs(creds)),
     softList('Shockers', () => getShockers(creds)),

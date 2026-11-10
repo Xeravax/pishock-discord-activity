@@ -2,6 +2,12 @@ import type { FastifyPluginAsync } from 'fastify';
 import { DiscordAuthError, exchangeDiscordCode } from '../discord.js';
 import type { AppEnv } from '../env.js';
 import {
+  SAFETY_ACK_ITEMS,
+  SAFETY_ACK_VERSION,
+  validateConsentAcknowledgements,
+} from '../consent.js';
+import {
+  clearConsent,
   getEmergencyStopShockerIds,
   getPersonalActivityLimits,
   setConsent,
@@ -47,6 +53,8 @@ export const authRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app, opts)
         avatar: req.discordUser.avatar,
       },
       consent: req.hasConsent,
+      consentVersion: SAFETY_ACK_VERSION,
+      safetyItems: SAFETY_ACK_ITEMS,
       pishockLinked: Boolean(req.pishockCreds),
       pishockUserId: req.pishockCreds?.userId ?? null,
       personal,
@@ -54,8 +62,17 @@ export const authRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app, opts)
     };
   });
 
-  app.post('/api/consent', async (req) => {
+  app.post('/api/consent', async (req, reply) => {
+    const check = validateConsentAcknowledgements(req.body);
+    if (!check.ok) {
+      return reply.code(400).send({ error: check.error, code: 'CONSENT_INVALID' });
+    }
     await setConsent(req.discordUser.id);
-    return { ok: true, consent: true };
+    return { ok: true, consent: true, version: SAFETY_ACK_VERSION };
+  });
+
+  app.delete('/api/consent', async (req) => {
+    await clearConsent(req.discordUser.id);
+    return { ok: true, consent: false };
   });
 };
