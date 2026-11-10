@@ -31,7 +31,7 @@ const authPluginImpl: FastifyPluginAsync<{ env: AppEnv }> = async (app, opts) =>
   app.addHook('preHandler', async (req, reply) => {
     const path = apiPath(req);
     if (!path.startsWith('/api/')) return;
-    if (path === '/api/health') return;
+    if (path === '/api/health' || path === '/api/version') return;
     // Public marketing banner from PiShock dashboard
     if (path === '/api/announcements' && req.method === 'GET') return;
     // WebSocket upgrade authenticates via query token in realtime.ts

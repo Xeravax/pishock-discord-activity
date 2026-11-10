@@ -68,6 +68,9 @@ jobs:
           # Optional repo Variable: Settings → Secrets and variables → Actions → Variables → DISCORD_CLIENT_ID
           build-args: |
             VITE_DISCORD_CLIENT_ID=${{ vars.DISCORD_CLIENT_ID }}
+            GIT_SHA=${{ github.sha }}
+            GIT_REF_NAME=${{ github.ref_name }}
+            GIT_REF_TYPE=${{ github.ref_type }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
           provenance: true

@@ -442,6 +442,45 @@ html.pip-mode #root > * {
   background: rgba(18, 28, 32, 0.9);
 }
 
+.app-version-badge {
+  position: fixed;
+  left: 10px;
+  bottom: 8px;
+  z-index: 2400;
+  padding: 2px 7px;
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.45);
+  color: rgba(255, 255, 255, 0.55);
+  font-size: 10px;
+  font-weight: 600;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  letter-spacing: 0.02em;
+  pointer-events: none;
+  user-select: none;
+  line-height: 1.4;
+}
+
+.app-version-outdated {
+  position: fixed;
+  left: 50%;
+  bottom: 56px;
+  transform: translateX(-50%);
+  z-index: 7600;
+  padding: 8px 14px;
+  border-radius: 8px;
+  background: #f4d600;
+  color: #121212;
+  font-size: 13px;
+  font-weight: 700;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+  pointer-events: none;
+}
+
+html.pip-mode .app-version-badge,
+html.pip-mode .app-version-outdated {
+  display: none;
+}
+
 .official-logs-fab {
   position: fixed;
   right: 14px;

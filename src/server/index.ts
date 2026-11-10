@@ -12,6 +12,7 @@ import { activityShareRoutes } from './routes/activity-share.js';
 import { participantRoutes } from './routes/participants.js';
 import { announcementRoutes } from './routes/announcements.js';
 import { attachRealtime } from './realtime.js';
+import { loadAppVersion } from './app-version.js';
 
 
 const __filename = fileURLToPath(import.meta.url);
@@ -19,6 +20,7 @@ const __dirname = path.dirname(__filename);
 
 async function main() {
   const env = loadEnv();
+  const appVersion = loadAppVersion();
   const app = Fastify({ logger: true });
 
   // Discord activity proxy prefix must rewrite before routing/auth
@@ -32,7 +34,19 @@ async function main() {
     }
   });
 
-  app.get('/api/health', async () => ({ ok: true }));
+  const healthPayload = () => ({
+    ok: true as const,
+    version: appVersion.label,
+    sha: appVersion.sha,
+    shortSha: appVersion.shortSha,
+    ref: appVersion.ref,
+    refType: appVersion.refType,
+    builtAt: appVersion.builtAt,
+    now: new Date().toISOString(),
+  });
+
+  app.get('/api/health', async () => healthPayload());
+  app.get('/api/version', async () => healthPayload());
 
   await app.register(authPlugin, { env });
   await app.register(authRoutes, { env });
