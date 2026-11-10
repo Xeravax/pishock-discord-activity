@@ -414,6 +414,8 @@ export function App() {
             durationMs: event.durationMs,
             at: event.at,
             success: event.success,
+            kind: 'personal',
+            targetDiscordUserId: selfIdRef.current,
           });
           void refreshLogs(token).catch(() => undefined);
         }
@@ -668,8 +670,37 @@ export function App() {
       durationMs: (row.durationMs as number | null | undefined) ?? null,
       at: at || Date.now(),
       success: Boolean(row.success),
+      kind: 'personal',
+      targetDiscordUserId: selfId,
+      targetDisplayName: me.user.global_name || me.user.username || 'You',
+      targetAvatarUrl: participantAvatarUrl(selfId, me.user.avatar ?? null),
     });
   }, [logs, publicLogs, me?.user?.id, lastIncoming, participants, participantStatus]);
+
+  /** PIP surface: linked users see hits on themselves; unlinked users see the latest log shock + target. */
+  const pipHit = useMemo<IncomingShockHit | null>(() => {
+    if (me?.pishockLinked) return lastIncoming;
+    const entry =
+      publicLogs.find((e) => e.action === 'shock') ??
+      publicLogs.find((e) => e.action === 'vibrate' || e.action === 'beep') ??
+      null;
+    if (!entry) return null;
+    return {
+      executorDiscordUserId: entry.from.id,
+      displayName: entry.from.displayName,
+      avatarUrl: entry.from.avatarUrl,
+      action: entry.action,
+      intensity: entry.intensity,
+      durationMs:
+        entry.durationSec != null ? Math.max(16, Math.round(entry.durationSec * 1000)) : null,
+      at: entry.at,
+      success: true,
+      kind: 'activity',
+      targetDiscordUserId: entry.to.id,
+      targetDisplayName: entry.to.displayName,
+      targetAvatarUrl: entry.to.avatarUrl,
+    };
+  }, [me?.pishockLinked, lastIncoming, publicLogs]);
 
   // While PIP is open, refresh logs so hits still show if WS was missed
   useEffect(() => {
@@ -1307,7 +1338,7 @@ export function App() {
 
     // PIP: nothing but the last hit — no header, menu, safety bar, or controls
     if (pip) {
-      return <PipIncomingShock hit={lastIncoming} />;
+      return <PipIncomingShock hit={pipHit} />;
     }
 
     return (

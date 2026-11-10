@@ -301,6 +301,10 @@ export function DemoApp() {
               durationMs: 1000,
               at: Date.now() - 4000,
               success: true,
+              kind: 'activity',
+              targetDiscordUserId: '222',
+              targetDisplayName: 'NotLinked',
+              targetAvatarUrl: participantAvatarUrl('222'),
             }}
           />
         </div>

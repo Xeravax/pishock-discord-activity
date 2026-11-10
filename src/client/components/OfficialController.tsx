@@ -153,6 +153,13 @@ const WARNING_PRESETS: Record<
   long: { intensity: 50, durationMs: 1000, label: 'LONG' },
 };
 
+/**
+ * Extra settle time after the warning vibe ends before the shock is sent.
+ * Too short and the shock can collide with / cancel the still-playing vibe
+ * (especially with broker/network latency).
+ */
+const WARNING_SHOCK_GAP_MS = 350;
+
 function nextWarningLevel(current: WarningLevel): WarningLevel {
   const i = WARNING_ORDER.indexOf(current);
   return WARNING_ORDER[(i + 1) % WARNING_ORDER.length]!;
@@ -390,10 +397,22 @@ export function OfficialController({
   const multiLimitMarkers = useMemo(() => {
     const pool = selectedShockers.length ? selectedShockers : active ? [active] : [];
     if (!multiShock || pool.length < 2) {
-      return [] as Array<{ key: string; color: string; intensity: number; label: string }>;
+      return [] as Array<{
+        key: string;
+        color: string;
+        intensity: number;
+        durationMs: number;
+        label: string;
+      }>;
     }
     const seen = new Set<string>();
-    const markers: Array<{ key: string; color: string; intensity: number; label: string }> = [];
+    const markers: Array<{
+      key: string;
+      color: string;
+      intensity: number;
+      durationMs: number;
+      label: string;
+    }> = [];
     for (const s of pool) {
       const key = multiColorKey(s);
       if (seen.has(key)) continue;
@@ -402,6 +421,7 @@ export function OfficialController({
         key,
         color: multiColorForShocker(s),
         intensity: shockerUsableInt(s),
+        durationMs: shockerUsableDur(s),
         label: s.hubName && !s.owned ? `${s.hubName}: ${s.name}` : s.name,
       });
     }
@@ -633,7 +653,7 @@ export function OfficialController({
           if (shocker.emergencyStop || shocker.paused || !shocker.canShock) continue;
           dispatch(shocker, 'shock', intensity, durationMs, null);
         }
-      }, warnWaitMs + 50);
+      }, warnWaitMs + WARNING_SHOCK_GAP_MS);
       return;
     }
 
@@ -699,7 +719,7 @@ export function OfficialController({
       warningTimerRef.current = setTimeout(() => {
         warningTimerRef.current = null;
         startHold();
-      }, preset.durationMs + 50);
+      }, preset.durationMs + WARNING_SHOCK_GAP_MS);
       return;
     }
 
@@ -964,7 +984,7 @@ export function OfficialController({
                                 flexShrink: 0,
                               }}
                             />
-                            {m.label} · {m.intensity}%
+                            {m.label} · {m.intensity}% · {formatDurationSec(m.durationMs)}s
                           </span>
                         ))}
                       </div>
@@ -1142,6 +1162,7 @@ export function OfficialController({
                                               open={durationMenu === 'shock'}
                                               disabled={tapMode}
                                               side="right"
+                                              limitMarkers={multiLimitMarkers}
                                               onToggle={() =>
                                                 setDurationMenu((m) =>
                                                   m === 'shock' ? null : 'shock',
@@ -1425,6 +1446,7 @@ export function OfficialController({
                                               open={durationMenu === 'vibrate'}
                                               disabled={tapMode}
                                               side="left"
+                                              limitMarkers={multiLimitMarkers}
                                               onToggle={() =>
                                                 setDurationMenu((m) =>
                                                   m === 'vibrate' ? null : 'vibrate',
@@ -1593,6 +1615,7 @@ function DurationMetric({
   open,
   disabled,
   side,
+  limitMarkers = [],
   onToggle,
   onSelect,
 }: {
@@ -1601,10 +1624,17 @@ function DurationMetric({
   open: boolean;
   disabled?: boolean;
   side: 'left' | 'right';
+  limitMarkers?: Array<{
+    key: string;
+    color: string;
+    durationMs: number;
+    label: string;
+  }>;
   onToggle: () => void;
   onSelect: (ms: number) => void;
 }) {
   const presets = DURATION_PRESETS_SEC.filter((sec) => Math.round(sec * 1000) <= maxMs);
+  const showLimits = limitMarkers.length > 1 && maxMs > 0;
   return (
     <div className="official-duration-wrap">
       <MetricStack
@@ -1614,6 +1644,46 @@ function DurationMetric({
         disabled={disabled}
         onClick={onToggle}
       />
+      {showLimits ? (
+        <div className="official-duration-limits" aria-label="Per-shocker duration limits">
+          <div className="official-duration-limits__track">
+            {limitMarkers.map((m) => {
+              const pct = Math.max(4, Math.min(100, (m.durationMs / maxMs) * 100));
+              return (
+                <div
+                  key={m.key}
+                  className="official-duration-limits__bar"
+                  title={`${m.label}: ${formatDurationSec(m.durationMs)}s max`}
+                  style={{
+                    width: `${pct}%`,
+                    background: m.color,
+                  }}
+                />
+              );
+            })}
+            <span
+              className="official-duration-limits__thumb"
+              style={{ left: `${Math.min(100, (valueMs / maxMs) * 100)}%` }}
+              aria-hidden
+            />
+          </div>
+          <div className="official-duration-limits__legend">
+            {limitMarkers
+              .slice()
+              .sort((a, b) => a.durationMs - b.durationMs)
+              .map((m) => (
+                <span key={m.key} style={{ color: m.color }}>
+                  <span
+                    className="official-duration-limits__dot"
+                    style={{ background: m.color }}
+                    aria-hidden
+                  />
+                  {formatDurationSec(m.durationMs)}s
+                </span>
+              ))}
+          </div>
+        </div>
+      ) : null}
       {open && !disabled ? (
         <div
           className={`official-duration-menu official-duration-menu--${side}`}
@@ -1624,16 +1694,33 @@ function DurationMetric({
             const ms = Math.round(sec * 1000);
             const label = sec < 1 ? `.${String(sec).split('.')[1]}` : String(sec);
             const selected = valueMs === ms;
+            const overLimit = showLimits
+              ? limitMarkers.filter((m) => ms > m.durationMs)
+              : [];
             return (
               <button
                 key={sec}
                 type="button"
                 role="option"
                 aria-selected={selected}
-                className={`official-duration-chip${selected ? ' is-selected' : ''}`}
+                className={`official-duration-chip${selected ? ' is-selected' : ''}${
+                  overLimit.length ? ' has-over-limit' : ''
+                }`}
+                title={
+                  overLimit.length
+                    ? `Over limit for: ${overLimit.map((m) => m.label).join(', ')}`
+                    : undefined
+                }
                 onClick={() => onSelect(ms)}
               >
                 {label}
+                {overLimit.length ? (
+                  <span className="official-duration-chip__limits" aria-hidden>
+                    {overLimit.map((m) => (
+                      <span key={m.key} style={{ background: m.color }} />
+                    ))}
+                  </span>
+                ) : null}
               </button>
             );
           })}
