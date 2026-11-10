@@ -168,14 +168,27 @@ body,
 
 .official-header-brand__row {
   display: inline-flex;
-  align-items: baseline;
+  align-items: center;
   justify-content: center;
   gap: 8px;
+}
+
+.official-header-version {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  align-self: stretch;
+  min-width: 88px;
+  padding-left: 10px;
+  box-sizing: border-box;
+  pointer-events: auto;
+  z-index: 1;
 }
 
 .official-header-toolbar {
   position: relative;
   min-height: 48px;
+  align-items: center;
 }
 
 .official-mode-dock {

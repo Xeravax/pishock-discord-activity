@@ -54,7 +54,8 @@ export type ClientLocationHint = {
   locationIconUrl?: string | null;
 };
 
-function sanitizeClientHint(
+/** Strip untrusted client location hints (wrong guild/channel, non-Discord CDN icons). */
+export function sanitizeClientHint(
   hint: ClientLocationHint | null | undefined,
   trustedGuildId: string | null,
   trustedChannelId: string | null,

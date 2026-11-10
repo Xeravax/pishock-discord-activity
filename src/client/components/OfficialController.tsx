@@ -756,7 +756,9 @@ export function OfficialController({
           role="toolbar"
           className="q-toolbar row no-wrap items-center bg-secondary no-padding row justify-between official-header-toolbar"
         >
-          <div style={{ width: 88 }} aria-hidden />
+          <div className="official-header-version">
+            <AppVersionBadge />
+          </div>
           <div className="official-header-brand">
             <div className="text-dark text-h3 q-toolbar__title" style={{ margin: 0 }}>
               <div
@@ -764,7 +766,6 @@ export function OfficialController({
                 style={{ fontFamily: 'geo, Oxanium, sans-serif' }}
               >
                 <span className="text-grey-3">PiShock</span>
-                <AppVersionBadge />
               </div>
             </div>
           </div>

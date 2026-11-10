@@ -9,7 +9,7 @@ export type PendingPiShockConfirm = {
 
 const pendingConfirmByDiscordUser = new Map<string, PendingPiShockConfirm>();
 
-const CONFIRM_TTL_MS = 10 * 60 * 1000;
+export const CONFIRM_TTL_MS = 10 * 60 * 1000;
 
 export function setPendingConfirm(
   discordUserId: string,

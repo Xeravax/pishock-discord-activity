@@ -70,20 +70,17 @@ async function normalizeShareRow(
   const canBeep = s.canBeep !== false;
   const canHold = s.canHold !== false;
 
-  const maxIntensity = Math.max(
-    1,
-    Math.min(deviceMaxIntensity, Number(s.maxIntensity ?? prev?.maxIntensity ?? deviceMaxIntensity)),
-  );
-  const maxDurationMs = Math.max(
-    ABS_MIN_DURATION_MS,
-    Math.min(
-      deviceMaxDurationMs,
-      Number(s.maxDurationMs ?? prev?.maxDurationMs ?? deviceMaxDurationMs),
-    ),
-  );
+  const { maxIntensity, maxDurationMs } = clampShareLimits({
+    deviceMaxIntensity,
+    deviceMaxDurationMs,
+    requestedMaxIntensity: s.maxIntensity,
+    requestedMaxDurationMs: s.maxDurationMs,
+    previousMaxIntensity: prev?.maxIntensity,
+    previousMaxDurationMs: prev?.maxDurationMs,
+  });
 
   // Never accept a client-supplied share code — only keep prior server-created codes
-  let shareCode = prev?.shareCode ?? null;
+  let shareCode = retainedShareCode(prev?.shareCode, s.shareCode);
   const capsChanged =
     !shareCode ||
     (prev != null &&
@@ -285,7 +282,50 @@ function extractShareCode(data: unknown): string | null {
   return null;
 }
 
-function serializeShare(s: {
+/** Activity/share caps cannot exceed the live device ceilings. */
+export function clampShareLimits(input: {
+  deviceMaxIntensity: number;
+  deviceMaxDurationMs: number;
+  requestedMaxIntensity?: unknown;
+  requestedMaxDurationMs?: unknown;
+  previousMaxIntensity?: unknown;
+  previousMaxDurationMs?: unknown;
+}): { maxIntensity: number; maxDurationMs: number } {
+  const maxIntensity = Math.max(
+    1,
+    Math.min(
+      input.deviceMaxIntensity,
+      Number(
+        input.requestedMaxIntensity ??
+          input.previousMaxIntensity ??
+          input.deviceMaxIntensity,
+      ),
+    ),
+  );
+  const maxDurationMs = Math.max(
+    ABS_MIN_DURATION_MS,
+    Math.min(
+      input.deviceMaxDurationMs,
+      Number(
+        input.requestedMaxDurationMs ??
+          input.previousMaxDurationMs ??
+          input.deviceMaxDurationMs,
+      ),
+    ),
+  );
+  return { maxIntensity, maxDurationMs };
+}
+
+/** Client-supplied share codes are ignored; only a prior server-issued code is kept. */
+export function retainedShareCode(
+  previousShareCode: string | null | undefined,
+  _clientShareCode?: string | null,
+): string | null {
+  return previousShareCode ?? null;
+}
+
+/** API responses expose presence of a share code, never the raw capability string. */
+export function serializeShare(s: {
   shockerId: number;
   shockerName: string;
   hubClientId: string | null;
