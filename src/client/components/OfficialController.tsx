@@ -9,6 +9,8 @@ import {
 import type { ShockerView } from './ShockerCard';
 import { AnnouncementBanner } from './AnnouncementBanner';
 import { AppVersionBadge } from './AppVersionBadge';
+import { MultiShockToggle } from './MultiShockToggle';
+import { colorForShocker } from '../multiColors';
 
 export type OfficialOperateInput = {
   shockerId: number;
@@ -51,7 +53,10 @@ type Props = {
   pip?: boolean;
   hubs?: HubInfo[];
   friendsOpen?: boolean;
-  friendsPanel?: ReactNode | ((ctx: { multiShock: boolean }) => ReactNode);
+  friendsPanel?: ReactNode | ((ctx: {
+    multiShock: boolean;
+    onToggleMultiShock: () => void;
+  }) => ReactNode);
   safetyBanner?: ReactNode;
   /** Shown above controls (e.g. blocked / e-stop notices) */
   accessBanner?: ReactNode;
@@ -84,28 +89,20 @@ function clamp(n: number, min: number, max: number) {
   return Math.max(min, Math.min(max, n));
 }
 
-/** Stable palette for multishock people / shockers */
-const MULTI_COLORS = [
-  '#79c6db',
-  '#ce93d8',
-  '#81c784',
-  '#ffb74d',
-  '#f48fb1',
-  '#90caf9',
-  '#aed581',
-  '#ff8a65',
-] as const;
-
 function multiColorKey(s: ShockerView): string {
-  if (s.targetDiscordUserId) return `u:${s.targetDiscordUserId}`;
+  if (s.targetDiscordUserId) return `u:${s.targetDiscordUserId}:s:${s.id}`;
   if (s.owned) return `own:${s.id}`;
   return `s:${s.id}`;
 }
 
-function multiColorForKey(key: string, _keys?: string[]): string {
-  let hash = 0;
-  for (let i = 0; i < key.length; i++) hash = (hash * 31 + key.charCodeAt(i)) >>> 0;
-  return MULTI_COLORS[hash % MULTI_COLORS.length]!;
+function multiUserKey(s: ShockerView): string {
+  if (s.targetDiscordUserId) return `u:${s.targetDiscordUserId}`;
+  if (s.owned) return 'own';
+  return `s:${s.id}`;
+}
+
+function multiColorForShocker(s: ShockerView): string {
+  return colorForShocker(multiUserKey(s), s.id);
 }
 
 function shockerUsableInt(s: ShockerView): number {
@@ -378,25 +375,22 @@ export function OfficialController({
       ? [active]
       : [];
 
-  const multiColorKeys = useMemo(() => {
-    const pool = selectedShockers.length ? selectedShockers : active ? [active] : [];
-    const keys: string[] = [];
-    for (const s of pool) {
-      const key = multiColorKey(s);
-      if (!keys.includes(key)) keys.push(key);
-    }
-    return keys;
-  }, [selectedShockers, active]);
+  const toggleMultiShock = () => {
+    setMultiShock((v) => {
+      const next = !v;
+      if (next) {
+        if (holdingOpRef.current) endHold();
+        setTapMode(false);
+        setSelectedIds(active ? [active.id] : []);
+      }
+      return next;
+    });
+  };
 
   const multiLimitMarkers = useMemo(() => {
     const pool = selectedShockers.length ? selectedShockers : active ? [active] : [];
     if (!multiShock || pool.length < 2) {
       return [] as Array<{ key: string; color: string; intensity: number; label: string }>;
-    }
-    const keys: string[] = [];
-    for (const s of pool) {
-      const key = multiColorKey(s);
-      if (!keys.includes(key)) keys.push(key);
     }
     const seen = new Set<string>();
     const markers: Array<{ key: string; color: string; intensity: number; label: string }> = [];
@@ -406,9 +400,9 @@ export function OfficialController({
       seen.add(key);
       markers.push({
         key,
-        color: multiColorForKey(key, keys),
+        color: multiColorForShocker(s),
         intensity: shockerUsableInt(s),
-        label: s.hubName && !s.owned ? s.hubName : s.name,
+        label: s.hubName && !s.owned ? `${s.hubName}: ${s.name}` : s.name,
       });
     }
     return markers.sort((a, b) => a.intensity - b.intensity);
@@ -929,38 +923,24 @@ export function OfficialController({
 
                 {friendsOpen || shockers.length > 1 ? (
                   <div className="column q-gutter-xs q-mt-sm">
-                    <div className="row items-center q-gutter-sm">
-                      <button
-                        type="button"
-                        className={`q-btn q-btn-item non-selectable no-outline q-btn--${
-                          multiShock ? 'standard bg-secondary text-dark' : 'outline text-secondary'
-                        } q-btn--rectangle q-btn--actionable q-btn--dense`}
-                        onClick={() => {
-                          setMultiShock((v) => {
-                            const next = !v;
-                            if (next) {
-                              if (holdingOpRef.current) endHold();
-                              setTapMode(false);
-                              setSelectedIds(active ? [active.id] : []);
-                            }
-                            return next;
-                          });
-                        }}
-                        title="Select several people / shockers and operate them together"
-                      >
-                        <span className="q-btn__wrapper col row q-anchor--skip">
-                          <span className="q-btn__content text-center col items-center q-anchor--skip justify-center row no-wrap">
-                            <i className="q-icon on-left mdi mdi-checkbox-multiple-marked-outline" aria-hidden />
-                            <span className="block">Multi</span>
+                    {!friendsOpen && shockers.length > 1 ? (
+                      <div className="row items-center q-gutter-sm">
+                        <MultiShockToggle
+                          active={multiShock}
+                          onToggle={toggleMultiShock}
+                          title="Select several shockers and operate them together"
+                        />
+                        {multiShock ? (
+                          <span className="text-caption text-grey-5">
+                            {selectedShockers.length} selected · each capped to their own limit
                           </span>
-                        </span>
-                      </button>
-                      {multiShock ? (
-                        <span className="text-caption text-grey-5">
-                          {selectedShockers.length} selected · each capped to their own limit
-                        </span>
-                      ) : null}
-                    </div>
+                        ) : null}
+                      </div>
+                    ) : multiShock ? (
+                      <span className="text-caption text-grey-5">
+                        {selectedShockers.length} selected · each capped to their own limit
+                      </span>
+                    ) : null}
                     {multiShock && multiLimitMarkers.length > 1 ? (
                       <div className="row q-gutter-xs items-center" style={{ flexWrap: 'wrap' }}>
                         {multiLimitMarkers.map((m) => (
@@ -998,10 +978,7 @@ export function OfficialController({
                           const chipKey = s.targetDiscordUserId
                             ? `${s.targetDiscordUserId}:${s.id}`
                             : String(s.id);
-                          const colorKey = multiColorKey(s);
-                          const color = multiShock
-                            ? multiColorForKey(colorKey, multiColorKeys.length ? multiColorKeys : [colorKey])
-                            : undefined;
+                          const color = multiShock ? multiColorForShocker(s) : undefined;
                           return (
                             <button
                               key={chipKey}
@@ -1565,7 +1542,7 @@ export function OfficialController({
 
             {friendsOpen
               ? typeof friendsPanel === 'function'
-                ? friendsPanel({ multiShock })
+                ? friendsPanel({ multiShock, onToggleMultiShock: toggleMultiShock })
                 : friendsPanel
               : null}
 

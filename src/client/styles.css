@@ -455,11 +455,76 @@ html.pip-mode #root > * {
   background: rgba(18, 36, 42, 0.92);
 }
 
-.official-friends-unlinked {
-  padding: 6px 8px;
-  border-radius: 10px;
-  border: 1px solid rgba(121, 198, 219, 0.28);
-  background: rgba(18, 28, 32, 0.9);
+.official-friend-btn.not-logged-in {
+  opacity: 0.72;
+  border-style: dashed;
+}
+
+.multi-shock-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  margin: 0;
+  padding: 4px 11px;
+  border-radius: 999px;
+  border: 1px solid rgba(121, 198, 219, 0.45);
+  background: rgba(18, 28, 32, 0.88);
+  color: #9fd7e6;
+  font-family: Oxanium, geo, sans-serif;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  line-height: 1;
+  cursor: pointer;
+  transition:
+    background 160ms ease,
+    border-color 160ms ease,
+    color 160ms ease,
+    box-shadow 160ms ease,
+    transform 120ms ease;
+}
+
+.multi-shock-toggle .q-icon {
+  font-size: 13px;
+  line-height: 1;
+}
+
+.multi-shock-toggle:hover {
+  border-color: rgba(121, 198, 219, 0.75);
+  color: #d7f3fa;
+  background: rgba(28, 42, 48, 0.95);
+}
+
+.multi-shock-toggle:active {
+  transform: translateY(1px);
+}
+
+.multi-shock-toggle:focus-visible {
+  outline: 2px solid rgba(121, 198, 219, 0.7);
+  outline-offset: 2px;
+}
+
+.multi-shock-toggle.is-on {
+  border-color: transparent;
+  background: linear-gradient(135deg, #79c6db 0%, #5eb4cc 100%);
+  color: #0b1c22;
+  box-shadow: 0 4px 14px rgba(121, 198, 219, 0.28);
+}
+
+.multi-shock-toggle.is-on:hover {
+  color: #061216;
+  background: linear-gradient(135deg, #8fd2e4 0%, #6dbfd5 100%);
+}
+
+.multi-shock-toggle.is-compact {
+  padding: 3px 9px;
+  font-size: 10px;
+  gap: 4px;
+}
+
+.multi-shock-toggle.is-compact .q-icon {
+  font-size: 12px;
 }
 
 .app-version-badge {

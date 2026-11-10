@@ -1371,7 +1371,7 @@ export function App() {
             ) : null
           }
           safetyBanner={!pip ? <SafetyNoticeBar /> : null}
-          friendsPanel={({ multiShock }) => (
+          friendsPanel={({ multiShock, onToggleMultiShock }) => (
             <FriendsParticipantList
               participants={participants}
               statuses={participantStatus}
@@ -1379,8 +1379,7 @@ export function App() {
               selectedTargetId={selectedTargetId}
               selectedTargetIds={selectedTargetIds}
               multiSelect={multiShock}
-              pishockLinked={me.pishockLinked}
-              onLinkAccount={openLinkFlow}
+              onToggleMultiSelect={onToggleMultiShock}
               onSelect={(id) => {
                 if (!id) {
                   setSelectedTargetIds([]);

@@ -1,22 +1,6 @@
 import type { DiscordParticipant, ParticipantStatus } from '../participants';
-
-const MULTI_COLORS = [
-  '#79c6db',
-  '#ce93d8',
-  '#81c784',
-  '#ffb74d',
-  '#f48fb1',
-  '#90caf9',
-  '#aed581',
-  '#ff8a65',
-] as const;
-
-function colorForUserId(id: string): string {
-  const key = `u:${id}`;
-  let hash = 0;
-  for (let i = 0; i < key.length; i++) hash = (hash * 31 + key.charCodeAt(i)) >>> 0;
-  return MULTI_COLORS[hash % MULTI_COLORS.length]!;
-}
+import { colorForUser } from '../multiColors';
+import { MultiShockToggle } from './MultiShockToggle';
 
 type Props = {
   participants: DiscordParticipant[];
@@ -27,11 +11,9 @@ type Props = {
   /** Multi-select ids when Multishock / multi friend targeting is on */
   selectedTargetIds?: string[];
   multiSelect?: boolean;
-  /** Current user has a PiShock session linked */
-  pishockLinked?: boolean;
+  onToggleMultiSelect?: () => void;
   onSelect: (discordUserId: string | null) => void;
   onRefresh?: () => void;
-  onLinkAccount?: () => void;
 };
 
 /** Discord Shockers roster styled like the official PISHOCKS FAB list */
@@ -42,10 +24,9 @@ export function FriendsParticipantList({
   selectedTargetId = null,
   selectedTargetIds,
   multiSelect = false,
-  pishockLinked = true,
+  onToggleMultiSelect,
   onSelect,
   onRefresh,
-  onLinkAccount,
 }: Props) {
   const others = participants.filter((p) => p.id !== currentUserId);
   const selectedIds = selectedTargetIds ?? (selectedTargetId ? [selectedTargetId] : []);
@@ -57,54 +38,35 @@ export function FriendsParticipantList({
         <div className="text-secondary official-friends-title">
           DISCORD SHOCKERS{multiSelect ? ' · MULTI' : ''}
         </div>
-        {onRefresh ? (
-          <button
-            type="button"
-            className="q-btn q-btn-item non-selectable no-outline q-btn--flat q-btn--round text-secondary q-btn--dense q-btn--actionable"
-            onClick={onRefresh}
-            aria-label="Refresh participants"
-            style={{ minHeight: 22, minWidth: 22, padding: 0 }}
-          >
-            <span className="q-btn__wrapper col row q-anchor--skip">
-              <span className="q-btn__content text-center col items-center q-anchor--skip justify-center row">
-                <i className="q-icon mdi mdi-refresh" style={{ fontSize: 14 }} aria-hidden />
-              </span>
-            </span>
-          </button>
-        ) : null}
-      </div>
-
-      {!pishockLinked ? (
-        <div className="official-friends-unlinked q-mb-xs">
-          <div className="text-secondary text-caption" style={{ fontWeight: 600 }}>
-            Not linked to PiShock
-          </div>
-          <div className="text-grey-5" style={{ fontSize: 10, lineHeight: 1.25 }}>
-            You can still control people below who shared devices into this activity. Link PiShock
-            only if you want to share your own shockers.
-          </div>
-          {onLinkAccount ? (
+        <div className="row items-center no-wrap q-gutter-xs">
+          {onToggleMultiSelect ? (
+            <MultiShockToggle
+              active={multiSelect}
+              onToggle={onToggleMultiSelect}
+              compact
+              title="Select several people and operate them together"
+            />
+          ) : null}
+          {onRefresh ? (
             <button
               type="button"
-              className="q-btn q-btn-item non-selectable no-outline q-mt-xs q-btn--standard q-btn--rectangle bg-secondary text-dark q-btn--dense q-btn--actionable"
-              onClick={onLinkAccount}
+              className="q-btn q-btn-item non-selectable no-outline q-btn--flat q-btn--round text-secondary q-btn--dense q-btn--actionable"
+              onClick={onRefresh}
+              aria-label="Refresh participants"
+              style={{ minHeight: 22, minWidth: 22, padding: 0 }}
             >
               <span className="q-btn__wrapper col row q-anchor--skip">
                 <span className="q-btn__content text-center col items-center q-anchor--skip justify-center row">
-                  <span className="block">Link PiShock</span>
+                  <i className="q-icon mdi mdi-refresh" style={{ fontSize: 14 }} aria-hidden />
                 </span>
               </span>
             </button>
           ) : null}
         </div>
-      ) : null}
+      </div>
 
       {others.length === 0 ? (
-        <div className="text-grey-5 official-friends-empty">
-          {pishockLinked
-            ? 'No other participants'
-            : 'No other participants yet — stay here until someone shares devices.'}
-        </div>
+        <div className="text-grey-5 official-friends-empty">No other participants</div>
       ) : (
         others.map((p) => {
           const status = statuses[p.id];
@@ -112,13 +74,15 @@ export function FriendsParticipantList({
           const eStop = Boolean(
             status?.emergencyStop || status?.shockers?.some((s) => s.emergencyStop),
           );
+          const notLoggedIn = Boolean(status && !status.linked);
           const selectable =
             Boolean(status) &&
+            !notLoggedIn &&
             (banned || eStop || status?.available || (status?.shockers?.length ?? 0) > 0);
           const active = selectedSet.has(p.id);
           const label = statusLabel(status);
           const detail = statusDetail(status);
-          const primary = !banned ? status?.shockers?.[0] : undefined;
+          const primary = !banned && !notLoggedIn ? status?.shockers?.[0] : undefined;
           const limits = primary ? formatLimits(primary) : null;
           const flags = primary
             ? [
@@ -129,7 +93,7 @@ export function FriendsParticipantList({
                 .filter(Boolean)
                 .join('')
             : null;
-          const multiColor = multiSelect && active ? colorForUserId(p.id) : undefined;
+          const multiColor = multiSelect && active ? colorForUser(`u:${p.id}`) : undefined;
 
           return (
             <button
@@ -138,7 +102,9 @@ export function FriendsParticipantList({
               disabled={!selectable}
               className={`official-friend-btn ${active && !multiSelect ? 'active' : ''} ${
                 selectable ? '' : 'disabled'
-              } ${banned ? 'blocked' : ''} ${eStop && !banned ? 'estop' : ''}`}
+              } ${banned ? 'blocked' : ''} ${eStop && !banned ? 'estop' : ''} ${
+                notLoggedIn ? 'not-logged-in' : ''
+              }`}
               style={
                 multiSelect && multiColor
                   ? {
@@ -162,7 +128,7 @@ export function FriendsParticipantList({
                 <span className="official-friend-name ellipsis">{p.displayName}</span>
                 <span
                   className={`official-friend-status ${
-                    banned || eStop || !status?.available ? 'bad' : 'ok'
+                    banned || eStop || notLoggedIn || !status?.available ? 'bad' : 'ok'
                   }`}
                 >
                   {label}
@@ -190,11 +156,11 @@ function statusLabel(status?: ParticipantStatus): string {
   if (!status) return 'Unknown';
   if (status.bannedYou) return 'Blocked';
   if (status.emergencyStop || status.shockers?.some((s) => s.emergencyStop)) return 'E-STOP';
+  if (!status.linked) return 'Not logged in · Disabled';
   if (status.available) return 'Available';
   if (status.paused) return 'Paused';
-  if (!status.linked) return 'Not linked to PiShock';
-  if (!status.consent) return 'No consent';
-  return 'Unavailable';
+  if (!status.consent) return 'No consent · Disabled';
+  return 'Unavailable · Disabled';
 }
 
 function statusDetail(status?: ParticipantStatus): string | null {
@@ -206,7 +172,10 @@ function statusDetail(status?: ParticipantStatus): string | null {
     return 'Emergency stop armed — controls disabled';
   }
   if (!status.linked) {
-    return 'They have not linked PiShock in this activity';
+    return 'They are not logged in to PiShock — control is disabled';
+  }
+  if (!status.consent) {
+    return 'They have not consented — control is disabled';
   }
   return null;
 }
