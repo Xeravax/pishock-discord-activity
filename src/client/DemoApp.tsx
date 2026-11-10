@@ -320,7 +320,6 @@ export function DemoApp() {
             shockers={shockers}
             friendsOpen={friendsOpen}
             showOwnMode={demoLinked}
-            showClaim={demoLinked}
             safetyBanner={<SafetyNoticeBar />}
             friendsPanel={({ multiShock }) => (
               <FriendsParticipantList
@@ -365,17 +364,12 @@ export function DemoApp() {
               setFriendsOpen(false);
               flash('Showing owned hub');
             }}
-            onOpenClaim={() => {
-              setOverlay('availability');
-              flash('Availability dialog');
-            }}
             onOpenMenu={() => setOverlay('menu')}
             onOpenShockerSettings={(s) => {
               setOverlay('settings');
               flash(`Would open settings for ${s.name}`);
             }}
             onSelectHub={() => flash('Hub selector')}
-            onShareHub={() => flash('Would open hub share')}
             onShareShocker={(s) => {
               flash(`Would share ${s.name}`);
               setOverlay('shares');

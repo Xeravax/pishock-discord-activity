@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { AppVersionBadge } from './AppVersionBadge';
 
 export type SetupChoices = {
   wantsDiscordShare: boolean;
@@ -16,13 +17,13 @@ const STEPS = [
     body: (
       <>
         <p>
-          When you continue, this activity opens a <strong>browser login page</strong> from PiShock
-          (not Discord). Sign in there with your PiShock account.
+          This activity opens a <strong>browser login page</strong> from PiShock (not Discord). Sign
+          in there with your PiShock account.
         </p>
         <ol className="setup-steps-list">
           <li>A PiShock login URL opens in your browser</li>
           <li>Log in on that page (password never enters Discord)</li>
-          <li>Come back to this activity — we detect the successful login</li>
+          <li>Come back here — we detect the successful login</li>
           <li>Confirm “Is this your PiShock account?” before anything is linked</li>
         </ol>
       </>
@@ -34,18 +35,18 @@ const STEPS = [
       <>
         <p>
           After linking, you can opt shockers into <strong>Discord Shockers</strong> so other people
-          in this activity can control them through Discord (with your limits and pause/block
-          controls).
+          in this activity can control them (with your limits and pause/block controls).
         </p>
         <p className="text-grey-5">
-          You can skip this and still shock other people’s Discord Shockers without linking. Linking
-          is only required to receive shocks or use your own devices.
+          You can still control other people’s Discord Shockers without linking. Linking is only
+          required to receive shocks or use your own devices.
         </p>
       </>
     ),
   },
 ] as const;
 
+/** First-time link intro — same boot aesthetic as Discord / PiShock auth. */
 export function SetupWizard({ discordName, onComplete, onSkipToLogin }: Props) {
   const [step, setStep] = useState(0);
   const [wantsDiscordShare, setWantsDiscordShare] = useState(true);
@@ -54,42 +55,52 @@ export function SetupWizard({ discordName, onComplete, onSkipToLogin }: Props) {
   const current = STEPS[step]!;
 
   return (
-    <div className="column q-gutter-md setup-wizard">
-      <div className="text-caption text-secondary">
-        First-time setup · {discordName} · Step {step + 1} of {STEPS.length}
-      </div>
-      <div className="text-h6 text-secondary" style={{ fontFamily: 'geo, Oxanium, sans-serif' }}>
-        {current.title}
-      </div>
-      <div className="text-body2 text-grey-4 setup-wizard-body">{current.body}</div>
-
-      {last ? (
-        <label className="row items-start no-wrap q-gutter-sm cursor-pointer">
-          <input
-            type="checkbox"
-            checked={wantsDiscordShare}
-            onChange={(e) => setWantsDiscordShare(e.target.checked)}
-            style={{ marginTop: 4, accentColor: '#79c6db' }}
-          />
-          <span className="text-body2 text-grey-3">
-            After I link, help me choose shockers to share in Discord Shockers
+    <div className="auth-boot" role="dialog" aria-modal="true" aria-labelledby="setup-wizard-title">
+      <div className="auth-boot__glow" aria-hidden />
+      <div className="auth-boot__panel auth-boot__panel--wide">
+        <div className="auth-boot__mark" aria-hidden>
+          <i className="q-icon mdi mdi-flash auth-boot__bolt" />
+        </div>
+        <h1 className="auth-boot__brand auth-boot__brand-row">
+          <span className="auth-boot__brand-name">
+            Pi<span>Shock</span>
           </span>
-        </label>
-      ) : null}
+          <AppVersionBadge />
+        </h1>
+        <p className="auth-boot__sub">
+          First-time setup · {discordName} · {step + 1}/{STEPS.length}
+        </p>
 
-      <div className="row q-gutter-sm justify-between" style={{ flexWrap: 'wrap' }}>
-        <button
-          type="button"
-          className="q-btn q-btn-item non-selectable no-outline text-grey-5 q-btn--flat q-btn--rectangle q-btn--actionable q-btn--dense"
-          onClick={() => onSkipToLogin({ wantsDiscordShare })}
-        >
-          <span className="q-btn__wrapper col row q-anchor--skip">
-            <span className="q-btn__content text-center col items-center q-anchor--skip justify-center row">
-              <span className="block">Skip intro</span>
+        <h2 id="setup-wizard-title" className="auth-boot__heading">
+          {current.title}
+        </h2>
+        <div className="auth-boot__hint setup-wizard-body">{current.body}</div>
+
+        {last ? (
+          <label className="auth-boot__check">
+            <input
+              type="checkbox"
+              checked={wantsDiscordShare}
+              onChange={(e) => setWantsDiscordShare(e.target.checked)}
+            />
+            <span>
+              After I link, ask which shockers to share in Discord Shockers
             </span>
-          </span>
-        </button>
-        <div className="row q-gutter-sm">
+          </label>
+        ) : null}
+
+        <div className="auth-boot__actions">
+          <button
+            type="button"
+            className="q-btn q-btn-item non-selectable no-outline text-grey-5 q-btn--flat q-btn--rectangle q-btn--actionable q-btn--dense"
+            onClick={() => onSkipToLogin({ wantsDiscordShare })}
+          >
+            <span className="q-btn__wrapper col row q-anchor--skip">
+              <span className="q-btn__content text-center col items-center q-anchor--skip justify-center row">
+                <span className="block">Skip intro</span>
+              </span>
+            </span>
+          </button>
           {step > 0 ? (
             <button
               type="button"

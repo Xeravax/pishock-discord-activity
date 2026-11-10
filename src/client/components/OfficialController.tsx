@@ -59,9 +59,8 @@ type Props = {
   emptyMessage?: string;
   /** Show header CTA when the user has not linked PiShock yet */
   showLinkAccount?: boolean;
-  /** Own hubs / Claim require a linked PiShock session */
+  /** Own hubs require a linked PiShock session */
   showOwnMode?: boolean;
-  showClaim?: boolean;
   onOperate: (input: OfficialOperateInput) => void;
   /** Owner-only kill-switch latch (press in / press out) */
   onEmergencyStop?: (input: { shockerId: number; clientId?: number | string; engaged: boolean }) => void;
@@ -69,12 +68,10 @@ type Props = {
   onOpenFriends?: () => void;
   /** Switch back to the user's own hubs/shockers */
   onOpenOwnShockers?: () => void;
-  onOpenClaim?: () => void;
   onOpenMenu?: () => void;
   onOpenLinkAccount?: () => void;
   /** Cog / SO control — open Activity Limits focused on this shocker */
   onOpenShockerSettings?: (shocker: ShockerView) => void;
-  onShareHub?: () => void;
   onShareShocker?: (shocker: ShockerView) => void;
   onPair?: (shocker: ShockerView) => void;
   /** Manual hub/shocker reachability check (top-left !) */
@@ -274,17 +271,14 @@ export function OfficialController({
   emptyMessage = 'No shockers',
   showLinkAccount = false,
   showOwnMode = true,
-  showClaim = true,
   onOperate,
   onEmergencyStop,
   onSelectHub,
   onOpenFriends,
   onOpenOwnShockers,
-  onOpenClaim,
   onOpenMenu,
   onOpenLinkAccount,
   onOpenShockerSettings,
-  onShareHub,
   onShareShocker,
   onPair,
   onPingHub,
@@ -487,6 +481,17 @@ export function OfficialController({
     document.addEventListener('mousedown', onDoc);
     return () => document.removeEventListener('mousedown', onDoc);
   }, [durationMenu]);
+
+  useEffect(() => {
+    if (!hubMenuOpen) return;
+    const onDoc = (e: MouseEvent) => {
+      const t = e.target as HTMLElement | null;
+      if (t?.closest?.('.official-hub-menu-wrap')) return;
+      setHubMenuOpen(false);
+    };
+    document.addEventListener('mousedown', onDoc);
+    return () => document.removeEventListener('mousedown', onDoc);
+  }, [hubMenuOpen]);
 
   const resolveShockIntensity = () =>
     shockRandom
@@ -833,25 +838,13 @@ export function OfficialController({
                       </span>
                     </div>
                   </div>
-                  <div className="relative-position">
-                    <button
-                      type="button"
-                      className="q-btn q-btn-item non-selectable no-outline q-btn--flat q-btn--rectangle text-secondary q-btn--actionable q-focusable q-hoverable q-btn--wrap q-btn--dense"
-                      onClick={() => onShareHub?.()}
-                      disabled={!onShareHub}
-                    >
-                      <span className="q-btn__wrapper col row q-anchor--skip">
-                        <span className="q-btn__content text-center col items-center q-anchor--skip justify-center row">
-                          <i className="q-icon on-left mdi mdi-share-variant" aria-hidden />
-                          <span className="block">Share</span>
-                        </span>
-                      </span>
-                    </button>
+                  <div className="relative-position official-hub-menu-wrap">
                     <button
                       type="button"
                       className="q-btn q-btn-item non-selectable no-outline q-btn--flat q-btn--rectangle text-secondary q-btn--actionable q-focusable q-hoverable q-btn--wrap"
                       onClick={() => setHubMenuOpen((v) => !v)}
                       aria-label="Hub menu"
+                      aria-expanded={hubMenuOpen}
                     >
                       <span className="q-btn__wrapper col row q-anchor--skip">
                         <span className="q-btn__content text-center col items-center q-anchor--skip justify-center row">
@@ -861,7 +854,7 @@ export function OfficialController({
                     </button>
                     {hubMenuOpen ? (
                       <div
-                        className="q-menu q-position-engine scroll q-menu--dark"
+                        className="q-menu q-position-engine scroll q-menu--dark official-hub-menu"
                         style={{
                           position: 'absolute',
                           right: 0,
@@ -888,6 +881,7 @@ export function OfficialController({
                           <button
                             type="button"
                             className="q-item q-item-type row no-wrap q-item--dark q-item--clickable full-width bg-transparent text-left"
+                            onMouseDown={(e) => e.preventDefault()}
                             onClick={() => {
                               setHubMenuOpen(false);
                               onPingHub?.();
@@ -895,30 +889,6 @@ export function OfficialController({
                           >
                             <div className="q-item__section column q-item__section--main justify-center">
                               <div className="q-item__label text-grey-3">Ping hub</div>
-                            </div>
-                          </button>
-                          <button
-                            type="button"
-                            className="q-item q-item-type row no-wrap q-item--dark q-item--clickable full-width bg-transparent text-left"
-                            onClick={() => {
-                              setHubMenuOpen(false);
-                              onShareHub?.();
-                            }}
-                          >
-                            <div className="q-item__section column q-item__section--main justify-center">
-                              <div className="q-item__label text-grey-3">Hub shares</div>
-                            </div>
-                          </button>
-                          <button
-                            type="button"
-                            className="q-item q-item-type row no-wrap q-item--dark q-item--clickable full-width bg-transparent text-left"
-                            onClick={() => {
-                              setHubMenuOpen(false);
-                              onOpenMenu?.();
-                            }}
-                          >
-                            <div className="q-item__section column q-item__section--main justify-center">
-                              <div className="q-item__label text-grey-3">Activity menu</div>
                             </div>
                           </button>
                         </div>
@@ -1105,18 +1075,21 @@ export function OfficialController({
                               <div className="flex row justify-between items-center no-wrap">
                                 <span className="cursor-pointer text-h6 q-ml-sm">{active.name}</span>
                                 <div className="flex row justify-center items-center">
-                                  <button
-                                    type="button"
-                                    className="q-btn q-btn-item non-selectable no-outline q-btn--flat q-btn--rectangle text-secondary q-btn--actionable q-focusable q-hoverable q-btn--wrap q-btn--dense"
-                                    onClick={() => onShareShocker?.(active)}
-                                  >
-                                    <span className="q-btn__wrapper col row q-anchor--skip">
-                                      <span className="q-btn__content text-center col items-center q-anchor--skip justify-center row">
-                                        <i className="q-icon on-left mdi mdi-share-variant" aria-hidden />
-                                        <span className="block">Share</span>
+                                  {active.owned && onShareShocker ? (
+                                    <button
+                                      type="button"
+                                      className="q-btn q-btn-item non-selectable no-outline q-btn--flat q-btn--rectangle text-secondary q-btn--actionable q-focusable q-hoverable q-btn--wrap q-btn--dense"
+                                      onClick={() => onShareShocker(active)}
+                                      title="Create a PiShock share code for this shocker"
+                                    >
+                                      <span className="q-btn__wrapper col row q-anchor--skip">
+                                        <span className="q-btn__content text-center col items-center q-anchor--skip justify-center row">
+                                          <i className="q-icon on-left mdi mdi-share-variant" aria-hidden />
+                                          <span className="block">Code</span>
+                                        </span>
                                       </span>
-                                    </span>
-                                  </button>
+                                    </button>
+                                  ) : null}
                                   <button
                                     type="button"
                                     className="q-btn q-btn-item non-selectable no-outline q-btn--flat q-btn--rectangle text-secondary q-btn--actionable q-focusable q-hoverable q-btn--wrap q-btn--dense"
@@ -1628,21 +1601,6 @@ export function OfficialController({
                   );
                 })}
               </div>
-            ) : null}
-
-            {showClaim ? (
-              <button
-                type="button"
-                className="q-btn q-btn-item non-selectable no-outline text-secondary q-btn--outline q-btn--rectangle q-btn--rounded q-btn--actionable q-btn--wrap"
-                onClick={onOpenClaim}
-              >
-                <span className="q-btn__wrapper col row q-anchor--skip">
-                  <span className="q-btn__content text-center col items-center q-anchor--skip justify-start row no-wrap">
-                    <i className="q-icon on-left mdi mdi-plus" aria-hidden />
-                    <span className="block">Claim / availability</span>
-                  </span>
-                </span>
-              </button>
             ) : null}
           </div>
         ) : null}

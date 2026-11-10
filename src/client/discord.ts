@@ -14,6 +14,12 @@ export type AuthState = {
 
 let sdk: DiscordSDK | null = null;
 
+/** Drop cached SDK / location state so a reload always re-auths cleanly. */
+export function resetDiscordClient() {
+  sdk = null;
+  locationHintCache = null;
+}
+
 function clientId(): string {
   return import.meta.env.VITE_DISCORD_CLIENT_ID || 'dev_dummy_client_id';
 }
@@ -172,6 +178,8 @@ export async function bootstrapDiscord(
   }
 
   report(8, 'Connecting to Discord…');
+  // Always start from a fresh SDK instance after reload / version bump.
+  resetDiscordClient();
   const discordSdk = getDiscordSdk();
   await discordSdk.ready();
   report(22, 'Preparing activity…');

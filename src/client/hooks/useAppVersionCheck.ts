@@ -50,7 +50,11 @@ export function useAppVersionCheck(opts?: { enabled?: boolean }) {
         if (!reloadingRef.current) {
           reloadingRef.current = true;
           reloadTimer = window.setTimeout(() => {
-            window.location.reload();
+            // Hard navigation + cache bust so Discord Embedded App re-runs full authorize.
+            const next = new URL(window.location.href);
+            next.searchParams.set('_v', info.version);
+            next.searchParams.set('_r', String(Date.now()));
+            window.location.replace(next.toString());
           }, RELOAD_DELAY_MS);
         }
       } else {

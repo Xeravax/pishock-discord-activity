@@ -13,13 +13,21 @@ export function PsDialog({ open, title, onClose, children, wide }: Props) {
   if (!open) return null;
 
   return (
-    <div className="ps-dialog-root" style={{ zIndex: 7000 }}>
-      <div className="ps-dialog-backdrop" onClick={onClose} />
+    <div className="ps-dialog-root">
+      <div
+        className="ps-dialog-backdrop"
+        onClick={onClose}
+        onKeyDown={(e) => {
+          if (e.key === 'Escape') onClose();
+        }}
+      />
       <div
         className="ps-dialog-inner"
         role="dialog"
         aria-modal="true"
         aria-label={title}
+        onClick={(e) => e.stopPropagation()}
+        onMouseDown={(e) => e.stopPropagation()}
       >
         <div
           className="q-card q-card--dark q-dark bg-dark"

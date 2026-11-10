@@ -43,6 +43,8 @@ import {
   saveSetupPrefs,
   type SetupChoices,
 } from './components/SetupWizard';
+import { SetupDiscordShareScreen } from './components/SetupDiscordShareScreen';
+import type { ActivityShareConfig } from './components/AvailabilitySettings';
 import type { DiscordParticipant, ParticipantStatus } from './participants';
 import { connectRealtime, type RealtimeEvent } from './realtime';
 
@@ -102,6 +104,8 @@ export function App() {
   const [linkConfirm, setLinkConfirm] = useState<PendingLinkConfirm | null>(null);
   const [confirmBusy, setConfirmBusy] = useState(false);
   const [setupPhase, setSetupPhase] = useState(false);
+  const [setupSharePhase, setSetupSharePhase] = useState(false);
+  const [setupShareBusy, setSetupShareBusy] = useState(false);
   const [setupChoices, setSetupChoices] = useState<SetupChoices>({ wantsDiscordShare: true });
   const [actionError, setActionError] = useState<string | null>(null);
   const [legalView, setLegalView] = useState<LegalView>(null);
@@ -847,7 +851,7 @@ export function App() {
         await refreshDevices(token);
         await refreshLogs(token).catch(() => undefined);
         if (setupChoices.wantsDiscordShare) {
-          setOverlay('availability');
+          setSetupSharePhase(true);
         }
       }
     } catch (err) {
@@ -864,7 +868,7 @@ export function App() {
     setSetupChoices({ wantsDiscordShare: prefs.wantsDiscordShare });
     if (!prefs.seen) {
       setSetupPhase(true);
-      setOverlay('link');
+      setOverlay(null);
       return;
     }
     setSetupPhase(false);
@@ -1056,6 +1060,27 @@ export function App() {
     [token, participants, refreshParticipantStatus],
   );
 
+  const finishSetupShare = useCallback(() => {
+    setSetupSharePhase(false);
+    setSetupShareBusy(false);
+    setLinkError(null);
+  }, []);
+
+  const saveSetupDiscordShares = useCallback(
+    async (shares: ActivityShareConfig[]) => {
+      setSetupShareBusy(true);
+      setLinkError(null);
+      try {
+        await saveAvailability({ shares, bannedDiscordUserIds: [] });
+        finishSetupShare();
+      } catch (err) {
+        setLinkError(err instanceof Error ? err.message : String(err));
+        setSetupShareBusy(false);
+      }
+    },
+    [saveAvailability, finishSetupShare],
+  );
+
   const applyDiscordShareLimits = useCallback((shares: ShareLimitRow[]) => {
     const next: Record<number, { enabled: boolean; maxIntensity: number; maxDurationMs: number }> =
       {};
@@ -1170,6 +1195,20 @@ export function App() {
     );
   }
 
+  if (setupPhase) {
+    return (
+      <SetupWizard
+        discordName={me.user.global_name || me.user.username}
+        onComplete={(choices) => {
+          finishSetup(choices);
+        }}
+        onSkipToLogin={(choices) => {
+          finishSetup(choices);
+        }}
+      />
+    );
+  }
+
   if (linkConfirm) {
     return (
       <LinkConfirmPanel
@@ -1180,6 +1219,19 @@ export function App() {
         error={linkError}
         onConfirm={confirmPiShockLink}
         onCancel={cancelPiShockLink}
+      />
+    );
+  }
+
+  if (setupSharePhase) {
+    const ownedForSetup = ownedAndShared.filter((s) => s.owned);
+    return (
+      <SetupDiscordShareScreen
+        shockers={ownedForSetup}
+        busy={setupShareBusy}
+        error={linkError}
+        onSave={saveSetupDiscordShares}
+        onSkip={finishSetupShare}
       />
     );
   }
@@ -1262,7 +1314,6 @@ export function App() {
           pinging={pinging}
           showLinkAccount={!me.pishockLinked}
           showOwnMode={me.pishockLinked}
-          showClaim={me.pishockLinked}
           emptyMessage={
             friendBlocked
               ? 'You are blocked by this user. You cannot view or use any of their shockers.'
@@ -1346,7 +1397,6 @@ export function App() {
             setFriendsMode(true);
             if (token) void refreshParticipants(token, true);
           }}
-          onOpenClaim={() => openLinkedOverlay('availability')}
           onOpenMenu={() => setOverlay('menu')}
           onOpenLinkAccount={openLinkFlow}
           onOpenShockerSettings={(s) => {
@@ -1358,13 +1408,6 @@ export function App() {
             }
             setSettingsFocusShockerId(s.id);
             openLinkedOverlay('settings');
-          }}
-          onShareHub={() => {
-            if (!me.pishockLinked) {
-              requirePiShockLink('Link PiShock to manage hub shares and links.');
-              return;
-            }
-            setOverlay('shares');
           }}
           onPingHub={() => {
             if (!me.pishockLinked) {
@@ -1446,52 +1489,12 @@ export function App() {
         </PsDialog>
 
         <PsDialog open={overlay === 'menu'} title="Menu" onClose={() => setOverlay(null)}>
-          <div className="q-list q-list--dark">
+          <div className="q-list q-list--dark menu-action-list">
             <div className="q-pa-sm text-caption text-grey-5">
               {me.pishockLinked
-                ? 'PiShock linked — you can control your devices and opt in to Discord Shockers.'
+                ? 'PiShock linked — manage Discord availability, limits, and shares here. Mode switching is in the bottom-left dock.'
                 : 'No PiShock login needed to control Discord Shockers. Link only to share yourself or use your own devices.'}
             </div>
-            {me.pishockLinked ? (
-              <button
-                type="button"
-                className="q-item q-item-type row no-wrap q-item--dark q-item--clickable q-link cursor-pointer full-width bg-transparent text-left"
-                onClick={() => {
-                  setFriendsMode(false);
-                  setSelectedTargetIds([]);
-                  setOverlay(null);
-                }}
-              >
-                <div className="q-item__section column q-item__section--avatar q-item__section--side justify-center">
-                  <i className="q-icon mdi mdi-access-point text-secondary" aria-hidden />
-                </div>
-                <div className="q-item__section column q-item__section--main justify-center">
-                  <div className="q-item__label text-grey-3">My Shockers</div>
-                  <div className="q-item__label q-item__label--caption text-grey-5">
-                    Your hubs &amp; devices
-                  </div>
-                </div>
-              </button>
-            ) : null}
-            <button
-              type="button"
-              className="q-item q-item-type row no-wrap q-item--dark q-item--clickable q-link cursor-pointer full-width bg-transparent text-left"
-              onClick={() => {
-                setFriendsMode(true);
-                setOverlay(null);
-                if (token) void refreshParticipants(token, true);
-              }}
-            >
-              <div className="q-item__section column q-item__section--avatar q-item__section--side justify-center">
-                <i className="q-icon mdi mdi-account-group text-secondary" aria-hidden />
-              </div>
-              <div className="q-item__section column q-item__section--main justify-center">
-                <div className="q-item__label text-grey-3">Discord Shockers</div>
-                <div className="q-item__label q-item__label--caption text-grey-5">
-                  Friends in this activity
-                </div>
-              </div>
-            </button>
             {(
               [
                 ['availability', 'Available in Discord', 'mdi-account-check'],
@@ -1505,8 +1508,11 @@ export function App() {
               <button
                 key={id}
                 type="button"
-                className="q-item q-item-type row no-wrap q-item--dark q-item--clickable q-link cursor-pointer full-width bg-transparent text-left"
-                onClick={() => {
+                className="q-item q-item-type row no-wrap q-item--dark q-item--clickable cursor-pointer full-width bg-transparent text-left"
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
                   if (id === 'logs') {
                     setOverlay(null);
                     openOfficialLogs();
@@ -1527,13 +1533,20 @@ export function App() {
             {me.pishockLinked ? (
               <button
                 type="button"
-                className="q-item q-item-type row no-wrap q-item--dark q-item--clickable q-link cursor-pointer full-width bg-transparent text-left"
-                onClick={async () => {
+                className="q-item q-item-type row no-wrap q-item--dark q-item--clickable cursor-pointer full-width bg-transparent text-left"
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={async (e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
                   if (!token) return;
-                  await apiFetch('/pishock/session', token, { method: 'DELETE' });
                   setOverlay(null);
-                  setFriendsMode(true);
-                  await handleReloginNeeded();
+                  try {
+                    await apiFetch('/pishock/session', token, { method: 'DELETE' });
+                    setFriendsMode(true);
+                    await handleReloginNeeded();
+                  } catch (err) {
+                    setActionError(err instanceof Error ? err.message : String(err));
+                  }
                 }}
               >
                 <div className="q-item__section column q-item__section--avatar q-item__section--side justify-center">
@@ -1546,8 +1559,13 @@ export function App() {
             ) : (
               <button
                 type="button"
-                className="q-item q-item-type row no-wrap q-item--dark q-item--clickable q-link cursor-pointer full-width bg-transparent text-left"
-                onClick={openLinkFlow}
+                className="q-item q-item-type row no-wrap q-item--dark q-item--clickable cursor-pointer full-width bg-transparent text-left"
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  openLinkFlow();
+                }}
               >
                 <div className="q-item__section column q-item__section--avatar q-item__section--side justify-center">
                   <i className="q-icon mdi mdi-link-variant text-secondary" aria-hidden />
@@ -1562,35 +1580,18 @@ export function App() {
 
         <PsDialog
           open={overlay === 'link'}
-          title={setupPhase ? 'First-time setup' : 'Link PiShock'}
-          onClose={() => {
-            setOverlay(null);
-            setSetupPhase(false);
-          }}
+          title="Link PiShock"
+          onClose={() => setOverlay(null)}
           wide
         >
-          <div className="column q-gutter-md">
-            {setupPhase ? (
-              <SetupWizard
-                discordName={me.user.global_name || me.user.username}
-                onComplete={(choices) => {
-                  finishSetup(choices);
-                }}
-                onSkipToLogin={(choices) => {
-                  finishSetup(choices);
-                }}
-              />
-            ) : (
-              <LoginPanel
-                linking={linking}
-                loginUrl={null}
-                error={null}
-                onStart={startPiShockLogin}
-                onOpen={() => undefined}
-                onRefresh={() => undefined}
-              />
-            )}
-          </div>
+          <LoginPanel
+            linking={linking}
+            loginUrl={null}
+            error={null}
+            onStart={startPiShockLogin}
+            onOpen={() => undefined}
+            onRefresh={() => undefined}
+          />
         </PsDialog>
 
         <PsDialog
