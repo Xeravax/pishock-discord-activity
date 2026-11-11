@@ -1732,8 +1732,6 @@ export function App() {
     try {
       const result = await apiFetch<{
         emergencyStopShockerIds: number[];
-        websitePauseSynced?: boolean;
-        websitePauseErrors?: string[];
       }>('/emergency-stop', token, {
         method: 'PUT',
         body: JSON.stringify({
@@ -1746,28 +1744,6 @@ export function App() {
       setMe((prev) =>
         prev ? { ...prev, emergencyStopShockerIds: result.emergencyStopShockerIds } : prev,
       );
-      if (input.engaged) {
-        setLivePausedIds((prev) => {
-          const next = new Set(prev);
-          for (const id of input.shockerIds?.length ? input.shockerIds : [input.shockerId]) {
-            if (Number.isFinite(id) && id > 0) next.add(Math.floor(id));
-          }
-          return next;
-        });
-      } else {
-        setLivePausedIds((prev) => {
-          const next = new Set(prev);
-          for (const id of input.shockerIds?.length ? input.shockerIds : [input.shockerId]) {
-            next.delete(Math.floor(id));
-          }
-          return next;
-        });
-      }
-      if (result.websitePauseSynced === false && result.websitePauseErrors?.length) {
-        setActionError(
-          `STOP latched here, but PiShock.com pause failed: ${result.websitePauseErrors[0]}`,
-        );
-      }
       participantStatusCache = { key: '', fetchedAt: 0, map: {} };
       await refreshDevices(token).catch(() => undefined);
       await refreshLogs(token).catch(() => undefined);

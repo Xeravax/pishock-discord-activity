@@ -1857,11 +1857,28 @@ html.pip-mode .app-restart-overlay:not(.app-restart-overlay--outdated) {
 }
 
 .official-shocker-chips {
-  max-height: min(22vh, 140px);
-  overflow: auto;
-  overscroll-behavior: contain;
-  -webkit-overflow-scrolling: touch;
+  display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
   align-content: flex-start;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  margin: 0;
+  max-height: min(22vh, 140px);
+  /* Not a horizontal scrollport: that latches sideways wheel and trackpad
+     gestures, then scrolls nothing and the page freezes. */
+  overflow-x: hidden;
+  overflow-x: clip;
+  overflow-y: auto;
+  overscroll-behavior: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.official-shocker-chips > * {
+  margin: 0;
+  max-width: 100%;
 }
 
 .official-duration-menu--left {
@@ -2311,6 +2328,39 @@ html.pip-mode .app-restart-overlay:not(.app-restart-overlay--outdated) {
   line-height: 1.45;
   color: #e8e8e8;
   user-select: all;
+}
+
+.secret-value {
+  appearance: none;
+  background: none;
+  border: 0;
+  padding: 0;
+  margin: 0;
+  color: inherit;
+  font: inherit;
+  letter-spacing: 0.16em;
+  cursor: pointer;
+  user-select: none;
+}
+
+.secret-value--shown {
+  letter-spacing: normal;
+  user-select: all;
+}
+
+button.auth-boot__api-key {
+  width: 100%;
+  text-align: left;
+  cursor: pointer;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.9rem;
+  line-height: 1.45;
+  color: #e8e8e8;
+}
+
+button.auth-boot__api-key:not(.secret-value--shown) {
+  letter-spacing: 0.18em;
+  user-select: none;
 }
 
 .auth-boot__actions {

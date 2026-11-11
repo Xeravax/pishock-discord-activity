@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { AppVersionBadge } from './AppVersionBadge';
+import { SecretValue } from './SecretValue';
 
 type Props = {
   apiKey: string;
@@ -66,14 +67,15 @@ export function ApiKeyRevealPanel({
               for <strong>{pishockUsername}</strong>
             </>
           ) : null}{' '}
-          was created and stored encrypted for this activity. Copy it now if you want a backup —
-          we will not show it again. It stays valid until you unlink or PiShock rejects it
+          was created and stored encrypted for this activity. It stays hidden until you click it.
+          Copy it now if you want a backup — we will not show it again. It stays valid until you
+          unlink or PiShock rejects it
           {expiryLabel ? <> (PiShock reports expiry {expiryLabel})</> : null}.
         </p>
 
         <div className="auth-boot__account auth-boot__api-key-box">
           <div className="auth-boot__account-label">API key</div>
-          <code className="auth-boot__api-key">{apiKey}</code>
+          <SecretValue value={apiKey} label="API key" className="auth-boot__api-key" />
         </div>
 
         <div className="auth-boot__actions">

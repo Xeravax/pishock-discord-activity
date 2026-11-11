@@ -300,6 +300,51 @@ function saveControlPrefs(prefs: ControlPrefs) {
   }
 }
 
+function wheelDeltaPx(event: WheelEvent, delta: number): number {
+  if (event.deltaMode === 1) return delta * 16;
+  if (event.deltaMode === 2) return delta * window.innerHeight;
+  return delta;
+}
+
+function nearestScrollable(start: HTMLElement, axis: 'x' | 'y'): HTMLElement | null {
+  const overflowProp = axis === 'y' ? 'overflowY' : 'overflowX';
+  const scrollSize = axis === 'y' ? 'scrollHeight' : 'scrollWidth';
+  const clientSize = axis === 'y' ? 'clientHeight' : 'clientWidth';
+  let node = start.parentElement;
+  while (node) {
+    const overflow = getComputedStyle(node)[overflowProp];
+    if (
+      (overflow === 'auto' || overflow === 'scroll' || overflow === 'overlay') &&
+      node[scrollSize] > node[clientSize] + 1
+    ) {
+      return node;
+    }
+    node = node.parentElement;
+  }
+  return null;
+}
+
+/** The shocker row is not a sideways scroller. Forward wheel movement the row
+ *  can't use so a horizontal gesture over it doesn't freeze the page. */
+function passShockerChipWheel(el: HTMLElement, event: WheelEvent) {
+  const deltaX = wheelDeltaPx(event, event.deltaX);
+  const deltaY = wheelDeltaPx(event, event.deltaY);
+  const horizontal = Math.abs(deltaX) > Math.abs(deltaY);
+  const maxY = el.scrollHeight - el.clientHeight;
+  const canScrollY = maxY > 1;
+  const atTop = el.scrollTop <= 0;
+  const atBottom = el.scrollTop >= maxY - 1;
+  const verticalBlocked =
+    !canScrollY || (deltaY < 0 && atTop) || (deltaY > 0 && atBottom);
+
+  if (!horizontal && !verticalBlocked) return;
+
+  const parent = nearestScrollable(el, 'y');
+  if (!parent || deltaY === 0) return;
+  parent.scrollTop += deltaY;
+  event.preventDefault();
+}
+
 /** Exact Quasar DOM structure + classes from pishock.com/#/control */
 export function OfficialController({
   hub,
@@ -352,6 +397,8 @@ export function OfficialController({
   const [modeDockOpen, setModeDockOpen] = useState(true);
   const [estopAll, setEstopAll] = useState(false);
   const [compactDock, setCompactDock] = useState(false);
+  const shockerChipsRef = useRef<HTMLDivElement | null>(null);
+  const showShockerChips = (friendsOpen || shockers.length > 1) && shockers.length > 0;
 
   const active = useMemo(
     () => shockers.find((s) => s.id === activeId) ?? shockers[0],
@@ -958,6 +1005,14 @@ export function OfficialController({
   }, [multiShock]);
 
   useEffect(() => {
+    const el = shockerChipsRef.current;
+    if (!el) return;
+    const onWheel = (event: WheelEvent) => passShockerChipWheel(el, event);
+    el.addEventListener('wheel', onWheel, { passive: false });
+    return () => el.removeEventListener('wheel', onWheel);
+  }, [showShockerChips]);
+
+  useEffect(() => {
     if (!holdingOp) return;
     const onBlur = () => endHold();
     const onKey = (e: KeyboardEvent) => {
@@ -1248,7 +1303,7 @@ export function OfficialController({
                       </div>
                     ) : null}
                     {shockers.length > 0 ? (
-                      <div className="row q-gutter-sm official-shocker-chips">
+                      <div ref={shockerChipsRef} className="official-shocker-chips">
                         {shockers.map((s) => {
                           const selected = multiShock
                             ? selectedIds.includes(s.id)

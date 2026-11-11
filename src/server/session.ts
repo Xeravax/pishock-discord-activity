@@ -416,24 +416,6 @@ export async function setEmergencyStop(
   };
 }
 
-/** Replace the full emergency-stop set (used when mirroring PiShock website pause). */
-export async function replaceEmergencyStopShockerIds(
-  discordUserId: string,
-  shockerIds: number[],
-): Promise<number[]> {
-  const next = [
-    ...new Set(
-      shockerIds.filter((id) => Number.isFinite(id) && id > 0).map((id) => Math.floor(id)),
-    ),
-  ].sort((a, b) => a - b);
-  const user = await prisma.discordUser.update({
-    where: { id: discordUserId },
-    data: { emergencyStopShockerIds: next },
-    select: { emergencyStopShockerIds: true },
-  });
-  return user.emergencyStopShockerIds;
-}
-
 export type CommandQueueSettings = {
   enabled: boolean;
   progressMs: number;

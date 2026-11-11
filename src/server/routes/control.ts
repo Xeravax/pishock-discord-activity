@@ -13,7 +13,6 @@ import {
   operateByShare,
   pauseLink,
   pauseShare,
-  pauseShocker,
 } from '../pishock/client.js';
 import {
   ensureLogCapture,
@@ -22,10 +21,8 @@ import {
   publishOperate,
 } from '../pishock/broker.js';
 import { commandQueue } from '../pishock/command-queue-runtime.js';
-import { guardLocalEstopSync, syncEstopFromPiShockPause } from '../pishock/estop-sync.js';
 import {
   annotateShockersWithPause,
-  forgetPiShockPaused,
   getPiShockPausedShockerIds,
   invalidatePiShockPauseCache,
   rememberPiShockPaused,
@@ -51,6 +48,7 @@ import {
   clearPiShockSession,
   listCommandLogs,
   listPublicCommandLogs,
+  getEmergencyStopShockerIds,
   logCommand,
   setEmergencyStops,
 } from '../session.js';
@@ -149,22 +147,18 @@ export const controlRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app, op
       const snapshot = await fetchControlSnapshot(req.pishockCreds!);
       const clientIds = collectHubClientIds(snapshot.hubs);
       ensureLogCapture(req.discordUser.id, req.pishockCreds!, clientIds);
-      // Website pause → Discord e-stop (realtime broadcast when the set changes).
-      const estop = await syncEstopFromPiShockPause(
-        req.discordUser.id,
-        req.pishockCreds!,
-        snapshot,
-      ).catch(() => null);
       invalidatePiShockPauseCache(req.discordUser.id);
-      const pausedIds = await getPiShockPausedShockerIds(
-        req.discordUser.id,
-        req.pishockCreds!,
-      ).catch(() => [] as number[]);
+      const [emergencyStopShockerIds, pausedIds] = await Promise.all([
+        getEmergencyStopShockerIds(req.discordUser.id),
+        getPiShockPausedShockerIds(req.discordUser.id, req.pishockCreds!).catch(
+          () => [] as number[],
+        ),
+      ]);
       return {
         ...snapshot,
         shockers: annotateShockersWithPause(snapshot.shockers ?? [], pausedIds),
         online: getOnlineMap(req.discordUser.id),
-        emergencyStopShockerIds: estop?.emergencyStopShockerIds,
+        emergencyStopShockerIds,
         pausedShockerIds: pausedIds,
       };
     } catch (err) {
@@ -236,39 +230,6 @@ export const controlRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app, op
       await commandQueue.hardClear(req.discordUser.id, { endActiveDevice: false });
     }
 
-    // Mirror STOP ↔ PiShock.com pause (ps.pishock.com/pishock/PauseShocker).
-    guardLocalEstopSync(req.discordUser.id);
-    const pauseErrors: string[] = [];
-    for (const shockerId of shockerIds) {
-      const row = findShockerInSnapshot(snapshot, shockerId);
-      const clientId =
-        (shockerIds.length === 1 ? verifyOwnedClientId(snapshot, body.clientId) : null) ??
-        (row ? String(row.ClientId ?? row.clientId ?? '') || null : null);
-      if (!clientId) {
-        pauseErrors.push(`shocker ${shockerId}: missing hub client id`);
-        continue;
-      }
-      try {
-        await pauseShocker(creds, shockerId, body.engaged, clientId);
-        if (body.engaged) {
-          rememberPiShockPaused(req.discordUser.id, { shockerId });
-        } else {
-          forgetPiShockPaused(req.discordUser.id, { shockerId });
-        }
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        console.warn(
-          `[pishock] pauseShocker ${body.engaged ? 'on' : 'off'} failed for ${shockerId}:`,
-          message,
-        );
-        pauseErrors.push(`shocker ${shockerId}: ${message}`);
-        if (err instanceof PiShockApiError && err.needsRelogin) {
-          return handlePiShockError(err, req.discordUser.id, reply);
-        }
-      }
-    }
-    invalidatePiShockPauseCache(req.discordUser.id);
-
     const result = await setEmergencyStops(req.discordUser.id, shockerIds, body.engaged);
     for (const shockerId of shockerIds) {
       const row = findShockerInSnapshot(snapshot, shockerId);
@@ -307,8 +268,6 @@ export const controlRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app, op
       ok: true,
       engaged: result.engagedIds.includes(primaryId),
       emergencyStopShockerIds: result.emergencyStopShockerIds,
-      websitePauseSynced: pauseErrors.length === 0,
-      websitePauseErrors: pauseErrors.length ? pauseErrors : undefined,
     };
   });
 
@@ -421,7 +380,7 @@ export const controlRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app, op
       return { ok: true, via: 'broker', ended: true };
     }
 
-    // Refuse before hitting PiShock when website pause / e-stop mirror is known.
+    // Refuse before hitting PiShock when the site already reports this shocker paused.
     if (shockerId != null) {
       const pausedIds = await getPiShockPausedShockerIds(req.discordUser.id, creds);
       if (pausedIds.includes(shockerId)) {

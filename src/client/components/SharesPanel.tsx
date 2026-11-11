@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { SecretValue } from './SecretValue';
 
 type LinkRow = {
   LinkId?: number;
@@ -177,7 +178,7 @@ export function SharesPanel({
               row.shockerName ??
               row.Name ??
               row.name ??
-              (code ? `Share ${code}` : `Share ${id}`);
+              `Share ${id}`;
             const owner = row.Username ?? row.username;
             const paused = Boolean(
               row.Paused ?? row.paused ?? row.SharePaused ?? row.sharePaused,
@@ -187,7 +188,12 @@ export function SharesPanel({
                 <div className="q-item__label text-secondary">{title}</div>
                 <div className="q-item__label q-item__label--caption text-grey-5">
                   {owner ? `${owner} · ` : ''}
-                  {code ? `Code ${code} · ` : ''}
+                  {code ? (
+                    <>
+                      Code <SecretValue value={code} label="share code" />
+                      {' · '}
+                    </>
+                  ) : null}
                   {paused ? 'Paused' : 'Active'}
                 </div>
               </div>
@@ -209,7 +215,12 @@ export function SharesPanel({
               <div key={id} className="q-item q-item-type column q-pa-sm">
                 <div className="q-item__label text-secondary">{title}</div>
                 <div className="q-item__label q-item__label--caption text-grey-5">
-                  {code ? `Code ${code} · ` : ''}
+                  {code ? (
+                    <>
+                      Code <SecretValue value={code} label="link code" />
+                      {' · '}
+                    </>
+                  ) : null}
                   {paused ? 'Paused' : 'Active'}
                 </div>
                 <div className="row q-gutter-sm q-mt-sm">
