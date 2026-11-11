@@ -1,4 +1,7 @@
-import { isPiShockRowPaused } from '../../shared/pishock-pause.js';
+import {
+  isPiShockRowExplicitlyUnpaused,
+  isPiShockRowPaused,
+} from '../../shared/pishock-pause.js';
 import { broadcastRealtimeAll } from '../realtime.js';
 import {
   getEmergencyStopShockerIds,
@@ -6,12 +9,18 @@ import {
 } from '../session.js';
 import type { ControlSnapshot, PiShockCreds } from './client.js';
 import { fetchControlSnapshot } from './client.js';
-import { invalidatePiShockPauseCache, rememberPiShockPaused } from './pause.js';
+import {
+  getPiShockPausedShockerIds,
+  invalidatePiShockPauseCache,
+  rememberPiShockPaused,
+  shockersFromUserDevices,
+} from './pause.js';
+import { getUserDevices } from './client.js';
 
 /** Skip website→Discord sync briefly after a local e-stop toggle (pause API may lag). */
 const localGuardUntil = new Map<string, number>();
 
-export function guardLocalEstopSync(discordUserId: string, ms = 6_000): void {
+export function guardLocalEstopSync(discordUserId: string, ms = 8_000): void {
   localGuardUntil.set(discordUserId, Date.now() + Math.max(0, ms));
 }
 
@@ -21,7 +30,7 @@ function shockerIdOf(row: Record<string, unknown>): number | null {
   return Math.floor(id);
 }
 
-/** Owned shocker ids PiShock currently reports as paused. */
+/** Owned shocker ids PiShock currently reports as paused (snapshot rows only). */
 export function pausedOwnedShockerIds(snapshot: ControlSnapshot): number[] {
   const ids = new Set<number>();
   for (const raw of snapshot.shockers ?? []) {
@@ -42,8 +51,10 @@ function sameIds(a: number[], b: number[]): boolean {
 }
 
 /**
- * Mirror PiShock.com pause → Discord emergency-stop latch, and notify the activity.
- * No-ops for a few seconds after a local e-stop so engage/release is not undone by lag.
+ * Mirror website pause ↔ Discord emergency-stop without wiping unknown state.
+ * - Paused on PiShock → latch e-stop
+ * - Explicitly unpaused on PiShock → release e-stop
+ * - Missing pause flags → leave the current latch alone (never clear blindly)
  */
 export async function syncEstopFromPiShockPause(
   discordUserId: string,
@@ -57,27 +68,54 @@ export async function syncEstopFromPiShockPause(
   }
 
   const snap = snapshot ?? (await fetchControlSnapshot(creds));
-  const paused = pausedOwnedShockerIds(snap);
   const current = await getEmergencyStopShockerIds(discordUserId);
-  if (sameIds(current, paused)) {
+  const pausedFromLists = new Set(await getPiShockPausedShockerIds(discordUserId, creds));
+
+  // Also scan GetUserDevices for explicit unpause so we can release the latch.
+  const devices = await getUserDevices(creds).catch(() => null);
+  const deviceRows = shockersFromUserDevices(devices?.data);
+  const explicitlyUnpaused = new Set<number>();
+  for (const row of deviceRows) {
+    const id = shockerIdOf(row);
+    if (id == null) continue;
+    if (isPiShockRowPaused(row)) pausedFromLists.add(id);
+    else if (isPiShockRowExplicitlyUnpaused(row)) explicitlyUnpaused.add(id);
+  }
+  for (const raw of snap.shockers ?? []) {
+    if (!raw || typeof raw !== 'object') continue;
+    const row = raw as Record<string, unknown>;
+    const id = shockerIdOf(row);
+    if (id == null) continue;
+    if (isPiShockRowPaused(row)) pausedFromLists.add(id);
+    else if (isPiShockRowExplicitlyUnpaused(row)) explicitlyUnpaused.add(id);
+  }
+
+  const next = new Set(current);
+  for (const id of pausedFromLists) next.add(id);
+  for (const id of explicitlyUnpaused) {
+    if (!pausedFromLists.has(id)) next.delete(id);
+  }
+
+  const nextList = [...next].sort((a, b) => a - b);
+  if (sameIds(current, nextList)) {
     return { changed: false, emergencyStopShockerIds: current };
   }
 
-  const next = await replaceEmergencyStopShockerIds(discordUserId, paused);
+  const saved = await replaceEmergencyStopShockerIds(discordUserId, nextList);
   invalidatePiShockPauseCache(discordUserId);
-  for (const id of paused) {
+  for (const id of pausedFromLists) {
     rememberPiShockPaused(discordUserId, { shockerId: id });
   }
 
-  const primaryId = next[0] ?? current[0] ?? paused[0] ?? 0;
+  const primaryId = saved[0] ?? current[0] ?? nextList[0] ?? 0;
   broadcastRealtimeAll({
     type: 'emergency_stop',
     ownerDiscordUserId: discordUserId,
     shockerId: primaryId,
-    engaged: next.includes(primaryId),
-    emergencyStopShockerIds: next,
+    engaged: saved.includes(primaryId),
+    emergencyStopShockerIds: saved,
     at: Date.now(),
   });
 
-  return { changed: true, emergencyStopShockerIds: next };
+  return { changed: true, emergencyStopShockerIds: saved };
 }

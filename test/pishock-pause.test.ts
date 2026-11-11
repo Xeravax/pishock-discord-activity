@@ -5,7 +5,11 @@ import {
   isPiShockRowPaused,
 } from '../src/shared/pishock-pause.js';
 import { pausedOwnedShockerIds } from '../src/server/pishock/estop-sync.js';
-import { pausedMarksFromRows } from '../src/server/pishock/pause.js';
+import {
+  annotateShockersWithPause,
+  pausedMarksFromRows,
+  shockersFromUserDevices,
+} from '../src/server/pishock/pause.js';
 
 describe('PiShock pause flags', () => {
   it('treats shocker and share pause as paused', () => {
@@ -44,5 +48,28 @@ describe('PiShock pause flags', () => {
       links: [],
     });
     assert.deepEqual(ids, [7, 9]);
+  });
+
+  it('annotates missing pause flags onto shockers known paused', () => {
+    const rows = annotateShockersWithPause(
+      [{ Id: 7, Name: 'A' }, { Id: 8, Name: 'B', Paused: false }],
+      [7],
+    ) as Array<Record<string, unknown>>;
+    assert.equal(rows[0]?.Paused, true);
+    assert.equal(rows[1]?.Paused, false);
+  });
+
+  it('flattens GetUserDevices pause flags', () => {
+    const rows = shockersFromUserDevices([
+      {
+        clientId: 1,
+        shockers: [
+          { shockerId: 11, name: 'Leg', isPaused: true },
+          { shockerId: 12, name: 'Arm', isPaused: false },
+        ],
+      },
+    ]);
+    const marks = pausedMarksFromRows(rows);
+    assert.deepEqual(marks.shockerIds, [11]);
   });
 });

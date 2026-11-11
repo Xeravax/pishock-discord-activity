@@ -24,7 +24,9 @@ import {
 import { commandQueue } from '../pishock/command-queue-runtime.js';
 import { guardLocalEstopSync, syncEstopFromPiShockPause } from '../pishock/estop-sync.js';
 import {
+  annotateShockersWithPause,
   forgetPiShockPaused,
+  getPiShockPausedShockerIds,
   invalidatePiShockPauseCache,
   rememberPiShockPaused,
 } from '../pishock/pause.js';
@@ -153,10 +155,17 @@ export const controlRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app, op
         req.pishockCreds!,
         snapshot,
       ).catch(() => null);
+      invalidatePiShockPauseCache(req.discordUser.id);
+      const pausedIds = await getPiShockPausedShockerIds(
+        req.discordUser.id,
+        req.pishockCreds!,
+      ).catch(() => [] as number[]);
       return {
         ...snapshot,
+        shockers: annotateShockersWithPause(snapshot.shockers ?? [], pausedIds),
         online: getOnlineMap(req.discordUser.id),
         emergencyStopShockerIds: estop?.emergencyStopShockerIds,
+        pausedShockerIds: pausedIds,
       };
     } catch (err) {
       return handlePiShockError(err, req.discordUser.id, reply);
@@ -227,21 +236,35 @@ export const controlRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app, op
       await commandQueue.hardClear(req.discordUser.id, { endActiveDevice: false });
     }
 
-    // Mirror STOP ↔ PiShock.com pause so website + Discord share the same latch.
+    // Mirror STOP ↔ PiShock.com pause (ps.pishock.com/pishock/PauseShocker).
     guardLocalEstopSync(req.discordUser.id);
+    const pauseErrors: string[] = [];
     for (const shockerId of shockerIds) {
+      const row = findShockerInSnapshot(snapshot, shockerId);
+      const clientId =
+        (shockerIds.length === 1 ? verifyOwnedClientId(snapshot, body.clientId) : null) ??
+        (row ? String(row.ClientId ?? row.clientId ?? '') || null : null);
+      if (!clientId) {
+        pauseErrors.push(`shocker ${shockerId}: missing hub client id`);
+        continue;
+      }
       try {
-        await pauseShocker(creds, shockerId, body.engaged);
+        await pauseShocker(creds, shockerId, body.engaged, clientId);
         if (body.engaged) {
           rememberPiShockPaused(req.discordUser.id, { shockerId });
         } else {
           forgetPiShockPaused(req.discordUser.id, { shockerId });
         }
       } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
         console.warn(
           `[pishock] pauseShocker ${body.engaged ? 'on' : 'off'} failed for ${shockerId}:`,
-          err instanceof Error ? err.message : err,
+          message,
         );
+        pauseErrors.push(`shocker ${shockerId}: ${message}`);
+        if (err instanceof PiShockApiError && err.needsRelogin) {
+          return handlePiShockError(err, req.discordUser.id, reply);
+        }
       }
     }
     invalidatePiShockPauseCache(req.discordUser.id);
@@ -284,6 +307,8 @@ export const controlRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app, op
       ok: true,
       engaged: result.engagedIds.includes(primaryId),
       emergencyStopShockerIds: result.emergencyStopShockerIds,
+      websitePauseSynced: pauseErrors.length === 0,
+      websitePauseErrors: pauseErrors.length ? pauseErrors : undefined,
     };
   });
 
@@ -394,6 +419,18 @@ export const controlRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app, op
         return reply.code(502).send({ error: 'Failed to end hold via broker' });
       }
       return { ok: true, via: 'broker', ended: true };
+    }
+
+    // Refuse before hitting PiShock when website pause / e-stop mirror is known.
+    if (shockerId != null) {
+      const pausedIds = await getPiShockPausedShockerIds(req.discordUser.id, creds);
+      if (pausedIds.includes(shockerId)) {
+        rememberPiShockPaused(req.discordUser.id, { shockerId, shareCode });
+        return reply.code(503).send({
+          error: 'This shocker or share is paused on PiShock',
+          code: 'PISHOCK_PAUSED',
+        });
+      }
     }
 
     const hold = Boolean(body.hold) || operation === 'hold';

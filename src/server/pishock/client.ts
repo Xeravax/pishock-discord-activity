@@ -1,7 +1,6 @@
 import {
   AGENT_NAME,
   PISHOCK_API,
-  PISHOCK_DO_API,
   PISHOCK_LEGACY_API,
   ShockerOp,
 } from '../../shared/constants.js';
@@ -256,57 +255,117 @@ export async function pauseShare(creds: PiShockCreds, shareId: number, pauseStat
 }
 
 /**
- * Pause/unpause an owned shocker on PiShock.com (website STOP/pause latch).
- * Prefers the new API; falls back to legacy do.pishock.com PauseShocker.
+ * Pause/unpause an owned shocker the same way pishock.com does:
+ * POST https://ps.pishock.com/pishock/PauseShocker|UnpauseShocker
+ * with X-PiShock-UserId / X-PiShock-Token and { ShockerId, ClientId, UserId, Token }.
  */
 export async function pauseShocker(
   creds: PiShockCreds,
   shockerId: number,
   pause: boolean,
+  clientId: string | number,
 ): Promise<{ status: number; data: unknown; raw: string }> {
   const id = Math.floor(Number(shockerId));
   if (!Number.isFinite(id) || id <= 0) {
     throw new PiShockApiError(400, 'pauseShocker requires a valid shocker id', false);
   }
-
-  try {
-    const res = await request(creds, 'PATCH', `${PISHOCK_API}/Shockers/Pause/${id}`, {
-      PauseState: pause,
-    });
-    if (res.status !== 404 && res.status !== 405) return res;
-  } catch (err) {
-    if (err instanceof PiShockApiError && err.needsRelogin) throw err;
-    // Missing route or other soft failure → legacy PauseShocker
+  const hubIdRaw = String(clientId ?? '').trim().replace(/^c/i, '');
+  const hubId = Number(hubIdRaw);
+  if (!Number.isFinite(hubId) || hubId <= 0) {
+    throw new PiShockApiError(400, 'pauseShocker requires a valid hub client id', false);
   }
 
+  const action = pause ? 'PauseShocker' : 'UnpauseShocker';
+  // Website uses lowercase /pishock/; older docs use /PiShock/.
+  const urls = [
+    `${PISHOCK_LEGACY_API}/pishock/${action}`,
+    `${PISHOCK_LEGACY_API}/PiShock/${action}`,
+  ];
   const body = {
-    Username: creds.username || '',
-    Apikey: creds.token,
     ShockerId: id,
-    Pause: pause,
+    ClientId: Math.floor(hubId),
+    UserId: creds.userId,
+    Token: creds.token,
   };
-  const res = await fetch(`${PISHOCK_DO_API}/PauseShocker`, {
-    method: 'POST',
+  const headers: Record<string, string> = {
+    Accept: 'application/json, text/plain, */*',
+    'Content-Type': 'application/json',
+    'User-Agent': AGENT_NAME,
+    'X-PiShock-UserId': String(creds.userId),
+    'X-PiShock-Token': creds.token,
+    Referer: 'https://pishock.com/',
+  };
+
+  let lastRaw = '';
+  let lastStatus = 0;
+  for (const url of urls) {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(body),
+    });
+    const raw = await res.text();
+    lastRaw = raw;
+    lastStatus = res.status;
+    const lowered = raw.toLowerCase();
+    if (res.status === 401 || lowered.includes('not authorized') || lowered.includes('unauthorized')) {
+      throw new PiShockApiError(401, raw.slice(0, 200) || `${action} unauthorized`, true);
+    }
+    if (res.status === 404 || res.status === 405) continue;
+    if (!res.ok) {
+      throw new PiShockApiError(res.status, raw.slice(0, 200) || `${action} failed`, false);
+    }
+    // Website returns plain text like "Shocker Paused" / "Shocker Unpaused".
+    const ok =
+      !raw.trim() ||
+      /success/i.test(raw) ||
+      lowered.includes('paused') ||
+      lowered.includes('unpaused') ||
+      lowered.includes('operation successful');
+    if (!ok) {
+      throw new PiShockApiError(502, raw.slice(0, 200) || `${action} rejected`, false);
+    }
+    return { status: res.status, data: raw || null, raw };
+  }
+
+  throw new PiShockApiError(
+    lastStatus || 404,
+    lastRaw.slice(0, 200) || `${action} route unavailable`,
+    false,
+  );
+}
+
+/** Legacy device list — reliable `isPaused` flags for owned shockers. */
+export async function getUserDevices(creds: PiShockCreds): Promise<{
+  status: number;
+  data: unknown;
+  raw: string;
+}> {
+  const query = new URLSearchParams({
+    UserId: String(creds.userId),
+    Token: creds.token,
+  });
+  if (creds.mode !== 'session') query.set('api', 'true');
+  const res = await fetch(`${PISHOCK_LEGACY_API}/PiShock/GetUserDevices?${query}`, {
+    method: 'GET',
     headers: {
       Accept: 'application/json, text/plain',
-      'Content-Type': 'application/json',
       'User-Agent': AGENT_NAME,
     },
-    body: JSON.stringify(body),
   });
   const raw = await res.text();
+  if (res.status === 401) {
+    throw new PiShockApiError(401, raw || 'Unauthorized');
+  }
   if (!res.ok) {
-    throw new PiShockApiError(res.status, raw.slice(0, 200) || 'PauseShocker failed', res.status === 401);
+    return { status: res.status, data: null, raw };
   }
-  const ok =
-    /success/i.test(raw) ||
-    raw.trim() === '' ||
-    raw.includes('Operation Successful');
-  if (!ok && raw.trim()) {
-    // Soft-fail unknown text only when HTTP was 200 — some keys return empty body.
-    console.warn('[pishock] PauseShocker unexpected body', raw.slice(0, 120));
+  if (!raw) return { status: res.status, data: null, raw };
+  try {
+    return { status: res.status, data: JSON.parse(raw) as unknown, raw };
+  } catch {
+    return { status: res.status, data: null, raw };
   }
-  return { status: res.status, data: raw || null, raw };
 }
 
 export async function deleteShare(creds: PiShockCreds, shareId: number) {

@@ -242,12 +242,26 @@ export function App() {
   }, []);
 
   const refreshDevices = useCallback(async (accessToken: string) => {
-    const data = await apiFetch<DevicesResponse & { emergencyStopShockerIds?: number[] }>(
-      '/devices',
-      accessToken,
-    );
+    const data = await apiFetch<
+      DevicesResponse & {
+        emergencyStopShockerIds?: number[];
+        pausedShockerIds?: number[];
+      }
+    >('/devices', accessToken);
     setDevices(data);
-    setLivePausedIds((prev) => dropResolvedPause(prev, pauseRowsFromDevices(data)));
+    setLivePausedIds((prev) => {
+      const next = new Set(prev);
+      for (const id of data.pausedShockerIds ?? []) {
+        if (Number.isFinite(id) && id > 0) next.add(Math.floor(id));
+      }
+      for (const row of pauseRowsFromDevices(data)) {
+        const id = Number(row.ShockerId ?? row.shockerId ?? row.Id ?? row.id);
+        if (!Number.isFinite(id) || id <= 0) continue;
+        if (isPiShockRowPaused(row)) next.add(Math.floor(id));
+        else if (isPiShockRowExplicitlyUnpaused(row)) next.delete(Math.floor(id));
+      }
+      return next;
+    });
     if (Array.isArray(data.emergencyStopShockerIds)) {
       setMe((prev) =>
         prev
@@ -1716,23 +1730,46 @@ export function App() {
     setBusy(true);
     setActionError(null);
     try {
-      const result = await apiFetch<{ emergencyStopShockerIds: number[] }>(
-        '/emergency-stop',
-        token,
-        {
-          method: 'PUT',
-          body: JSON.stringify({
-            shockerId: input.shockerId,
-            shockerIds: input.shockerIds,
-            clientId: input.clientId,
-            engaged: input.engaged,
-          }),
-        },
-      );
+      const result = await apiFetch<{
+        emergencyStopShockerIds: number[];
+        websitePauseSynced?: boolean;
+        websitePauseErrors?: string[];
+      }>('/emergency-stop', token, {
+        method: 'PUT',
+        body: JSON.stringify({
+          shockerId: input.shockerId,
+          shockerIds: input.shockerIds,
+          clientId: input.clientId,
+          engaged: input.engaged,
+        }),
+      });
       setMe((prev) =>
         prev ? { ...prev, emergencyStopShockerIds: result.emergencyStopShockerIds } : prev,
       );
+      if (input.engaged) {
+        setLivePausedIds((prev) => {
+          const next = new Set(prev);
+          for (const id of input.shockerIds?.length ? input.shockerIds : [input.shockerId]) {
+            if (Number.isFinite(id) && id > 0) next.add(Math.floor(id));
+          }
+          return next;
+        });
+      } else {
+        setLivePausedIds((prev) => {
+          const next = new Set(prev);
+          for (const id of input.shockerIds?.length ? input.shockerIds : [input.shockerId]) {
+            next.delete(Math.floor(id));
+          }
+          return next;
+        });
+      }
+      if (result.websitePauseSynced === false && result.websitePauseErrors?.length) {
+        setActionError(
+          `STOP latched here, but PiShock.com pause failed: ${result.websitePauseErrors[0]}`,
+        );
+      }
       participantStatusCache = { key: '', fetchedAt: 0, map: {} };
+      await refreshDevices(token).catch(() => undefined);
       await refreshLogs(token).catch(() => undefined);
       if (participants.length) {
         await refreshParticipantStatus(token, participants, true).catch(() => undefined);
