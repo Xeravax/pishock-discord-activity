@@ -29,7 +29,7 @@ export type ModeLimitsValue = {
   requiredWarningLevel: WarningLevel;
 };
 
-type ModeKey = 'shock' | 'vibrate' | 'beep' | 'extra';
+type ModeKey = 'shock' | 'vibrate' | 'extra';
 
 type Props = {
   value: ModeLimitsValue;
@@ -137,7 +137,7 @@ function ModeColumn({
     <section
       className={`mode-limits-col${expanded ? ' is-open' : ' is-collapsed'}${
         enabled ? '' : ' is-disabled'
-      }`}
+      }${modeKey === 'extra' ? ' mode-limits-col--wide' : ''}`}
       data-mode={modeKey}
     >
       <header className="mode-limits-col__head">
@@ -192,6 +192,7 @@ function bandSummary(band: ModeBand): string {
 
 function extraSummary(value: ModeLimitsValue, showWarning: boolean): string {
   const parts: string[] = [];
+  parts.push(value.canBeep ? 'Beep on' : 'Beep off');
   parts.push(value.canHold ? 'Hold on' : 'Hold off');
   if (showWarning) {
     parts.push(
@@ -203,7 +204,7 @@ function extraSummary(value: ModeLimitsValue, showWarning: boolean): string {
   return parts.join(' · ');
 }
 
-/** Shock / vibe / beep menus + Extra options (hold + warning). */
+/** Shock / vibe menus + Extra options (beep, hold, warning). */
 export function ModeLimitsEditor({
   value,
   deviceMaxIntensity,
@@ -218,7 +219,6 @@ export function ModeLimitsEditor({
   const [openModes, setOpenModes] = useState<Record<ModeKey, boolean>>({
     shock: true,
     vibrate: true,
-    beep: true,
     extra: true,
   });
 
@@ -270,26 +270,6 @@ export function ModeLimitsEditor({
         </ModeColumn>
 
         <ModeColumn
-          modeKey="beep"
-          title="Beep"
-          enabled={value.canBeep}
-          open={openModes.beep}
-          showEnableToggle
-          disabled={disabled}
-          summary={bandSummary(value.beep)}
-          onToggleOpen={() => toggleOpen('beep')}
-          onToggleEnabled={(canBeep) => onChange({ ...value, canBeep })}
-        >
-          <BandSliders
-            band={value.beep}
-            deviceMaxI={deviceMaxI}
-            deviceMaxD={deviceMaxD}
-            disabled={disabled}
-            onChange={(beep) => onChange({ ...value, beep })}
-          />
-        </ModeColumn>
-
-        <ModeColumn
           modeKey="extra"
           title="Extra options"
           enabled
@@ -300,6 +280,20 @@ export function ModeLimitsEditor({
           onToggleOpen={() => toggleOpen('extra')}
         >
           <div className="mode-limits-extra">
+            <label className="mode-limits-extra__row">
+              <input
+                type="checkbox"
+                checked={value.canBeep}
+                disabled={disabled}
+                style={{ accentColor: '#79c6db' }}
+                onChange={(e) => onChange({ ...value, canBeep: e.target.checked })}
+              />
+              <span>
+                <span className="mode-limits-extra__label">Beep</span>
+                <span className="mode-limits-col__hint">Allow beep commands</span>
+              </span>
+            </label>
+
             <label className="mode-limits-extra__row">
               <input
                 type="checkbox"

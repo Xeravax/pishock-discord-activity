@@ -3,6 +3,8 @@ export const AGENT_NAME = 'Discord PiShock Activity';
 
 export const PISHOCK_API = 'https://api.pishock.com';
 export const PISHOCK_AUTH = 'https://auth.pishock.com';
+/** Legacy host. POST /Share on the new API often 401s an API key that Hub/Shockers accept. */
+export const PISHOCK_LEGACY_API = 'https://ps.pishock.com';
 export const PISHOCK_RELAY = 'wss://relay.pishock.com';
 export const PISHOCK_BROKER = 'wss://broker.pishock.com/v2';
 export const PISHOCK_LOGIN = 'https://login.pishock.com';

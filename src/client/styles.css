@@ -698,6 +698,30 @@ html.pip-mode #root > * {
   color: #f4d600;
 }
 
+.estop-scope {
+  display: flex;
+  margin-top: 2px;
+}
+
+.estop-scope button {
+  font-size: 10px;
+  line-height: 1.2;
+  padding: 2px 7px;
+  border: 1px solid rgba(244, 67, 54, 0.55);
+  background: transparent;
+  color: #ffcdd2;
+  cursor: pointer;
+}
+
+.estop-scope button + button {
+  border-left: none;
+}
+
+.estop-scope button.on {
+  background: #c62828;
+  color: #fff;
+}
+
 .access-banner--share-bypass {
   border-color: rgba(121, 198, 219, 0.4);
   background: rgba(18, 36, 42, 0.92);
@@ -2529,6 +2553,10 @@ html.pip-mode .app-restart-overlay:not(.app-restart-overlay--outdated) {
 
 .mode-limits-col.is-open {
   grid-column: span 1;
+}
+
+.mode-limits-col.mode-limits-col--wide {
+  grid-column: 1 / -1;
 }
 
 .mode-limits-col.is-collapsed {

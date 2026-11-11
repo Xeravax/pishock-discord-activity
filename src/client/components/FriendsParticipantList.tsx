@@ -44,7 +44,7 @@ export function FriendsParticipantList({
       <div className="row items-center justify-between official-friends-header">
         <div className="text-secondary official-friends-title">
           DISCORD SHOCKERS
-          {multiSelect ? (individualIntensity ? ' · MULTI · EACH' : ' · MULTI') : ''}
+          {multiSelect ? (individualIntensity ? ' · MULTI · PER PERSON' : ' · MULTI') : ''}
         </div>
         <div className="row items-center no-wrap q-gutter-xs">
           {onToggleMultiSelect ? (
@@ -170,7 +170,7 @@ export function FriendsParticipantList({
                         {primary.shockerName}
                         {limits ? ` · ${limits}` : ''}
                         {flags ? ` · ${flags}` : ''}
-                        {primary.emergencyStop ? ' · E-STOP' : ''}
+                        {primary.emergencyStop ? ' · E-STOP' : primary.paused ? ' · Paused' : ''}
                       </span>
                     ) : null}
                   </span>
@@ -212,6 +212,7 @@ function statusLabel(status?: ParticipantStatus): string {
   if (!status) return 'Unknown';
   if (status.bannedYou) return 'Blocked';
   if (status.emergencyStop || status.shockers?.some((s) => s.emergencyStop)) return 'E-STOP';
+  if (status.shockers?.length && status.shockers.every((s) => s.paused)) return 'Paused';
   if (!status.linked) return 'Not logged in · Disabled';
   if (status.queue?.starOnly && !status.queue.starredByThem) return 'Stars only';
   if (status.queue?.enabled && status.queue.halted) return 'Queue closed';
@@ -235,6 +236,9 @@ function statusDetail(status?: ParticipantStatus): string | null {
   }
   if (status.emergencyStop || status.shockers?.every((s) => s.emergencyStop)) {
     return 'Emergency stop armed — controls disabled';
+  }
+  if (status.shockers?.length && status.shockers.every((s) => s.paused || s.emergencyStop)) {
+    return 'Paused on PiShock — controls disabled';
   }
   if (!status.linked) {
     return 'They are not logged in to PiShock — control is disabled';

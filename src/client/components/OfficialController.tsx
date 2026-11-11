@@ -84,8 +84,15 @@ type Props = {
   /** Own hubs require a linked PiShock session */
   showOwnMode?: boolean;
   onOperate: (input: OfficialOperateInput) => void;
-  /** Owner-only kill-switch latch (press in / press out) */
-  onEmergencyStop?: (input: { shockerId: number; clientId?: number | string; engaged: boolean }) => void;
+  /** Owned shockers used by the All emergency-stop scope (not hub-filtered). */
+  estopShockers?: ShockerView[];
+  /** Owner-only kill-switch latch (press in / press out). */
+  onEmergencyStop?: (input: {
+    shockerId: number;
+    shockerIds?: number[];
+    clientId?: number | string;
+    engaged: boolean;
+  }) => void;
   onSelectHub?: (hubId: string) => void;
   onOpenFriends?: () => void;
   /** Switch back to the user's own hubs/shockers */
@@ -311,6 +318,7 @@ export function OfficialController({
   showLinkAccount = false,
   showOwnMode = true,
   onOperate,
+  estopShockers,
   onEmergencyStop,
   onSelectHub,
   onOpenFriends,
@@ -342,6 +350,7 @@ export function OfficialController({
   });
   /** Collapsed mode dock on compact viewports so it doesn't cover the remote */
   const [modeDockOpen, setModeDockOpen] = useState(true);
+  const [estopAll, setEstopAll] = useState(false);
   const [compactDock, setCompactDock] = useState(false);
 
   const active = useMemo(
@@ -585,8 +594,14 @@ export function OfficialController({
     'none',
   );
   const effectiveWarningLevel = atLeastWarning(warningLevel, requiredWarningFloor);
-  const eStop = selectedShockers.some((s) => s.emergencyStop);
-  const controlsLocked = eStop || forceControlsLocked;
+  const activeBlocked = Boolean(active && (active.emergencyStop || active.paused));
+  const selectedAllBlocked =
+    selectedShockers.length > 0 &&
+    selectedShockers.every((s) => s.emergencyStop || s.paused);
+  const controlsLocked = forceControlsLocked || (multiShock ? selectedAllBlocked : activeBlocked);
+  const estopPool = (estopShockers ?? shockers).filter((s) => s.owned);
+  const stopTargets = estopAll ? estopPool : active?.owned ? [active] : [];
+  const stopArmed = stopTargets.length > 0 && stopTargets.every((s) => s.emergencyStop);
 
   const setActiveShockIntensity = (n: number) => {
     // Thumb moves freely up to the activity ceiling; mins are enforced on fire.
@@ -692,7 +707,7 @@ export function OfficialController({
   };
 
   useEffect(() => {
-    if (eStop) {
+    if (activeBlocked) {
       setWarningLevel('none');
       if (warningTimerRef.current) {
         clearTimeout(warningTimerRef.current);
@@ -703,7 +718,7 @@ export function OfficialController({
       holdTargetRef.current = null;
       setHoldingOp(null);
     }
-  }, [eStop]);
+  }, [activeBlocked]);
 
   useEffect(
     () => () => {
@@ -1125,11 +1140,20 @@ export function OfficialController({
                 </div>
 
                 {accessBanner}
-                {!accessBanner && eStop ? (
+                {!accessBanner && active?.emergencyStop ? (
                   <div className="access-banner access-banner--estop q-mt-sm q-pa-sm">
                     <div className="text-negative text-subtitle2">Emergency stop armed</div>
                     <div className="text-grey-4 text-body2">
-                      All commands are blocked on this shocker until you press STOP out.
+                      Commands are blocked on {active.name} until you press STOP out.
+                    </div>
+                  </div>
+                ) : null}
+                {!accessBanner && !active?.emergencyStop && active?.paused ? (
+                  <div className="access-banner access-banner--estop q-mt-sm q-pa-sm">
+                    <div className="text-negative text-subtitle2">Paused on PiShock</div>
+                    <div className="text-grey-4 text-body2">
+                      {active.name} is paused on pishock.com. Controls stay off until it is
+                      unpaused there.
                     </div>
                   </div>
                 ) : null}
@@ -1172,7 +1196,7 @@ export function OfficialController({
                           <span className="text-caption text-grey-5">
                             {selectedShockers.length} selected
                             {individualIntensity
-                              ? ' · tap a person, then set their intensity'
+                              ? ' · tap a person, then set their own intensity'
                               : ' · each capped to their own limit'}
                           </span>
                         ) : null}
@@ -1186,7 +1210,7 @@ export function OfficialController({
                         <span className="text-caption text-grey-5">
                           {selectedShockers.length} selected
                           {individualIntensity
-                            ? ' · tap a person, then set their intensity'
+                            ? ' · tap a person, then set their own intensity'
                             : ' · each capped to their own limit'}
                         </span>
                       </div>
@@ -1316,7 +1340,7 @@ export function OfficialController({
                                         ? ` · ${setInt}/${limit}%`
                                         : ` · ${limit}%`
                                       : ''}
-                                    {s.emergencyStop ? ' · E-STOP' : ''}
+                                    {s.emergencyStop ? ' · E-STOP' : s.paused ? ' · Paused' : ''}
                                   </span>
                                 </span>
                               </span>
@@ -1585,28 +1609,47 @@ export function OfficialController({
                                     }}
                                   />
                                   {active?.owned ? (
-                                    <CenterControl
-                                      icon="mdi-alert-octagon"
-                                      chip={eStop ? 'ARMED' : 'STOP'}
-                                      danger
-                                      padding={16}
-                                      active={eStop}
-                                      disabled={busy || !onEmergencyStop}
-                                      onClick={() => {
-                                        if (!active || !onEmergencyStop) return;
-                                        setWarningLevel(requiredWarningFloor);
-                                        if (warningTimerRef.current) {
-                                          clearTimeout(warningTimerRef.current);
-                                          warningTimerRef.current = null;
-                                        }
-                                        onEmergencyStop({
-                                          shockerId: active.id,
-                                          clientId: active.clientId ?? hub.id,
-                                          engaged: !eStop,
-                                        });
-                                      }}
-                                    />
-                                  ) : eStop ? (
+                                    <div className="flex column items-center">
+                                      <CenterControl
+                                        icon="mdi-alert-octagon"
+                                        chip={stopArmed ? 'ARMED' : 'STOP'}
+                                        danger
+                                        padding={16}
+                                        active={stopArmed}
+                                        disabled={busy || !onEmergencyStop || stopTargets.length === 0}
+                                        onClick={() => {
+                                          if (!active || !onEmergencyStop || stopTargets.length === 0) return;
+                                          setWarningLevel(requiredWarningFloor);
+                                          if (warningTimerRef.current) {
+                                            clearTimeout(warningTimerRef.current);
+                                            warningTimerRef.current = null;
+                                          }
+                                          onEmergencyStop({
+                                            shockerId: active.id,
+                                            shockerIds: stopTargets.map((s) => s.id),
+                                            clientId: active.clientId ?? hub.id,
+                                            engaged: !stopArmed,
+                                          });
+                                        }}
+                                      />
+                                      <div className="estop-scope" role="group" aria-label="Emergency stop scope">
+                                        <button
+                                          type="button"
+                                          className={estopAll ? '' : 'on'}
+                                          onClick={() => setEstopAll(false)}
+                                        >
+                                          This
+                                        </button>
+                                        <button
+                                          type="button"
+                                          className={estopAll ? 'on' : ''}
+                                          onClick={() => setEstopAll(true)}
+                                        >
+                                          All
+                                        </button>
+                                      </div>
+                                    </div>
+                                  ) : active?.emergencyStop ? (
                                     <CenterControl
                                       icon="mdi-alert-octagon"
                                       chip="E-STOP"

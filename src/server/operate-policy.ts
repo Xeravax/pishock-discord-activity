@@ -20,6 +20,7 @@ import {
   normalizeWarningLevel,
   type WarningLevel,
 } from '../shared/warning.js';
+import { isPiShockRowPaused } from '../shared/pishock-pause.js';
 
 /** Absolute hardware floors / ceilings used by every operate path. */
 export const ABS_MIN_INTENSITY = 1;
@@ -463,6 +464,13 @@ export async function resolveOwnOperatePolicy(
       throw new OperatePolicyError('Unknown or unauthorized share code', 404, 'SHARE_UNKNOWN');
     }
     const claimedShockerId = shockerIdOf(claimed) ?? (input.shockerId ? Number(input.shockerId) : null);
+    if (isPiShockRowPaused(claimed)) {
+      throw new OperatePolicyError(
+        'This shocker or share is paused on PiShock',
+        503,
+        'PISHOCK_PAUSED',
+      );
+    }
     if (claimedShockerId != null && (await deps.isEmergencyStopped(callerDiscordUserId, claimedShockerId))) {
       throw new OperatePolicyError(
         'Emergency stop is engaged — release STOP to allow commands',
@@ -507,6 +515,13 @@ export async function resolveOwnOperatePolicy(
   const owned = findShockerInSnapshot(snapshot, shockerId);
   if (!owned) {
     throw new OperatePolicyError('Shocker not found on this PiShock account', 404, 'SHOCKER_UNKNOWN');
+  }
+  if (isPiShockRowPaused(owned)) {
+    throw new OperatePolicyError(
+      'This shocker or share is paused on PiShock',
+      503,
+      'PISHOCK_PAUSED',
+    );
   }
 
   const activityShare = await deps.findActivityShareByShocker(callerDiscordUserId, shockerId);

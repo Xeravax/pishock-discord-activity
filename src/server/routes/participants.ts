@@ -47,6 +47,11 @@ import {
 } from '../discord-location.js';
 import { commandQueue } from '../pishock/command-queue-runtime.js';
 import { CommandQueueError, type QueuedOperation } from '../pishock/command-queue.js';
+import {
+  getPiShockPausedShockerIds,
+  isPiShockSharePaused,
+  rememberPiShockPaused,
+} from '../pishock/pause.js';
 
 function executorLabel(user: { id: string; username?: string | null; global_name?: string | null }) {
   const name = user.global_name || user.username || 'unknown';
@@ -161,23 +166,29 @@ export const participantRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app
     const myStars = new Set(await listQueueStars(req.discordUser.id));
     const participants = [];
     for (const id of ids) {
-      const [user, shares, bannedYou, hasSession, hasConsent, theirSettings, theyStarredMe] =
+      const [user, shares, bannedYou, targetCreds, hasConsent, theirSettings, theyStarredMe] =
         await Promise.all([
           prisma.discordUser.findUnique({ where: { id } }),
           listEnabledActivityShares(id),
           isExecutorBanned(id, req.discordUser.id),
-          loadPiShockCreds(opts.env, id).then(Boolean),
+          loadPiShockCreds(opts.env, id),
           getConsent(id),
           getCommandQueueSettings(id),
           isQueueStarred(id, req.discordUser.id),
         ]);
+      const hasSession = Boolean(targetCreds);
+      const piPaused = targetCreds
+        ? new Set(await getPiShockPausedShockerIds(id, targetCreds))
+        : new Set<number>();
       const theirPaused = theirSettings.enabled ? commandQueue.getPaused(id) : false;
       const theirHalted = theirSettings.enabled ? commandQueue.getHalted(id) : false;
       const eStops = new Set(await getEmergencyStopShockerIds(id));
       const active = shares.filter(
         (s: { enabled: boolean; paused: boolean }) => s.enabled && !s.paused,
       );
-      const operable = active.filter((s: { shockerId: number }) => !eStops.has(s.shockerId));
+      const operable = active.filter(
+        (s: { shockerId: number }) => !eStops.has(s.shockerId) && !piPaused.has(s.shockerId),
+      );
       const allEStopped = active.length > 0 && operable.length === 0;
       const visibleShockers = bannedYou
         ? []
@@ -199,6 +210,7 @@ export const participantRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app
               paused: boolean;
             }) => {
               const stopped = eStops.has(s.shockerId);
+              const devicePaused = piPaused.has(s.shockerId);
               const bands = shareBandsFromRow(s);
               return {
                 shockerId: s.shockerId,
@@ -219,11 +231,11 @@ export const participantRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app
                 beepMinDurationMs: bands.beep.minDurationMs,
                 beepMaxDurationMs: bands.beep.maxDurationMs,
                 requiredWarningLevel: bands.requiredWarningLevel,
-                canShock: !stopped && s.canShock,
-                canVibrate: !stopped && s.canVibrate,
-                canBeep: !stopped && s.canBeep,
-                canHold: !stopped && s.canHold,
-                paused: s.paused,
+                canShock: !stopped && !devicePaused && s.canShock,
+                canVibrate: !stopped && !devicePaused && s.canVibrate,
+                canBeep: !stopped && !devicePaused && s.canBeep,
+                canHold: !stopped && !devicePaused && s.canHold,
+                paused: devicePaused || s.paused,
                 emergencyStop: stopped,
               };
             },
@@ -479,6 +491,20 @@ export const participantRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app
     const intensity = clampIntensity(body.intensity, band.maxIntensity, band.minIntensity);
     const durationMs = clampDurationMs(body.durationMs, band.maxDurationMs, band.minDurationMs);
 
+    const devicePaused = (
+      await getPiShockPausedShockerIds(targetDiscordUserId, targetCreds)
+    ).includes(shockerId);
+    const sharePaused =
+      useSharePath && shareCode && executorCreds
+        ? await isPiShockSharePaused(req.discordUser.id, executorCreds, shareCode)
+        : false;
+    if (devicePaused || sharePaused) {
+      return reply.code(503).send({
+        error: 'This shocker or share is paused on PiShock',
+        code: 'PISHOCK_PAUSED',
+      });
+    }
+
     const mustWarn =
       (operation === 'shock' || operation === 'hold') &&
       modes.requiredWarningLevel !== 'none';
@@ -714,6 +740,17 @@ export const participantRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app
         }),
       });
       if (err instanceof PiShockApiError) {
+        if (err.status === 503) {
+          rememberPiShockPaused(targetDiscordUserId, { shockerId, shareCode });
+          if (useSharePath && executorCreds && shareCode) {
+            rememberPiShockPaused(req.discordUser.id, { shockerId, shareCode });
+          }
+          return reply.code(503).send({
+            error: 'This shocker or share is paused on PiShock',
+            code: 'PISHOCK_PAUSED',
+            body: err.body,
+          });
+        }
         return reply.code(err.status).send({ error: err.message, body: err.body });
       }
       throw err;

@@ -38,6 +38,10 @@ import {
 } from './components/ActivityLimitsSettings';
 import { FriendsParticipantList } from './components/FriendsParticipantList';
 import {
+  isPiShockRowExplicitlyUnpaused,
+  isPiShockRowPaused,
+} from '../shared/pishock-pause';
+import {
   QueueFab,
   QueuePanel,
   type QueuePanelItem,
@@ -203,6 +207,8 @@ export function App() {
   const [queueBusy, setQueueBusy] = useState(false);
   const [queueOpen, setQueueOpen] = useState(false);
   const [myQueueTicket, setMyQueueTicket] = useState<SenderQueueTicket | null>(null);
+  /** Shocker ids PiShock just rejected with 503, until a device list says otherwise. */
+  const [livePausedIds, setLivePausedIds] = useState<Set<number>>(() => new Set());
 
   const token = auth?.accessToken ?? null;
   const participantsRef = useRef(participants);
@@ -238,6 +244,7 @@ export function App() {
   const refreshDevices = useCallback(async (accessToken: string) => {
     const data = await apiFetch<DevicesResponse>('/devices', accessToken);
     setDevices(data);
+    setLivePausedIds((prev) => dropResolvedPause(prev, pauseRowsFromDevices(data)));
     const nextOnline: Record<string, boolean> = {};
     for (const [k, v] of Object.entries(data.online ?? {})) {
       const key = normalizeClientKey(k);
@@ -313,6 +320,16 @@ export function App() {
       }
       participantStatusCache = { key: idsKey, fetchedAt: now, map };
       setParticipantStatus(map);
+      setLivePausedIds((prev) => {
+        if (prev.size === 0) return prev;
+        const next = new Set(prev);
+        for (const row of data.participants ?? []) {
+          for (const shocker of row.shockers ?? []) {
+            if (!shocker.paused) next.delete(shocker.shockerId);
+          }
+        }
+        return next.size === prev.size ? prev : next;
+      });
     },
     [],
   );
@@ -705,6 +722,24 @@ export function App() {
     };
   }, [token, me?.pishockLinked, devices, refreshOnlineStatus]);
 
+  useEffect(() => {
+    if (!token || !me?.pishockLinked) return;
+    const id = window.setInterval(() => {
+      void refreshDevices(token).catch(() => undefined);
+    }, 20_000);
+    return () => window.clearInterval(id);
+  }, [token, me?.pishockLinked, refreshDevices]);
+
+  useEffect(() => {
+    if (!token || !isEmbedded) return;
+    const id = window.setInterval(() => {
+      const roster = participantsRef.current;
+      if (roster.length === 0) return;
+      void refreshParticipantStatus(token, roster, true).catch(() => undefined);
+    }, 20_000);
+    return () => window.clearInterval(id);
+  }, [token, refreshParticipantStatus]);
+
   const personalLimits = useMemo<PersonalLimits>(() => {
     const p = me?.personal;
     const maxI = Math.max(1, Math.min(100, p?.activityMaxIntensity ?? 100));
@@ -745,7 +780,7 @@ export function App() {
   );
 
   const ownedAndShared = useMemo(() => {
-    const rows = normalizeShockers(devices, online, personalLimits, emergencyStopIds);
+    const rows = normalizeShockers(devices, online, personalLimits, emergencyStopIds, livePausedIds);
     return rows.map((s) => {
       if (!s.owned) return s;
       const share = discordShareLimits[s.id];
@@ -759,7 +794,7 @@ export function App() {
         discordShareMaxDuration: share.maxDurationMs,
       };
     });
-  }, [devices, online, personalLimits, emergencyStopIds, discordShareLimits]);
+  }, [devices, online, personalLimits, emergencyStopIds, discordShareLimits, livePausedIds]);
 
   const hubOptions = useMemo(() => {
     const hubs = devices?.hubs ?? [];
@@ -865,6 +900,7 @@ export function App() {
           Math.min(beepMaxDuration, s.beepMinDurationMs ?? activityMinDuration),
         );
         const stopped = Boolean(s.emergencyStop);
+        const devicePaused = Boolean(s.paused) || livePausedIds.has(s.shockerId);
         rows.push({
           id: s.shockerId,
           name: s.shockerName,
@@ -872,11 +908,11 @@ export function App() {
           clientId: s.hubClientId ?? undefined,
           owned: false,
           targetDiscordUserId: targetId,
-          paused: s.paused,
-          canShock: !stopped && s.canShock,
-          canVibrate: !stopped && s.canVibrate,
-          canBeep: !stopped && s.canBeep,
-          canHold: !stopped && s.canHold,
+          paused: devicePaused,
+          canShock: !stopped && !devicePaused && s.canShock,
+          canVibrate: !stopped && !devicePaused && s.canVibrate,
+          canBeep: !stopped && !devicePaused && s.canBeep,
+          canHold: !stopped && !devicePaused && s.canHold,
           canPause: false,
           deviceMaxIntensity,
           deviceMaxDuration,
@@ -909,7 +945,7 @@ export function App() {
       }
     }
     return rows;
-  }, [selectedTargetIds, participantStatus, participants]);
+  }, [selectedTargetIds, participantStatus, participants, livePausedIds]);
 
   const ownShockers = useMemo(() => {
     if (!selectedHubId) return ownedAndShared;
@@ -1025,18 +1061,26 @@ export function App() {
       selectedTargetIds.length > 0 &&
       selectedTargetIds.every((id) => participantStatus[id]?.bannedYou),
   );
-  const friendEStop = Boolean(
+  const friendAllEStop = Boolean(
     friendsMode &&
-      selectedTargetIds.length > 0 &&
       !friendBlocked &&
-      (selectedFriendStatus?.emergencyStop || friendShockers.some((s) => s.emergencyStop)),
+      friendShockers.length > 0 &&
+      friendShockers.every((s) => s.emergencyStop),
+  );
+  const friendAllPaused = Boolean(
+    friendsMode &&
+      !friendBlocked &&
+      !friendAllEStop &&
+      friendShockers.length > 0 &&
+      friendShockers.every((s) => s.paused || s.emergencyStop),
   );
   const friendQueue = selectedFriendStatus?.queue;
   const friendStarBlocked = Boolean(
     friendsMode &&
       selectedTargetId &&
       !friendBlocked &&
-      !friendEStop &&
+      !friendAllEStop &&
+      !friendAllPaused &&
       friendQueue?.starOnly &&
       !friendQueue.starredByThem,
   );
@@ -1050,7 +1094,8 @@ export function App() {
     friendsMode &&
       selectedTargetId &&
       !friendBlocked &&
-      !friendEStop &&
+      !friendAllEStop &&
+      !friendAllPaused &&
       !friendStarBlocked &&
       friendQueue?.enabled &&
       friendQueue.halted,
@@ -1059,14 +1104,15 @@ export function App() {
     friendsMode &&
       selectedTargetId &&
       !friendBlocked &&
-      !friendEStop &&
+      !friendAllEStop &&
+      !friendAllPaused &&
       !friendStarBlocked &&
       !friendQueueHalted &&
       friendQueue?.enabled &&
       friendQueue.paused,
   );
   const friendControlsLocked =
-    friendBlocked || friendEStop || friendStarBlocked || friendQueueHalted;
+    friendBlocked || friendAllEStop || friendAllPaused || friendStarBlocked || friendQueueHalted;
 
   useEffect(() => {
     // Unlinked users only use Discord Shockers — Claim / My Shockers stay hidden
@@ -1433,6 +1479,15 @@ export function App() {
         });
       }
       await refreshLogs(token).catch(() => undefined);
+      const sentId = Number(input.shockerId);
+      if (Number.isFinite(sentId) && sentId > 0) {
+        setLivePausedIds((prev) => {
+          if (!prev.has(sentId)) return prev;
+          const next = new Set(prev);
+          next.delete(sentId);
+          return next;
+        });
+      }
     } catch (err) {
       if (err instanceof ApiError && err.code === 'PISHOCK_RELOGIN') {
         await handleReloginNeeded();
@@ -1451,6 +1506,22 @@ export function App() {
         (err.code === 'QUEUE_SENDER_FULL' || err.code === 'QUEUE_FULL')
       ) {
         setActionError(err.message);
+      } else if (err instanceof ApiError && err.code === 'PISHOCK_PAUSED') {
+        const pausedId = Number(input.shockerId);
+        if (Number.isFinite(pausedId) && pausedId > 0) {
+          setLivePausedIds((prev) => {
+            const next = new Set(prev);
+            next.add(pausedId);
+            return next;
+          });
+        }
+        setActionError(
+          'This shocker is paused on PiShock. Controls stay off until it is unpaused there.',
+        );
+        void refreshDevices(token).catch(() => undefined);
+        if (participantsRef.current.length) {
+          void refreshParticipantStatus(token, participantsRef.current, true).catch(() => undefined);
+        }
       } else {
         setActionError(err instanceof Error ? err.message : String(err));
       }
@@ -1618,6 +1689,7 @@ export function App() {
 
   const setEmergencyStop = async (input: {
     shockerId: number;
+    shockerIds?: number[];
     clientId?: number | string;
     engaged: boolean;
   }) => {
@@ -1634,7 +1706,12 @@ export function App() {
         token,
         {
           method: 'PUT',
-          body: JSON.stringify(input),
+          body: JSON.stringify({
+            shockerId: input.shockerId,
+            shockerIds: input.shockerIds,
+            clientId: input.clientId,
+            engaged: input.engaged,
+          }),
         },
       );
       setMe((prev) =>
@@ -1834,8 +1911,10 @@ export function App() {
         online: friendShockers.length > 0 && !friendBlocked,
         lastSeen: friendBlocked
           ? 'You are blocked'
-          : friendEStop
+          : friendAllEStop
             ? 'Emergency stop armed'
+            : friendAllPaused
+              ? 'Paused on PiShock'
             : friendStarBlocked
               ? 'Stars only — ask them to star you'
               : friendQueueHalted
@@ -2078,12 +2157,20 @@ export function App() {
                   This user blocked you. You cannot view or use any of their shockers.
                 </div>
               </div>
-            ) : friendEStop ? (
+            ) : friendAllEStop ? (
               <div className="access-banner access-banner--estop q-mt-sm q-pa-sm">
                 <div className="text-negative text-subtitle2">Emergency stop armed</div>
                 <div className="text-grey-4 text-body2">
                   The owner engaged emergency stop. Shockers stay visible, but all controls are
                   disabled until they release it.
+                </div>
+              </div>
+            ) : friendAllPaused ? (
+              <div className="access-banner access-banner--estop q-mt-sm q-pa-sm">
+                <div className="text-negative text-subtitle2">Paused on PiShock</div>
+                <div className="text-grey-4 text-body2">
+                  These shockers are paused on pishock.com. Controls stay off until they are
+                  unpaused there.
                 </div>
               </div>
             ) : friendStarBlocked ? (
@@ -2166,6 +2253,7 @@ export function App() {
                     : undefined,
             })
           }
+          estopShockers={ownedAndShared.filter((s) => s.owned)}
           onEmergencyStop={setEmergencyStop}
           onSelectHub={(hubId) => {
             if (!me.pishockLinked) return;
@@ -2743,11 +2831,47 @@ function collectClientIds(devices: DevicesResponse): string[] {
   return [...ids];
 }
 
+function pauseRowsFromDevices(devices: DevicesResponse): Array<Record<string, unknown>> {
+  const shared = Array.isArray(devices.shared)
+    ? devices.shared
+    : devices.shared && typeof devices.shared === 'object'
+      ? Object.values(devices.shared as Record<string, unknown>).flatMap((v) =>
+          Array.isArray(v) ? v : [v],
+        )
+      : [];
+  return [...(devices.shockers ?? []), ...(shared as Array<Record<string, unknown>>)];
+}
+
+function dropResolvedPause(
+  live: Set<number>,
+  rows: Array<Record<string, unknown>>,
+): Set<number> {
+  if (live.size === 0) return live;
+  const next = new Set(live);
+  for (const row of rows) {
+    const id = Number(row.ShockerId ?? row.shockerId ?? row.Id ?? row.id);
+    if (!Number.isFinite(id)) continue;
+    if (isPiShockRowPaused(row) || isPiShockRowExplicitlyUnpaused(row)) next.delete(id);
+  }
+  return next.size === live.size ? live : next;
+}
+
+function rowIsPaused(
+  row: Record<string, unknown>,
+  id: number,
+  livePausedIds: Set<number>,
+): boolean {
+  if (isPiShockRowPaused(row)) return true;
+  if (isPiShockRowExplicitlyUnpaused(row)) return false;
+  return livePausedIds.has(id);
+}
+
 function normalizeShockers(
   devices: DevicesResponse | null,
   online: Record<string, boolean>,
   personal: PersonalLimits,
   emergencyStopIds: Set<number>,
+  livePausedIds: Set<number>,
 ): ShockerView[] {
   if (!devices) return [];
   const hubNameByClient = new Map<string, string>();
@@ -2803,7 +2927,7 @@ function normalizeShockers(
       hubName: clientKey ? hubNameByClient.get(clientKey) : undefined,
       clientId: clientKey || undefined,
       owned: true,
-      paused: Boolean(s.Paused ?? s.paused),
+      paused: rowIsPaused(s, id, livePausedIds),
       canShock: true,
       canVibrate: true,
       canBeep: true,
@@ -2856,7 +2980,7 @@ function normalizeShockers(
       hubName: String(s.OwnedBy ?? s.ownedBy ?? ''),
       clientId: clientKey || undefined,
       owned: false,
-      paused: Boolean(s.Paused ?? s.paused ?? s.SharePaused ?? s.sharePaused),
+      paused: rowIsPaused(s, id, livePausedIds),
       shareCode: s.ShareCode != null ? String(s.ShareCode) : s.shareCode != null ? String(s.shareCode) : undefined,
       shareId: s.ShareId != null ? Number(s.ShareId) : s.shareId != null ? Number(s.shareId) : undefined,
       canShock: Boolean(s.CanShock ?? s.canShock ?? true),

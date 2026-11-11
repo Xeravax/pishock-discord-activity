@@ -29,8 +29,7 @@ const POLL_OFFLINE_MS = 5_000;
 const POLL_OUTDATED_MS = 15_000;
 
 function healthUrl(): string {
-  const embedded = new URLSearchParams(window.location.search).has('frame_id');
-  return `${embedded ? '/.proxy/api' : '/api'}/health`;
+  return '/api/health';
 }
 
 let state: HealthState = {

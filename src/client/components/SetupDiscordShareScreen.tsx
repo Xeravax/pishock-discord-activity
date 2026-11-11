@@ -431,7 +431,7 @@ export function SetupDiscordShareScreen({
                 Activity limits
               </h2>
               <p className="auth-boot__hint">
-                Set separate shock / vibrate / beep bands, disable modes per shared shocker, and
+                Set shock and vibrate bands per shared shocker, toggle beep and hold, and
                 optionally enforce a warning before shock.
               </p>
 

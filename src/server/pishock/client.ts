@@ -1,6 +1,7 @@
 import {
   AGENT_NAME,
   PISHOCK_API,
+  PISHOCK_LEGACY_API,
   ShockerOp,
 } from '../../shared/constants.js';
 
@@ -20,15 +21,15 @@ export class PiShockApiError extends Error {
   body: string;
   needsRelogin: boolean;
 
-  constructor(status: number, body: string) {
+  constructor(status: number, body: string, needsRelogin = status === 401) {
     super(`PiShock API ${status}: ${body}`);
     this.status = status;
     this.body = body;
-    this.needsRelogin = status === 401;
+    this.needsRelogin = needsRelogin;
   }
 }
 
-type AuthStyle = 'session' | 'apiKeyHeader' | 'apiKeyAsToken';
+type AuthStyle = 'session' | 'apiKeyHeader' | 'apiKeyAsToken' | 'apiKeyBearer';
 
 function headers(
   creds: PiShockCreds,
@@ -45,6 +46,10 @@ function headers(
   } else {
     // Saerich: X-PiShock-Api-Key OR Token+UserId — not mixed with UserId alone
     h['X-PiShock-Api-Key'] = creds.token;
+  }
+  if (style === 'apiKeyBearer') {
+    // Some /Share routes accept the key as a bearer token alongside X-PiShock-Api-Key
+    h['Authorization'] = `Bearer ${creds.token}`;
   }
   // Never send Content-Type on GETs — api.pishock.com rejects empty JSON bodies with 400 SerializerErrors
   if (hasJsonBody) h['Content-Type'] = 'application/json';
@@ -146,8 +151,94 @@ export async function deleteLink(creds: PiShockCreds, linkId: number) {
   return request(creds, 'DELETE', `${PISHOCK_API}/Links/${linkId}`);
 }
 
+function shareShockerId(payload: Record<string, unknown>): number {
+  const shockerId = Number(payload.ShockerId ?? payload.shockerId);
+  if (!Number.isFinite(shockerId) || shockerId <= 0) {
+    throw new PiShockApiError(400, 'Share code creation requires a valid shocker id', false);
+  }
+  return Math.floor(shockerId);
+}
+
+/**
+ * POST /Share on api.pishock.com 401s API keys that Hub and Shockers accept.
+ * Retry with Authorization: Bearer, then legacy ps.pishock.com CreateShare.
+ * A share-only 401 must not clear the stored key (needsRelogin stays false).
+ */
 export async function createShare(creds: PiShockCreds, payload: Record<string, unknown>) {
-  return request(creds, 'POST', `${PISHOCK_API}/Share`, payload);
+  const shockerId = shareShockerId(payload);
+  const body = { ShockerId: shockerId };
+
+  let sawMissing = false;
+  try {
+    const created = await request(creds, 'POST', `${PISHOCK_API}/Share`, body);
+    if (created.status !== 404 && created.status !== 405) return created;
+    sawMissing = true;
+  } catch (err) {
+    if (!(err instanceof PiShockApiError) || (err.status !== 401 && err.status !== 403)) {
+      throw err;
+    }
+  }
+
+  if (creds.mode === 'session') {
+    if (sawMissing) {
+      return { status: 404, data: null, raw: '' };
+    }
+    throw new PiShockApiError(401, 'PiShock rejected share creation', true);
+  }
+
+  try {
+    const created = await requestOnce(
+      creds,
+      'POST',
+      `${PISHOCK_API}/Share`,
+      'apiKeyBearer',
+      body,
+    );
+    if (created.status !== 404 && created.status !== 405) return created;
+  } catch (err) {
+    if (!(err instanceof PiShockApiError) || (err.status !== 401 && err.status !== 403)) {
+      throw err;
+    }
+  }
+
+  if (creds.userId > 0) {
+    console.warn('[pishock] POST /Share rejected API key; trying legacy CreateShare');
+    const legacy = await createLegacyShare(creds, shockerId);
+    if (legacy.status >= 200 && legacy.status < 300) return legacy;
+    throw new PiShockApiError(
+      legacy.status,
+      legacy.raw.slice(0, 180) || 'PiShock rejected share creation',
+      false,
+    );
+  }
+
+  throw new PiShockApiError(401, 'PiShock rejected share creation', false);
+}
+
+async function createLegacyShare(
+  creds: PiShockCreds,
+  shockerId: number,
+): Promise<{ status: number; data: unknown; raw: string }> {
+  const query = new URLSearchParams({
+    UserId: String(creds.userId),
+    Token: creds.token,
+    ShockerId: String(shockerId),
+    api: 'true',
+  });
+  const res = await fetch(`${PISHOCK_LEGACY_API}/PiShock/CreateShare?${query}`, {
+    method: 'POST',
+    headers: { Accept: 'application/json, text/plain' },
+  });
+  const raw = await res.text();
+  if (!res.ok) {
+    return { status: res.status, data: null, raw };
+  }
+  if (!raw) return { status: res.status, data: null, raw };
+  try {
+    return { status: res.status, data: JSON.parse(raw) as unknown, raw };
+  } catch {
+    return { status: res.status, data: raw, raw };
+  }
 }
 
 /** Claim / redeem share code(s) into the signed-in account (website Friends → Shared Code). */

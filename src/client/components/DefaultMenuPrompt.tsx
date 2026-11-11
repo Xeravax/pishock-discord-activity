@@ -45,7 +45,7 @@ export function DefaultMenuPrompt({ discordName, busy, onDismiss, onChoose }: Pr
               <span className="q-btn__content text-center col items-center q-anchor--skip justify-center column">
                 <span className="block">Discord Shockers</span>
                 <span className="text-caption" style={{ opacity: 0.85 }}>
-                  Control friends who shared devices
+                  The menu to control other Discord users who have shared some or all of their devices.
                 </span>
               </span>
             </span>
@@ -60,7 +60,7 @@ export function DefaultMenuPrompt({ discordName, busy, onDismiss, onChoose }: Pr
               <span className="q-btn__content text-center col items-center q-anchor--skip justify-center column">
                 <span className="block">My Shockers</span>
                 <span className="text-caption" style={{ opacity: 0.75 }}>
-                  Your linked hubs and devices
+                  Your own devices linked to your PiShock account.
                 </span>
               </span>
             </span>

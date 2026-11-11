@@ -286,24 +286,41 @@ export async function isEmergencyStopped(discordUserId: string, shockerId: numbe
   return ids.includes(shockerId);
 }
 
-/** Latch or release owner emergency stop for a shocker. Returns the new engaged state. */
-export async function setEmergencyStop(
+/** Latch or release owner emergency stop for one or more shockers. */
+export async function setEmergencyStops(
   discordUserId: string,
-  shockerId: number,
+  shockerIds: number[],
   engaged: boolean,
-): Promise<{ engaged: boolean; emergencyStopShockerIds: number[] }> {
+): Promise<{ engagedIds: number[]; emergencyStopShockerIds: number[] }> {
+  const unique = [
+    ...new Set(shockerIds.filter((id) => Number.isFinite(id) && id > 0).map((id) => Math.floor(id))),
+  ];
   const current = await getEmergencyStopShockerIds(discordUserId);
+  const drop = new Set(unique);
   const next = engaged
-    ? [...new Set([...current, shockerId])]
-    : current.filter((id) => id !== shockerId);
+    ? [...new Set([...current, ...unique])]
+    : current.filter((id) => !drop.has(id));
   const user = await prisma.discordUser.update({
     where: { id: discordUserId },
     data: { emergencyStopShockerIds: next },
     select: { emergencyStopShockerIds: true },
   });
   return {
-    engaged: user.emergencyStopShockerIds.includes(shockerId),
+    engagedIds: unique.filter((id) => user.emergencyStopShockerIds.includes(id)),
     emergencyStopShockerIds: user.emergencyStopShockerIds,
+  };
+}
+
+/** Latch or release owner emergency stop for a shocker. Returns the new engaged state. */
+export async function setEmergencyStop(
+  discordUserId: string,
+  shockerId: number,
+  engaged: boolean,
+): Promise<{ engaged: boolean; emergencyStopShockerIds: number[] }> {
+  const result = await setEmergencyStops(discordUserId, [shockerId], engaged);
+  return {
+    engaged: result.emergencyStopShockerIds.includes(shockerId),
+    emergencyStopShockerIds: result.emergencyStopShockerIds,
   };
 }
 

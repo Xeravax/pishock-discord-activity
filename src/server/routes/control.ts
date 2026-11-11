@@ -21,6 +21,7 @@ import {
   publishOperate,
 } from '../pishock/broker.js';
 import { commandQueue } from '../pishock/command-queue-runtime.js';
+import { rememberPiShockPaused } from '../pishock/pause.js';
 import {
   assertModeAllowed,
   assertOperateRateLimit,
@@ -41,7 +42,7 @@ import {
   listCommandLogs,
   listPublicCommandLogs,
   logCommand,
-  setEmergencyStop,
+  setEmergencyStops,
 } from '../session.js';
 import { broadcastRealtimeAll } from '../realtime.js';
 import {
@@ -112,6 +113,13 @@ async function handlePiShockError(
         body: err.body,
       });
     }
+    if (err.status === 503) {
+      return reply.code(503).send({
+        error: 'This shocker or share is paused on PiShock',
+        code: 'PISHOCK_PAUSED',
+        body: err.body,
+      });
+    }
     return reply.code(err.status).send({ error: err.message, body: err.body });
   }
   throw err;
@@ -144,11 +152,19 @@ export const controlRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app, op
 
     const body = req.body as {
       shockerId?: number;
+      shockerIds?: number[];
       engaged?: boolean;
       clientId?: number | string;
     };
-    const shockerId = Number(body.shockerId);
-    if (!Number.isFinite(shockerId) || shockerId <= 0) {
+    const requested = [
+      ...(Array.isArray(body.shockerIds) ? body.shockerIds : []),
+      body.shockerId,
+    ]
+      .map((id) => Number(id))
+      .filter((id) => Number.isFinite(id) && id > 0)
+      .map((id) => Math.floor(id));
+    const shockerIds = [...new Set(requested)];
+    if (shockerIds.length === 0) {
       return reply.code(400).send({ error: 'shockerId required' });
     }
     if (typeof body.engaged !== 'boolean') {
@@ -162,53 +178,66 @@ export const controlRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app, op
     } catch (err) {
       return handlePiShockError(err, req.discordUser.id, reply);
     }
-    if (!findShockerInSnapshot(snapshot, shockerId)) {
-      return reply.code(404).send({ error: 'Shocker not found on this PiShock account' });
+    for (const shockerId of shockerIds) {
+      if (!findShockerInSnapshot(snapshot, shockerId)) {
+        return reply.code(404).send({ error: 'Shocker not found on this PiShock account' });
+      }
     }
 
-    const clientId =
-      verifyOwnedClientId(snapshot, body.clientId) ??
-      (() => {
-        const row = findShockerInSnapshot(snapshot, shockerId);
-        return row ? String(row.ClientId ?? row.clientId ?? '') || null : null;
-      })();
-
-    if (body.engaged && clientId) {
-      clearHoldAutoEnd(req.discordUser.id, shockerId);
-      await publishOperate(creds, {
-        clientId,
-        shockerId,
-        operation: 'e',
-        intensity: 0,
-        durationMs: 0,
-        end: true,
-        agentName: 'Emergency Stop',
-      });
-    }
-
-    const result = await setEmergencyStop(req.discordUser.id, shockerId, body.engaged);
     if (body.engaged) {
-      // Device already cut above; drop waiting + active queue slots for this wearer.
+      for (const shockerId of shockerIds) {
+        const row = findShockerInSnapshot(snapshot, shockerId);
+        const clientId =
+          (shockerIds.length === 1 ? verifyOwnedClientId(snapshot, body.clientId) : null) ??
+          (row ? String(row.ClientId ?? row.clientId ?? '') || null : null);
+        if (!clientId) continue;
+        clearHoldAutoEnd(req.discordUser.id, shockerId);
+        await publishOperate(creds, {
+          clientId,
+          shockerId,
+          operation: 'e',
+          intensity: 0,
+          durationMs: 0,
+          end: true,
+          agentName: 'Emergency Stop',
+        });
+      }
+      // Devices already cut above; drop waiting + active queue slots for this wearer.
       await commandQueue.hardClear(req.discordUser.id, { endActiveDevice: false });
     }
-    await logCommand({
-      discordUserId: req.discordUser.id,
-      action: body.engaged ? 'emergency_stop_on' : 'emergency_stop_off',
-      shockerId,
-      intensity: 0,
-      durationMs: 0,
-      success: true,
-      detail: body.engaged ? 'latched' : 'released',
-    });
+
+    const result = await setEmergencyStops(req.discordUser.id, shockerIds, body.engaged);
+    for (const shockerId of shockerIds) {
+      await logCommand({
+        discordUserId: req.discordUser.id,
+        action: body.engaged ? 'emergency_stop_on' : 'emergency_stop_off',
+        shockerId,
+        intensity: 0,
+        durationMs: 0,
+        success: true,
+        detail: body.engaged
+          ? shockerIds.length > 1
+            ? 'latched-all'
+            : 'latched'
+          : shockerIds.length > 1
+            ? 'released-all'
+            : 'released',
+      });
+    }
+    const primaryId = shockerIds[0]!;
     broadcastRealtimeAll({
       type: 'emergency_stop',
       ownerDiscordUserId: req.discordUser.id,
-      shockerId,
-      engaged: result.engaged,
+      shockerId: primaryId,
+      engaged: result.engagedIds.includes(primaryId),
       emergencyStopShockerIds: result.emergencyStopShockerIds,
       at: Date.now(),
     });
-    return { ok: true, ...result };
+    return {
+      ok: true,
+      engaged: result.engagedIds.includes(primaryId),
+      emergencyStopShockerIds: result.emergencyStopShockerIds,
+    };
   });
 
   app.post('/api/operate', async (req, reply) => {
@@ -524,6 +553,12 @@ export const controlRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app, op
         detail: err instanceof Error ? err.message : String(err),
         location,
       });
+      if (err instanceof PiShockApiError && err.status === 503) {
+        rememberPiShockPaused(policy.ownerDiscordUserId, {
+          shockerId,
+          shareCode,
+        });
+      }
       return handlePiShockError(err, req.discordUser.id, reply);
     }
   });

@@ -15,8 +15,10 @@ import {
   agentNameForExecutor,
   operateById,
   operateByShare,
+  PiShockApiError,
   type PiShockCreds,
 } from './client.js';
+import { getPiShockPausedShockerIds, rememberPiShockPaused } from './pause.js';
 import { publishOperate } from './broker.js';
 import { ShockerOp } from '../../shared/constants.js';
 import {
@@ -137,6 +139,14 @@ async function validateQueuedItem(item: QueueItemInternal): Promise<boolean> {
   }
   if (await isEmergencyStopped(item.ownerDiscordUserId, item.shockerId)) {
     return false;
+  }
+  const queuedPayload = item.payload as QueuedOperatePayload | undefined;
+  if (queuedPayload?.env) {
+    const ownerCreds = await loadPiShockCreds(queuedPayload.env, item.ownerDiscordUserId);
+    if (ownerCreds) {
+      const paused = await getPiShockPausedShockerIds(item.ownerDiscordUserId, ownerCreds);
+      if (paused.includes(item.shockerId)) return false;
+    }
   }
   const shares = (await listEnabledActivityShares(item.ownerDiscordUserId)).filter(
     (s: { enabled: boolean; paused: boolean; shockerId: number }) =>
@@ -300,6 +310,12 @@ async function executeQueuedItem(item: QueueItemInternal): Promise<void> {
       }),
     });
   } catch (err) {
+    if (err instanceof PiShockApiError && err.status === 503) {
+      rememberPiShockPaused(item.ownerDiscordUserId, {
+        shockerId: item.shockerId,
+        shareCode: item.shareCode,
+      });
+    }
     await auditParticipantCommand({
       ...auditBase,
       success: false,
