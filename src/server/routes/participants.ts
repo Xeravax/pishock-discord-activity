@@ -580,11 +580,8 @@ export const participantRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app
           hold,
           warning,
           shockerId,
-          shockerName: share.shockerName,
-          hubClientId: share.hubClientId ?? clientId ?? null,
-          hubName: share.hubName ?? null,
           shareCode,
-          hubClientId: clientId ?? null,
+          hubClientId: share.hubClientId ?? clientId ?? null,
           instanceId,
           payload: {
             env: opts.env,
