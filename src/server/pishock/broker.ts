@@ -2,6 +2,7 @@ import WebSocket from 'ws';
 import { AGENT_NAME, PISHOCK_BROKER, ShockerOp } from '../../shared/constants.js';
 import { ingestBrokerDeviceLog } from './broker-log-ingest.js';
 import type { PiShockCreds } from './client.js';
+import { syncEstopFromPiShockPause } from './estop-sync.js';
 
 export type BrokerEvent =
   | { type: 'online'; clientId: string; online: boolean; at: number }
@@ -22,7 +23,12 @@ type BrokerSession = {
   logCapture?: Subscriber;
   logCaptureTouchAt?: number;
   logCaptureIdleTimer?: NodeJS.Timeout;
+  /** Poll PiShock pause while broker capture is warm (website STOP has no dedicated frame). */
+  pauseSyncTimer?: NodeJS.Timeout;
 };
+
+/** How often to re-check website pause while the owner is in the activity. */
+const PAUSE_SYNC_MS = 5_000;
 
 const sessions = new Map<string, BrokerSession>();
 const IDLE_TEARDOWN_MS = 90_000;
@@ -177,18 +183,48 @@ export function ensureLogCapture(
     subscribeTargets(session, [...session.clientIds]);
   }
   scheduleLogCaptureIdle(discordUserId);
+  ensurePauseSync(discordUserId);
 }
 
 export function stopLogCapture(discordUserId: string) {
   const session = sessions.get(discordUserId);
   if (!session?.logCapture) return;
   clearLogCaptureIdleTimer(session);
+  clearPauseSync(session);
   session.subscribers.delete(session.logCapture);
   session.logCapture = undefined;
   session.logCaptureTouchAt = undefined;
   if (session.subscribers.size === 0) {
     scheduleIdleTeardown(discordUserId);
   }
+}
+
+function clearPauseSync(session: BrokerSession) {
+  if (session.pauseSyncTimer) {
+    clearInterval(session.pauseSyncTimer);
+    session.pauseSyncTimer = undefined;
+  }
+}
+
+function ensurePauseSync(discordUserId: string) {
+  const session = sessions.get(discordUserId);
+  if (!session?.logCapture || session.pauseSyncTimer) return;
+  const tick = () => {
+    const current = sessions.get(discordUserId);
+    if (!current?.logCapture) {
+      clearPauseSync(current ?? session);
+      return;
+    }
+    void syncEstopFromPiShockPause(discordUserId, current.creds).catch((err) => {
+      console.warn(
+        '[broker] pause→estop sync failed',
+        err instanceof Error ? err.message : err,
+      );
+    });
+  };
+  tick();
+  session.pauseSyncTimer = setInterval(tick, PAUSE_SYNC_MS);
+  session.pauseSyncTimer.unref?.();
 }
 
 /**
@@ -559,6 +595,7 @@ function teardown(discordUserId: string) {
   if (session.reconnectTimer) clearTimeout(session.reconnectTimer);
   clearIdleTimer(session);
   clearLogCaptureIdleTimer(session);
+  clearPauseSync(session);
   session.logCapture = undefined;
   try {
     session.ws?.close();

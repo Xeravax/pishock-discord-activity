@@ -443,6 +443,7 @@ describe('refuse — operate policy bypasses', () => {
         findActivityShareByCode: async () =>
           shareRow({
             hubClientId: 'trusted-hub',
+            hubName: 'Trusted Hub',
             maxIntensity: 33,
             canShock: false,
             canHold: false,
@@ -450,6 +451,7 @@ describe('refuse — operate policy bypasses', () => {
       }),
     );
     assert.equal(policy.hubClientId, 'trusted-hub');
+    assert.equal(policy.hubName, 'Trusted Hub');
     assert.equal(policy.maxIntensity, 33);
     assert.equal(policy.flags.canShock, false);
     assert.equal(policy.flags.canHold, false);

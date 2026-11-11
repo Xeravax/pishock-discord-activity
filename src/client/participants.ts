@@ -11,6 +11,7 @@ export type ParticipantShockerStatus = {
   shockerId: number;
   shockerName: string;
   hubClientId?: string | null;
+  hubName?: string | null;
   /** PiShock device/API ceiling (red zone above this) */
   deviceMaxIntensity: number;
   deviceMaxDurationMs: number;

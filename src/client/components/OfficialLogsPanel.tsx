@@ -26,6 +26,10 @@ export type OfficialLogEntry = {
   source: 'discord' | 'website';
   location: OfficialLogLocation | null;
   action: 'shock' | 'vibrate' | 'beep' | 'other';
+  shockerId: number | null;
+  shockerName: string | null;
+  hubClientId: string | null;
+  hubName: string | null;
   intensity: number | null;
   durationSec: number | null;
   at: number;
@@ -60,6 +64,21 @@ function formatDuration(sec: number): string {
   if (Number.isInteger(sec)) return String(sec);
   const t = Math.round(sec * 10) / 10;
   return String(t);
+}
+
+function shockerLabel(row: OfficialLogEntry): string | null {
+  const name = row.shockerName?.trim();
+  if (name) return name;
+  if (row.shockerId != null) return `Shocker ${row.shockerId}`;
+  return null;
+}
+
+function hubLabel(row: OfficialLogEntry): string | null {
+  const name = row.hubName?.trim();
+  if (name) return name;
+  const id = row.hubClientId?.trim();
+  if (id) return `Hub ${id}`;
+  return null;
 }
 
 function PersonChip({
@@ -170,7 +189,10 @@ export function OfficialLogsPanel({ open, entries, onClose }: Omit<Props, 'onOpe
             {entries.length === 0 ? (
               <div className="text-grey-5 q-pa-md text-center">No log entries yet.</div>
             ) : (
-              entries.map((row) => (
+              entries.map((row) => {
+                const device = shockerLabel(row);
+                const hub = hubLabel(row);
+                return (
                 <div key={row.id} className="official-log-row">
                   <div className="official-log-row__top">
                     <PersonChip person={row.from} tone="from" />
@@ -181,6 +203,18 @@ export function OfficialLogsPanel({ open, entries, onClose }: Omit<Props, 'onOpe
                     <div className="official-log-row__meta">
                       <SourceBadge source={row.source} />
                       <LocationChip location={row.location} />
+                      {hub ? (
+                        <span className="official-log-stat official-log-hub" title={hub}>
+                          <i className="q-icon mdi mdi-access-point" aria-hidden />
+                          <span className="ellipsis">{hub}</span>
+                        </span>
+                      ) : null}
+                      {device ? (
+                        <span className="official-log-stat official-log-shocker" title={device}>
+                          <i className="q-icon mdi mdi-tag-outline" aria-hidden />
+                          <span className="ellipsis">{device}</span>
+                        </span>
+                      ) : null}
                       {row.intensity != null ? (
                         <span className="official-log-stat">
                           <i className={`q-icon mdi ${actionIcon(row.action)}`} aria-hidden />
@@ -197,7 +231,8 @@ export function OfficialLogsPanel({ open, entries, onClose }: Omit<Props, 'onOpe
                     <span className="official-log-ago">{formatAgo(row.at, now)}</span>
                   </div>
                 </div>
-              ))
+                );
+              })
             )}
           </div>
         </div>
@@ -227,6 +262,10 @@ type PublicLogPersonApi = {
 type PublicLogApiRow = {
   id?: string;
   action?: string;
+  shockerId?: number | null;
+  shockerName?: string | null;
+  hubClientId?: string | null;
+  hubName?: string | null;
   intensity?: number | null;
   durationMs?: number | null;
   createdAt?: string;
@@ -297,6 +336,15 @@ export function normalizePublicLogs(
           }
         : null,
       action: normalizeAction(actionRaw, intensity),
+      shockerId: typeof row.shockerId === 'number' ? row.shockerId : null,
+      shockerName:
+        typeof row.shockerName === 'string' && row.shockerName.trim() ? row.shockerName.trim() : null,
+      hubClientId:
+        typeof row.hubClientId === 'string' && row.hubClientId.trim()
+          ? row.hubClientId.trim()
+          : null,
+      hubName:
+        typeof row.hubName === 'string' && row.hubName.trim() ? row.hubName.trim() : null,
       intensity,
       durationSec: durationMs != null ? Math.round((durationMs / 1000) * 10) / 10 : null,
       at,
@@ -351,6 +399,15 @@ export function normalizeActivityLogs(
       source: row.source === 'website' ? 'website' : 'discord',
       location: null,
       action: normalizeAction(actionRaw, intensity),
+      shockerId: typeof row.shockerId === 'number' ? row.shockerId : null,
+      shockerName:
+        typeof row.shockerName === 'string' && row.shockerName.trim() ? row.shockerName.trim() : null,
+      hubClientId:
+        typeof row.hubClientId === 'string' && row.hubClientId.trim()
+          ? row.hubClientId.trim()
+          : null,
+      hubName:
+        typeof row.hubName === 'string' && row.hubName.trim() ? row.hubName.trim() : null,
       intensity,
       durationSec: durationMs != null ? Math.round((durationMs / 1000) * 10) / 10 : null,
       at,

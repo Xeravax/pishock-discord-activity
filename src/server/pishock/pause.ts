@@ -113,3 +113,21 @@ export function rememberPiShockPaused(
   hit.at = Date.now();
   cache.set(discordUserId, hit);
 }
+
+export function forgetPiShockPaused(
+  discordUserId: string,
+  input: { shockerId?: number | null; shareCode?: string | null },
+): void {
+  const hit = cache.get(discordUserId);
+  if (!hit) return;
+  if (input.shockerId != null && Number.isFinite(input.shockerId) && input.shockerId > 0) {
+    hit.shockerIds.delete(Math.floor(input.shockerId));
+  }
+  const code = input.shareCode?.trim().toLowerCase();
+  if (code) hit.shareCodes.delete(code);
+  hit.at = Date.now();
+}
+
+export function invalidatePiShockPauseCache(discordUserId: string): void {
+  cache.delete(discordUserId);
+}

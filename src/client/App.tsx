@@ -242,9 +242,19 @@ export function App() {
   }, []);
 
   const refreshDevices = useCallback(async (accessToken: string) => {
-    const data = await apiFetch<DevicesResponse>('/devices', accessToken);
+    const data = await apiFetch<DevicesResponse & { emergencyStopShockerIds?: number[] }>(
+      '/devices',
+      accessToken,
+    );
     setDevices(data);
     setLivePausedIds((prev) => dropResolvedPause(prev, pauseRowsFromDevices(data)));
+    if (Array.isArray(data.emergencyStopShockerIds)) {
+      setMe((prev) =>
+        prev
+          ? { ...prev, emergencyStopShockerIds: data.emergencyStopShockerIds }
+          : prev,
+      );
+    }
     const nextOnline: Record<string, boolean> = {};
     for (const [k, v] of Object.entries(data.online ?? {})) {
       const key = normalizeClientKey(k);
@@ -904,7 +914,12 @@ export function App() {
         rows.push({
           id: s.shockerId,
           name: s.shockerName,
-          hubName: participant?.displayName ?? status.globalName ?? status.username ?? 'Friend',
+          hubName:
+            s.hubName?.trim() ||
+            participant?.displayName ||
+            status.globalName ||
+            status.username ||
+            'Friend',
           clientId: s.hubClientId ?? undefined,
           owned: false,
           targetDiscordUserId: targetId,
@@ -1850,6 +1865,7 @@ export function App() {
           shockerId: s.shockerId,
           shockerName: s.shockerName,
           hubClientId: s.hubClientId ?? null,
+          hubName: s.hubName ?? null,
           enabled: s.enabled,
           paused: s.paused,
           deviceMaxIntensity: s.deviceMaxIntensity ?? s.maxIntensity,

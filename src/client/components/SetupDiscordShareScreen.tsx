@@ -156,6 +156,7 @@ function toShare(s: ShockerView, mode: ModeLimitsValue): ActivityShareConfig {
     shockerId: s.id,
     shockerName: s.name,
     hubClientId: s.clientId != null ? String(s.clientId) : null,
+    hubName: s.hubName ?? null,
     enabled: true,
     paused: false,
     deviceMaxIntensity: deviceMaxI,

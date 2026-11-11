@@ -301,13 +301,16 @@ describe('expects to happen — happy paths', () => {
       }),
       fetchControlSnapshot: async () =>
         emptySnapshot({
-          shockers: [{ Id: 7, ClientId: 'hub-1', MaxIntensity: 80, MaxDuration: 10 }],
+          hubs: [{ ClientId: 'hub-1', Name: 'LivingRoom' }],
+          shockers: [{ Id: 7, Name: 'Collar', ClientId: 'hub-1', MaxIntensity: 80, MaxDuration: 10 }],
         }),
     });
     const policy = await resolveOwnOperatePolicy('caller-1', CREDS, { shockerId: 7 }, deps);
     assert.equal(policy.shockerId, 7);
+    assert.equal(policy.shockerName, 'Collar');
     assert.equal(policy.crossUser, false);
     assert.equal(policy.hubClientId, 'hub-1');
+    assert.equal(policy.hubName, 'LivingRoom');
     assert.equal(policy.maxIntensity, 60);
     assert.equal(policy.maxDurationMs, 8_000);
   });

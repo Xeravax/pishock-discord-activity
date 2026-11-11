@@ -1493,6 +1493,22 @@ html.pip-mode .app-restart-overlay:not(.app-restart-overlay--outdated) {
   opacity: 0.9;
 }
 
+.official-log-hub {
+  max-width: 9rem;
+}
+
+.official-log-hub .ellipsis {
+  max-width: 7.5rem;
+}
+
+.official-log-shocker {
+  max-width: 148px;
+}
+
+.official-log-shocker .ellipsis {
+  min-width: 0;
+}
+
 .official-log-ago {
   color: #cfd8dc;
   font-size: 12px;

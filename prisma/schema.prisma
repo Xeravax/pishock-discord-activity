@@ -73,6 +73,8 @@ model ActivityShare {
   shockerId     Int
   shockerName   String
   hubClientId   String?
+  /// PiShock hub display name at share-save time (for multi-hub UI + logs).
+  hubName       String?
   /// PiShock share code used when the executor has their own session (OperateByShare)
   shareCode     String?
   /// Hard ceiling from the PiShock device/share (UI red zone above this)
@@ -143,6 +145,12 @@ model CommandLog {
   executorLabel        String?
   action               String
   shockerId            Int?
+  /// Device name at command time (PiShock name, or the activity share name).
+  shockerName          String?
+  /// Hub client id used for the command (when known).
+  hubClientId          String?
+  /// Hub display name at command time (when known).
+  hubName              String?
   shareCode            String?
   intensity            Int?
   durationMs           Int?

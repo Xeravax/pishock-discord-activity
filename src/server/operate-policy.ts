@@ -73,8 +73,12 @@ export type OperateModeFlags = {
 export type ResolvedOperatePolicy = {
   ownerDiscordUserId: string;
   shockerId: number | null;
+  /** PiShock device name, or the activity share name when that is what users see. */
+  shockerName: string | null;
   shareCode: string | null;
   hubClientId: string | null;
+  /** PiShock hub display name when resolvable from hubs/share. */
+  hubName: string | null;
   /** Shock band (also mirrored as min/max* for older call sites). */
   minIntensity: number;
   maxIntensity: number;
@@ -216,8 +220,10 @@ export function assertWithinCeilings(
 export type ActivitySharePolicyRow = {
   discordUserId: string;
   shockerId: number;
+  shockerName?: string | null;
   shareCode: string | null;
   hubClientId: string | null;
+  hubName?: string | null;
   deviceMaxIntensity: number;
   deviceMaxDurationMs: number;
   enabled: boolean;
@@ -291,6 +297,15 @@ export function shockerIdOf(row: Record<string, unknown>): number | null {
   return id != null && id > 0 ? id : null;
 }
 
+export function cleanShockerName(value: string | null | undefined): string | null {
+  const name = value?.trim();
+  return name ? name.slice(0, 120) : null;
+}
+
+export function shockerNameOf(row: Record<string, unknown>): string | null {
+  return cleanShockerName(strField(row, 'Name', 'name', 'ShockerName', 'shockerName'));
+}
+
 export function shareCodeOf(row: Record<string, unknown>): string | null {
   return strField(row, 'ShareCode', 'shareCode', 'Code', 'code');
 }
@@ -314,6 +329,38 @@ export function deviceMaxDurationMsOf(row: Record<string, unknown>): number {
 
 export function hubClientIdOf(row: Record<string, unknown>): string | null {
   return strField(row, 'ClientId', 'clientId', 'HubId', 'hubId');
+}
+
+export function hubNameOf(row: Record<string, unknown>): string | null {
+  const name = strField(row, 'Name', 'name', 'HubName', 'hubName');
+  return name ? name.slice(0, 120) : null;
+}
+
+/** Match a hub client id against the live hubs list and return its display name. */
+export function findHubNameInSnapshot(
+  snapshot: ControlSnapshot,
+  clientId: string | null | undefined,
+): string | null {
+  if (clientId == null) return null;
+  const want = String(clientId).trim();
+  if (!want) return null;
+  for (const raw of snapshot.hubs) {
+    if (!raw || typeof raw !== 'object') continue;
+    const row = raw as Record<string, unknown>;
+    const id = hubClientIdOf(row);
+    if (id && id === want) return hubNameOf(row);
+  }
+  return null;
+}
+
+function resolveHubName(
+  snapshot: ControlSnapshot,
+  clientId: string | null | undefined,
+  storedName?: string | null,
+): string | null {
+  const fromShare = cleanShockerName(storedName);
+  if (fromShare) return fromShare;
+  return findHubNameInSnapshot(snapshot, clientId);
 }
 
 export function findShockerInSnapshot(
@@ -392,8 +439,10 @@ export async function resolveOwnOperatePolicy(
           {
             ownerDiscordUserId: registered.discordUserId,
             shockerId: registered.shockerId,
+            shockerName: cleanShockerName(registered.shockerName),
             shareCode: registered.shareCode,
             hubClientId: registered.hubClientId,
+            hubName: resolveHubName(snapshot, registered.hubClientId, registered.hubName),
             flags: {
               canShock: registered.canShock,
               canVibrate: registered.canVibrate,
@@ -425,8 +474,10 @@ export async function resolveOwnOperatePolicy(
         {
           ownerDiscordUserId: callerDiscordUserId,
           shockerId: registered.shockerId,
+          shockerName: cleanShockerName(registered.shockerName),
           shareCode: registered.shareCode,
           hubClientId: registered.hubClientId,
+          hubName: resolveHubName(snapshot, registered.hubClientId, registered.hubName),
           flags: {
             canShock: registered.canShock,
             canVibrate: registered.canVibrate,
@@ -485,8 +536,10 @@ export async function resolveOwnOperatePolicy(
       {
         ownerDiscordUserId: callerDiscordUserId,
         shockerId: claimedShockerId,
+        shockerName: shockerNameOf(claimed),
         shareCode: code,
         hubClientId: hubClientIdOf(claimed),
+        hubName: resolveHubName(snapshot, hubClientIdOf(claimed)),
         flags: { canShock: true, canVibrate: true, canBeep: true, canHold: true },
         crossUser: false,
       },
@@ -538,8 +591,14 @@ export async function resolveOwnOperatePolicy(
     {
       ownerDiscordUserId: callerDiscordUserId,
       shockerId,
+      shockerName: cleanShockerName(activityShare?.shockerName) ?? shockerNameOf(owned),
       shareCode: null,
       hubClientId: activityShare?.hubClientId ?? hubClientIdOf(owned),
+      hubName: resolveHubName(
+        snapshot,
+        activityShare?.hubClientId ?? hubClientIdOf(owned),
+        activityShare?.hubName,
+      ),
       flags: activityShare
         ? {
             canShock: activityShare.canShock,
@@ -611,6 +670,7 @@ export async function resolveDeviceCeilingsFromPiShock(
   deviceMaxIntensity: number;
   deviceMaxDurationMs: number;
   hubClientId: string | null;
+  hubName: string | null;
   found: boolean;
 }> {
   const snapshot = await fetchControlSnapshot(creds);
@@ -620,13 +680,16 @@ export async function resolveDeviceCeilingsFromPiShock(
       deviceMaxIntensity: ABS_MAX_INTENSITY,
       deviceMaxDurationMs: ABS_MAX_DURATION_MS,
       hubClientId: null,
+      hubName: null,
       found: false,
     };
   }
+  const hubClientId = hubClientIdOf(owned);
   return {
     deviceMaxIntensity: deviceMaxIntensityOf(owned),
     deviceMaxDurationMs: deviceMaxDurationMsOf(owned),
-    hubClientId: hubClientIdOf(owned),
+    hubClientId,
+    hubName: findHubNameInSnapshot(snapshot, hubClientId),
     found: true,
   };
 }

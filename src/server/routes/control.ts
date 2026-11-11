@@ -13,6 +13,7 @@ import {
   operateByShare,
   pauseLink,
   pauseShare,
+  pauseShocker,
 } from '../pishock/client.js';
 import {
   ensureLogCapture,
@@ -21,7 +22,12 @@ import {
   publishOperate,
 } from '../pishock/broker.js';
 import { commandQueue } from '../pishock/command-queue-runtime.js';
-import { rememberPiShockPaused } from '../pishock/pause.js';
+import { guardLocalEstopSync, syncEstopFromPiShockPause } from '../pishock/estop-sync.js';
+import {
+  forgetPiShockPaused,
+  invalidatePiShockPauseCache,
+  rememberPiShockPaused,
+} from '../pishock/pause.js';
 import {
   assertModeAllowed,
   assertOperateRateLimit,
@@ -29,8 +35,10 @@ import {
   clearHoldAutoEnd,
   clampDurationMs,
   clampIntensity,
+  findHubNameInSnapshot,
   findShockerInSnapshot,
   OperatePolicyError,
+  shockerNameOf,
   resolveOwnOperatePolicy,
   scheduleHoldAutoEnd,
   verifyOwnedClientId,
@@ -57,6 +65,9 @@ async function logOperateEvent(input: {
   ownerDiscordUserId: string;
   action: string;
   shockerId?: number | null;
+  shockerName?: string | null;
+  hubClientId?: string | null;
+  hubName?: string | null;
   shareCode?: string | null;
   intensity: number;
   durationMs: number;
@@ -71,6 +82,9 @@ async function logOperateEvent(input: {
     targetDiscordUserId: input.ownerDiscordUserId,
     action: input.action,
     shockerId: input.shockerId ?? undefined,
+    shockerName: input.shockerName,
+    hubClientId: input.hubClientId,
+    hubName: input.hubName,
     shareCode: input.shareCode ?? undefined,
     intensity: input.intensity,
     durationMs: input.durationMs,
@@ -133,9 +147,16 @@ export const controlRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app, op
       const snapshot = await fetchControlSnapshot(req.pishockCreds!);
       const clientIds = collectHubClientIds(snapshot.hubs);
       ensureLogCapture(req.discordUser.id, req.pishockCreds!, clientIds);
+      // Website pause → Discord e-stop (realtime broadcast when the set changes).
+      const estop = await syncEstopFromPiShockPause(
+        req.discordUser.id,
+        req.pishockCreds!,
+        snapshot,
+      ).catch(() => null);
       return {
         ...snapshot,
         online: getOnlineMap(req.discordUser.id),
+        emergencyStopShockerIds: estop?.emergencyStopShockerIds,
       };
     } catch (err) {
       return handlePiShockError(err, req.discordUser.id, reply);
@@ -206,12 +227,38 @@ export const controlRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app, op
       await commandQueue.hardClear(req.discordUser.id, { endActiveDevice: false });
     }
 
+    // Mirror STOP ↔ PiShock.com pause so website + Discord share the same latch.
+    guardLocalEstopSync(req.discordUser.id);
+    for (const shockerId of shockerIds) {
+      try {
+        await pauseShocker(creds, shockerId, body.engaged);
+        if (body.engaged) {
+          rememberPiShockPaused(req.discordUser.id, { shockerId });
+        } else {
+          forgetPiShockPaused(req.discordUser.id, { shockerId });
+        }
+      } catch (err) {
+        console.warn(
+          `[pishock] pauseShocker ${body.engaged ? 'on' : 'off'} failed for ${shockerId}:`,
+          err instanceof Error ? err.message : err,
+        );
+      }
+    }
+    invalidatePiShockPauseCache(req.discordUser.id);
+
     const result = await setEmergencyStops(req.discordUser.id, shockerIds, body.engaged);
     for (const shockerId of shockerIds) {
+      const row = findShockerInSnapshot(snapshot, shockerId);
+      const hubClientId = row
+        ? String(row.ClientId ?? row.clientId ?? '').trim() || null
+        : null;
       await logCommand({
         discordUserId: req.discordUser.id,
         action: body.engaged ? 'emergency_stop_on' : 'emergency_stop_off',
         shockerId,
+        shockerName: row ? shockerNameOf(row) : null,
+        hubClientId,
+        hubName: findHubNameInSnapshot(snapshot, hubClientId),
         intensity: 0,
         durationMs: 0,
         success: true,
@@ -333,6 +380,9 @@ export const controlRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app, op
         ownerDiscordUserId: policy.ownerDiscordUserId,
         action: 'end',
         shockerId,
+        shockerName: policy.shockerName,
+        hubClientId: policy.hubClientId,
+        hubName: policy.hubName,
         shareCode: policy.crossUser ? null : shareCode,
         intensity: 0,
         durationMs: 0,
@@ -454,6 +504,9 @@ export const controlRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app, op
             ownerDiscordUserId: policy.ownerDiscordUserId,
             action: operation,
             shockerId,
+            shockerName: policy.shockerName,
+            hubClientId: policy.hubClientId,
+            hubName: policy.hubName,
             shareCode: policy.crossUser ? null : shareCode,
             intensity,
             durationMs,
@@ -491,6 +544,9 @@ export const controlRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app, op
             ownerDiscordUserId: policy.ownerDiscordUserId,
             action: operation,
             shockerId,
+            shockerName: policy.shockerName,
+            hubClientId: policy.hubClientId,
+            hubName: policy.hubName,
             shareCode: policy.crossUser ? null : shareCode,
             intensity,
             durationMs,
@@ -509,6 +565,9 @@ export const controlRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app, op
           ownerDiscordUserId: policy.ownerDiscordUserId,
           action: operation,
           shockerId,
+          shockerName: policy.shockerName,
+          hubClientId: policy.hubClientId,
+          hubName: policy.hubName,
           shareCode: policy.crossUser ? null : shareCode,
           intensity,
           durationMs,
@@ -533,6 +592,9 @@ export const controlRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app, op
         ownerDiscordUserId: policy.ownerDiscordUserId,
         action: operation,
         shockerId,
+        shockerName: policy.shockerName,
+        hubClientId: policy.hubClientId,
+        hubName: policy.hubName,
         shareCode: policy.crossUser ? null : shareCode,
         intensity,
         durationMs,
@@ -546,6 +608,9 @@ export const controlRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app, op
         ownerDiscordUserId: policy.ownerDiscordUserId,
         action: operation,
         shockerId,
+        shockerName: policy.shockerName,
+        hubClientId: policy.hubClientId,
+        hubName: policy.hubName,
         shareCode: policy.crossUser ? null : shareCode,
         intensity,
         durationMs,

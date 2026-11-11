@@ -105,6 +105,72 @@ export async function findActivityShareByShocker(discordUserId: string, shockerI
 
 export type CommandLogSource = 'discord' | 'website';
 
+function cleanLoggedName(value: string | null | undefined): string | null {
+  const name = value?.trim();
+  return name ? name.slice(0, 120) : null;
+}
+
+/** @deprecated use cleanLoggedName */
+function cleanLoggedShockerName(value: string | null | undefined): string | null {
+  return cleanLoggedName(value);
+}
+
+type ActivityShareLogMeta = {
+  shockerName: string | null;
+  hubClientId: string | null;
+  hubName: string | null;
+};
+
+/** Activity share device/hub labels for a wearer's shocker, when registered. */
+export async function lookupActivityShockerName(
+  ownerDiscordUserId: string,
+  shockerId: number,
+): Promise<string | null> {
+  const meta = await lookupActivityShareLogMeta(ownerDiscordUserId, shockerId);
+  return meta?.shockerName ?? null;
+}
+
+async function lookupActivityShareLogMeta(
+  ownerDiscordUserId: string,
+  shockerId: number,
+): Promise<ActivityShareLogMeta | null> {
+  if (!ownerDiscordUserId || !Number.isFinite(shockerId) || shockerId <= 0) return null;
+  const share = await findActivityShareByShocker(ownerDiscordUserId, Math.round(shockerId));
+  if (!share) return null;
+  return {
+    shockerName: cleanLoggedName(share.shockerName),
+    hubClientId: share.hubClientId ? String(share.hubClientId).trim() || null : null,
+    hubName: cleanLoggedName(share.hubName),
+  };
+}
+
+async function activityShareLogMetaMap(
+  pairs: Array<{ ownerDiscordUserId: string; shockerId: number }>,
+): Promise<Map<string, ActivityShareLogMeta>> {
+  const unique = new Map<string, { discordUserId: string; shockerId: number }>();
+  for (const pair of pairs) {
+    if (!pair.ownerDiscordUserId || !Number.isFinite(pair.shockerId) || pair.shockerId <= 0) continue;
+    unique.set(`${pair.ownerDiscordUserId}:${pair.shockerId}`, {
+      discordUserId: pair.ownerDiscordUserId,
+      shockerId: pair.shockerId,
+    });
+  }
+  if (unique.size === 0) return new Map();
+  const shares = await prisma.activityShare.findMany({
+    where: { OR: [...unique.values()] },
+    select: { discordUserId: true, shockerId: true, shockerName: true, hubClientId: true, hubName: true },
+  });
+  const out = new Map<string, ActivityShareLogMeta>();
+  for (const share of shares) {
+    out.set(`${share.discordUserId}:${share.shockerId}`, {
+      shockerName: cleanLoggedName(share.shockerName),
+      hubClientId: share.hubClientId ? String(share.hubClientId).trim() || null : null,
+      hubName: cleanLoggedName(share.hubName),
+    });
+  }
+  return out;
+}
+
 export async function logCommand(input: {
   discordUserId: string;
   executorDiscordUserId?: string;
@@ -112,6 +178,9 @@ export async function logCommand(input: {
   executorLabel?: string;
   action: string;
   shockerId?: number;
+  shockerName?: string | null;
+  hubClientId?: string | null;
+  hubName?: string | null;
   shareCode?: string;
   intensity?: number;
   durationMs?: number;
@@ -126,6 +195,24 @@ export async function logCommand(input: {
   locationIconUrl?: string | null;
   externalLogKey?: string | null;
 }) {
+  const ownerId = input.targetDiscordUserId || input.discordUserId;
+  const needsShareLookup =
+    input.shockerId != null &&
+    (!cleanLoggedName(input.shockerName) ||
+      !String(input.hubClientId ?? '').trim() ||
+      !cleanLoggedName(input.hubName));
+  const shareMeta =
+    needsShareLookup && input.shockerId != null
+      ? await lookupActivityShareLogMeta(ownerId, input.shockerId)
+      : null;
+
+  const shockerName = cleanLoggedName(input.shockerName) ?? shareMeta?.shockerName ?? null;
+  const hubClientId =
+    (input.hubClientId != null && String(input.hubClientId).trim()) ||
+    shareMeta?.hubClientId ||
+    null;
+  const hubName = cleanLoggedName(input.hubName) ?? shareMeta?.hubName ?? null;
+
   await prisma.commandLog.create({
     data: {
       discordUserId: input.discordUserId,
@@ -134,6 +221,9 @@ export async function logCommand(input: {
       executorLabel: input.executorLabel,
       action: input.action,
       shockerId: input.shockerId,
+      shockerName,
+      hubClientId,
+      hubName,
       shareCode: input.shareCode,
       intensity: input.intensity,
       durationMs: input.durationMs,
@@ -171,6 +261,7 @@ export async function replaceActivityShares(
     shockerId: number;
     shockerName: string;
     hubClientId?: string | null;
+    hubName?: string | null;
     shareCode?: string | null;
     deviceMaxIntensity?: number;
     deviceMaxDurationMs?: number;
@@ -224,6 +315,7 @@ export async function replaceActivityShares(
           shockerId: s.shockerId,
           shockerName: s.shockerName,
           hubClientId: s.hubClientId ?? null,
+          hubName: s.hubName ? String(s.hubName).trim().slice(0, 120) || null : null,
           shareCode: s.shareCode ? String(s.shareCode) : null,
           deviceMaxIntensity,
           deviceMaxDurationMs,
@@ -322,6 +414,24 @@ export async function setEmergencyStop(
     engaged: result.emergencyStopShockerIds.includes(shockerId),
     emergencyStopShockerIds: result.emergencyStopShockerIds,
   };
+}
+
+/** Replace the full emergency-stop set (used when mirroring PiShock website pause). */
+export async function replaceEmergencyStopShockerIds(
+  discordUserId: string,
+  shockerIds: number[],
+): Promise<number[]> {
+  const next = [
+    ...new Set(
+      shockerIds.filter((id) => Number.isFinite(id) && id > 0).map((id) => Math.floor(id)),
+    ),
+  ].sort((a, b) => a - b);
+  const user = await prisma.discordUser.update({
+    where: { id: discordUserId },
+    data: { emergencyStopShockerIds: next },
+    select: { emergencyStopShockerIds: true },
+  });
+  return user.emergencyStopShockerIds;
 }
 
 export type CommandQueueSettings = {
@@ -597,6 +707,19 @@ export async function listCommandLogs(discordUserId: string, limit = 50) {
     take: limit,
   });
 
+  const metaByKey = await activityShareLogMetaMap(
+    rows
+      .filter(
+        (row) =>
+          row.shockerId &&
+          (!row.shockerName || !row.hubClientId || !row.hubName),
+      )
+      .map((row) => ({
+        ownerDiscordUserId: row.targetDiscordUserId ?? row.discordUserId,
+        shockerId: row.shockerId!,
+      })),
+  );
+
   // Share codes are a capability — only the device owner's own log rows may see them.
   return rows.map((row) => {
     const deviceOwnerId = row.targetDiscordUserId ?? row.discordUserId;
@@ -604,8 +727,15 @@ export async function listCommandLogs(discordUserId: string, limit = 50) {
       Boolean(row.shareCode) &&
       deviceOwnerId === discordUserId &&
       row.discordUserId === discordUserId;
+    const meta = row.shockerId ? metaByKey.get(`${deviceOwnerId}:${row.shockerId}`) : undefined;
+    const shockerName = cleanLoggedName(row.shockerName) ?? meta?.shockerName ?? null;
+    const hubClientId = row.hubClientId ?? meta?.hubClientId ?? null;
+    const hubName = cleanLoggedName(row.hubName) ?? meta?.hubName ?? null;
     return {
       ...row,
+      shockerName,
+      hubClientId,
+      hubName,
       shareCode: canSeeShareCode ? row.shareCode : null,
       hasShareCode: Boolean(row.shareCode),
     };
@@ -678,6 +808,9 @@ export async function listPublicCommandLogs(limit = 200) {
       executorLabel: true,
       action: true,
       shockerId: true,
+      shockerName: true,
+      hubClientId: true,
+      hubName: true,
       intensity: true,
       durationMs: true,
       success: true,
@@ -700,6 +833,20 @@ export async function listPublicCommandLogs(limit = 200) {
         (row.executorDiscordUserId || row.executorLabel),
     )
     .slice(0, take);
+
+  const metaByKey = await activityShareLogMetaMap(
+    deduped
+      .filter(
+        (row) =>
+          row.shockerId &&
+          row.targetDiscordUserId &&
+          (!row.shockerName || !row.hubClientId || !row.hubName),
+      )
+      .map((row) => ({
+        ownerDiscordUserId: row.targetDiscordUserId!,
+        shockerId: row.shockerId!,
+      })),
+  );
 
   const userIds = [
     ...new Set(
@@ -729,10 +876,17 @@ export async function listPublicCommandLogs(limit = 200) {
           avatar: null,
           avatarUrl: discordAvatarUrl('0', null),
         };
+    const meta =
+      row.shockerId && row.targetDiscordUserId
+        ? metaByKey.get(`${row.targetDiscordUserId}:${row.shockerId}`)
+        : undefined;
     return {
       id: row.id,
       action: row.action,
       shockerId: row.shockerId,
+      shockerName: cleanLoggedName(row.shockerName) ?? meta?.shockerName ?? null,
+      hubClientId: row.hubClientId ?? meta?.hubClientId ?? null,
+      hubName: cleanLoggedName(row.hubName) ?? meta?.hubName ?? null,
       intensity: row.intensity,
       durationMs: row.durationMs,
       success: row.success,

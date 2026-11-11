@@ -23,6 +23,7 @@ type IncomingShare = {
   shockerId?: number;
   shockerName?: string;
   hubClientId?: string | null;
+  hubName?: string | null;
   shareCode?: string | null;
   deviceMaxIntensity?: number;
   deviceMaxDurationMs?: number;
@@ -75,8 +76,13 @@ async function normalizeShareRow(
         ABS_MIN_DURATION_MS,
         Math.min(ABS_MAX_DURATION_MS, Number(prev?.deviceMaxDurationMs ?? ABS_MAX_DURATION_MS)),
       );
-  // Prefer live PiShock hub id; fall back to previously stored value only
+  // Prefer live PiShock hub id/name; fall back to previously stored values only
   const hubClientId = ceilings.hubClientId ?? prev?.hubClientId ?? null;
+  const hubName =
+    ceilings.hubName ??
+    (typeof s.hubName === 'string' && s.hubName.trim() ? s.hubName.trim().slice(0, 120) : null) ??
+    prev?.hubName ??
+    null;
 
   const canShock = s.canShock !== false;
   const canVibrate = s.canVibrate !== false;
@@ -139,6 +145,7 @@ async function normalizeShareRow(
       shockerId,
       shockerName: String(s.shockerName || prev?.shockerName || `Shocker ${shockerId}`).slice(0, 120),
       hubClientId,
+      hubName,
       shareCode,
       deviceMaxIntensity,
       deviceMaxDurationMs,
@@ -378,6 +385,7 @@ export function serializeShare(s: {
   shockerId: number;
   shockerName: string;
   hubClientId: string | null;
+  hubName?: string | null;
   shareCode: string | null;
   deviceMaxIntensity: number;
   deviceMaxDurationMs: number;
@@ -406,6 +414,7 @@ export function serializeShare(s: {
     shockerId: s.shockerId,
     shockerName: s.shockerName,
     hubClientId: s.hubClientId,
+    hubName: s.hubName ?? null,
     hasShareCode: Boolean(s.shareCode),
     deviceMaxIntensity: s.deviceMaxIntensity,
     deviceMaxDurationMs: s.deviceMaxDurationMs,

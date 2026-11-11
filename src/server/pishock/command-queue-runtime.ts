@@ -2,6 +2,7 @@ import type { AppEnv } from '../env.js';
 import { broadcastRealtime } from '../realtime.js';
 import { clearHoldAutoEnd, scheduleHoldAutoEnd } from '../operate-policy.js';
 import {
+  findActivityShareByShocker,
   getCommandQueueSettings,
   getConsent,
   isEmergencyStopped,
@@ -54,6 +55,9 @@ async function auditParticipantCommand(input: {
   executorAvatar?: string | null;
   action: string;
   shockerId: number;
+  shockerName?: string | null;
+  hubClientId?: string | null;
+  hubName?: string | null;
   shareCode?: string | null;
   intensity: number;
   durationMs: number;
@@ -67,6 +71,9 @@ async function auditParticipantCommand(input: {
     targetDiscordUserId: input.targetDiscordUserId,
     action: input.action,
     shockerId: input.shockerId,
+    shockerName: input.shockerName,
+    hubClientId: input.hubClientId,
+    hubName: input.hubName,
     intensity: input.intensity,
     durationMs: input.durationMs,
     success: input.success,
@@ -221,6 +228,8 @@ async function executeQueuedItem(item: QueueItemInternal): Promise<void> {
   const durationMs = item.durationMs;
   const location = payload.location;
 
+  const shareMeta = await findActivityShareByShocker(item.ownerDiscordUserId, item.shockerId);
+
   const auditBase = {
     executorDiscordUserId: item.executorDiscordUserId,
     executorUsername: item.executorUsername,
@@ -229,6 +238,9 @@ async function executeQueuedItem(item: QueueItemInternal): Promise<void> {
     targetDiscordUserId: item.ownerDiscordUserId,
     action: `participant_${item.operation}`,
     shockerId: item.shockerId,
+    shockerName: shareMeta?.shockerName ?? null,
+    hubClientId: item.hubClientId ?? shareMeta?.hubClientId ?? null,
+    hubName: shareMeta?.hubName ?? null,
     shareCode,
     intensity: item.intensity,
     durationMs,

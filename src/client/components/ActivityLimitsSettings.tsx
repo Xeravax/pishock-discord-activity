@@ -53,6 +53,7 @@ export type ShareLimitRow = {
   shockerId: number;
   shockerName: string;
   hubClientId?: string | null;
+  hubName?: string | null;
   enabled: boolean;
   paused: boolean;
   deviceMaxIntensity: number;
@@ -305,6 +306,7 @@ export function ActivityLimitsSettings({
         shockerId: s.id,
         shockerName: s.name,
         hubClientId: s.clientId != null ? String(s.clientId) : null,
+        hubName: s.hubName ?? null,
         enabled: true,
         paused: false,
         deviceMaxIntensity: deviceMaxI,

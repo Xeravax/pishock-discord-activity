@@ -66,6 +66,9 @@ async function auditParticipantCommand(input: {
   executorAvatar?: string | null;
   action: string;
   shockerId: number;
+  shockerName?: string | null;
+  hubClientId?: string | null;
+  hubName?: string | null;
   shareCode?: string | null;
   intensity: number;
   durationMs: number;
@@ -79,6 +82,9 @@ async function auditParticipantCommand(input: {
     targetDiscordUserId: input.targetDiscordUserId,
     action: input.action,
     shockerId: input.shockerId,
+    shockerName: input.shockerName,
+    hubClientId: input.hubClientId,
+    hubName: input.hubName,
     intensity: input.intensity,
     durationMs: input.durationMs,
     success: input.success,
@@ -197,6 +203,7 @@ export const participantRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app
               shockerId: number;
               shockerName: string;
               hubClientId: string | null;
+              hubName?: string | null;
               deviceMaxIntensity: number;
               deviceMaxDurationMs: number;
               minIntensity: number;
@@ -216,6 +223,7 @@ export const participantRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app
                 shockerId: s.shockerId,
                 shockerName: s.shockerName,
                 hubClientId: s.hubClientId,
+                hubName: s.hubName ?? null,
                 deviceMaxIntensity: s.deviceMaxIntensity,
                 deviceMaxDurationMs: s.deviceMaxDurationMs,
                 minIntensity: bands.shock.minIntensity,
@@ -395,6 +403,9 @@ export const participantRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app
             targetDiscordUserId,
             action: 'participant_end',
             shockerId,
+            shockerName: share.shockerName,
+            hubClientId: share.hubClientId ?? clientId ?? null,
+            hubName: share.hubName ?? null,
             shareCode,
             intensity: 0,
             durationMs: 0,
@@ -432,6 +443,9 @@ export const participantRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app
         targetDiscordUserId,
         action: 'participant_end',
         shockerId,
+        shockerName: share.shockerName,
+        hubClientId: share.hubClientId ?? clientId ?? null,
+        hubName: share.hubName ?? null,
         shareCode,
         intensity: 0,
         durationMs: 0,
@@ -566,6 +580,9 @@ export const participantRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app
           hold,
           warning,
           shockerId,
+          shockerName: share.shockerName,
+          hubClientId: share.hubClientId ?? clientId ?? null,
+          hubName: share.hubName ?? null,
           shareCode,
           hubClientId: clientId ?? null,
           instanceId,
@@ -632,6 +649,9 @@ export const participantRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app
             targetDiscordUserId,
             action: `participant_${operation}`,
             shockerId,
+            shockerName: share.shockerName,
+            hubClientId: share.hubClientId ?? clientId ?? null,
+            hubName: share.hubName ?? null,
             shareCode,
             intensity,
             durationMs,
@@ -667,6 +687,9 @@ export const participantRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app
           targetDiscordUserId,
           action: `participant_${operation}`,
           shockerId,
+          shockerName: share.shockerName,
+          hubClientId: share.hubClientId ?? clientId ?? null,
+          hubName: share.hubName ?? null,
           shareCode,
           intensity,
           durationMs,
@@ -701,6 +724,9 @@ export const participantRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app
         targetDiscordUserId,
         action: `participant_${operation}`,
         shockerId,
+        shockerName: share.shockerName,
+        hubClientId: share.hubClientId ?? clientId ?? null,
+        hubName: share.hubName ?? null,
         shareCode,
         intensity,
         durationMs,
@@ -726,6 +752,9 @@ export const participantRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app
         targetDiscordUserId,
         action: `participant_${operation}`,
         shockerId,
+        shockerName: share.shockerName,
+        hubClientId: share.hubClientId ?? clientId ?? null,
+        hubName: share.hubName ?? null,
         shareCode,
         intensity,
         durationMs,

@@ -115,6 +115,34 @@ export async function ingestBrokerDeviceLog(
   const durationMs = Number.isFinite(durationRaw) ? Math.round(durationRaw) : null;
   const shockerId =
     Number.isFinite(shockerRaw) && shockerRaw > 0 ? Math.round(shockerRaw) : null;
+  const named = body.shockerName ?? body.ShockerName;
+  const explicitName = typeof named === 'string' && named.trim() ? named.trim().slice(0, 120) : null;
+  const hubNamed = body.hubName ?? body.HubName ?? body.clientName ?? body.ClientName;
+  const explicitHubName =
+    typeof hubNamed === 'string' && hubNamed.trim() ? hubNamed.trim().slice(0, 120) : null;
+  const hubClientId =
+    event.clientId != null && String(event.clientId).trim()
+      ? String(event.clientId).trim()
+      : null;
+  let shareName: string | null = null;
+  let shareHubName: string | null = null;
+  let shareHubClientId: string | null = null;
+  if (shockerId != null && (!explicitName || !explicitHubName || !hubClientId)) {
+    const share = await prisma.activityShare.findUnique({
+      where: {
+        discordUserId_shockerId: { discordUserId: ownerDiscordUserId, shockerId },
+      },
+      select: { shockerName: true, hubName: true, hubClientId: true },
+    });
+    const trimmed = share?.shockerName?.trim();
+    shareName = trimmed ? trimmed.slice(0, 120) : null;
+    const hubTrimmed = share?.hubName?.trim();
+    shareHubName = hubTrimmed ? hubTrimmed.slice(0, 120) : null;
+    shareHubClientId = share?.hubClientId ? String(share.hubClientId).trim() || null : null;
+  }
+  const shockerName = explicitName ?? shareName;
+  const hubName = explicitHubName ?? shareHubName;
+  const resolvedHubClientId = hubClientId ?? shareHubClientId;
 
   const at = new Date(Number.isFinite(event.at) ? event.at : Date.now());
   const fingerprint = createHash('sha1')
@@ -144,6 +172,9 @@ export async function ingestBrokerDeviceLog(
         executorLabel: agent.slice(0, 80),
         action,
         shockerId,
+        shockerName,
+        hubClientId: resolvedHubClientId,
+        hubName,
         intensity,
         durationMs,
         success: true,
