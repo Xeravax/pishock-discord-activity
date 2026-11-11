@@ -76,4 +76,33 @@ describe('rejected PiShock API keys', () => {
     assert.ok(calls > afterShare);
     assert.equal(isPiShockApiKeyRejected(key.token), true);
   });
+
+  it('keeps a key when only GET /Links returns 401', async () => {
+    const urls: string[] = [];
+    globalThis.fetch = async (input) => {
+      const url = String(input);
+      urls.push(url);
+      if (url.includes('/Links')) return unauthorized();
+      const body = url.includes('/Hub') ? JSON.stringify([{ HubId: 1 }]) : '[]';
+      return new Response(body, { status: 200, headers: { 'Content-Type': 'application/json' } });
+    };
+
+    const key = creds('links-401');
+    const first = await fetchControlSnapshot(key);
+    assert.deepEqual(first.hubs, [{ HubId: 1 }]);
+    assert.deepEqual(first.links, []);
+    assert.equal(isPiShockApiKeyRejected(key.token), false);
+
+    const linksCalls = urls.filter((url) => url.includes('/Links')).length;
+    assert.ok(linksCalls >= 1);
+
+    urls.length = 0;
+    const second = await fetchControlSnapshot(key);
+    assert.deepEqual(second.hubs, [{ HubId: 1 }]);
+    assert.equal(
+      urls.some((url) => url.includes('/Links')),
+      false,
+    );
+    assert.equal(isPiShockApiKeyRejected(key.token), false);
+  });
 });

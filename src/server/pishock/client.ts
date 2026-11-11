@@ -35,6 +35,8 @@ export class PiShockApiError extends Error {
  * every few seconds after both auth styles failed.
  */
 const rejectedApiKeys = new Set<string>();
+/** GET /Links 401s some API keys that Hub, Shockers, and Account accept. */
+const linksUnsupportedKeys = new Set<string>();
 const apiKeyRejectedListeners = new Set<(token: string) => void>();
 
 export function isPiShockApiKeyRejected(token: string): boolean {
@@ -49,10 +51,12 @@ export function onPiShockApiKeyRejected(listener: (token: string) => void): () =
 /** Explicit re-link of a key may try it again. The next 401 blocks it once more. */
 export function allowPiShockApiKey(token: string): void {
   rejectedApiKeys.delete(token);
+  linksUnsupportedKeys.delete(token);
 }
 
 export function resetRejectedPiShockApiKeysForTests(): void {
   rejectedApiKeys.clear();
+  linksUnsupportedKeys.clear();
 }
 
 function rejectPiShockApiKey(token: string): void {
@@ -176,11 +180,20 @@ async function request<T = unknown>(
         continue;
       }
       noteRejectedApiKey(creds, err, fatalAuth);
-      throw err;
+      throw fatalAuth ? err : demoteAuthFailure(err);
     }
   }
-  noteRejectedApiKey(creds, last401, fatalAuth);
-  throw last401 ?? new PiShockApiError(401, 'Unauthorized');
+  const fallback = last401 ?? new PiShockApiError(401, 'Unauthorized');
+  noteRejectedApiKey(creds, fallback, fatalAuth);
+  throw fatalAuth ? fallback : demoteAuthFailure(fallback);
+}
+
+/** A 401 from an endpoint that rejects valid keys must not clear the stored session. */
+function demoteAuthFailure(err: unknown): unknown {
+  if (err instanceof PiShockApiError && err.needsRelogin) {
+    return new PiShockApiError(err.status, err.body, false);
+  }
+  return err;
 }
 
 export async function getHubs(creds: PiShockCreds) {
@@ -196,21 +209,40 @@ export async function getShared(creds: PiShockCreds) {
 }
 
 export async function getLinks(creds: PiShockCreds) {
-  return request(creds, 'GET', `${PISHOCK_API}/Links`);
+  // Session login uses the website token; a 401 there really is logged out.
+  if (creds.mode === 'session') return request(creds, 'GET', `${PISHOCK_API}/Links`);
+  if (linksUnsupportedKeys.has(creds.token)) {
+    return { status: 200, data: [] as unknown[], raw: '' };
+  }
+  try {
+    return await request(creds, 'GET', `${PISHOCK_API}/Links`, undefined, { fatalAuth: false });
+  } catch (err) {
+    if (isPiShockApiKeyRejected(creds.token)) throw err;
+    if (err instanceof PiShockApiError && err.status === 401) {
+      linksUnsupportedKeys.add(creds.token);
+      console.warn('[pishock] GET /Links rejected this API key; skipping Links until re-link');
+      return { status: 200, data: [] as unknown[], raw: '' };
+    }
+    throw err;
+  }
 }
 
 export async function createLink(creds: PiShockCreds, payload: Record<string, unknown>) {
-  return request(creds, 'POST', `${PISHOCK_API}/Links`, payload);
+  return request(creds, 'POST', `${PISHOCK_API}/Links`, payload, {
+    fatalAuth: creds.mode === 'session',
+  });
 }
 
 export async function pauseLink(creds: PiShockCreds, linkId: number, pauseState: boolean | null) {
   return request(creds, 'PATCH', `${PISHOCK_API}/Links/Pause/${linkId}`, {
     PauseState: pauseState,
-  });
+  }, { fatalAuth: creds.mode === 'session' });
 }
 
 export async function deleteLink(creds: PiShockCreds, linkId: number) {
-  return request(creds, 'DELETE', `${PISHOCK_API}/Links/${linkId}`);
+  return request(creds, 'DELETE', `${PISHOCK_API}/Links/${linkId}`, undefined, {
+    fatalAuth: creds.mode === 'session',
+  });
 }
 
 function shareShockerId(payload: Record<string, unknown>): number {
