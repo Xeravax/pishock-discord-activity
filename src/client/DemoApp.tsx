@@ -143,19 +143,6 @@ const DEMO_SHOCKERS: ShockerView[] = [
   },
 ];
 
-const DEMO_LINKS = [
-  {
-    LinkId: 5158,
-    ShockerId: 26515,
-    Code: '58a93a7b-demo',
-    Name: 'Lemonade',
-    Paused: false,
-    ShockEnabled: true,
-    VibrateEnabled: false,
-    BeepEnabled: false,
-  },
-];
-
 const DEMO_LOGS = [
   {
     id: '1',
@@ -417,7 +404,7 @@ export function DemoApp() {
                 className="q-item q-item-type row no-wrap full-width bg-transparent text-left cursor-pointer"
                 onClick={() => setOverlay('shares')}
               >
-                <div className="q-item__label text-grey-3">Shares & links</div>
+                <div className="q-item__label text-grey-3">Shares</div>
               </button>
               <button
                 type="button"
@@ -431,7 +418,7 @@ export function DemoApp() {
 
           <PsDialog
             open={overlay === 'shares' || screen === 'shares'}
-            title="Shares & links"
+            title="Shares"
             onClose={() => {
               setOverlay(null);
               if (screen === 'shares') setScreen('control');
@@ -439,13 +426,9 @@ export function DemoApp() {
             wide
           >
             <SharesPanel
-              links={DEMO_LINKS}
               shared={[]}
               shockers={DEMO_SHOCKERS.filter((s) => s.owned).map((s) => ({ id: s.id, name: s.name }))}
               busy={false}
-              onCreate={() => flash('Would create link')}
-              onPause={() => flash('Would pause link')}
-              onDelete={() => flash('Would delete link')}
               onCreateShare={() => flash('Would create share code')}
               onClaimShare={() => flash('Would redeem share code')}
             />

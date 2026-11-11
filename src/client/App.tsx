@@ -110,7 +110,6 @@ type DevicesResponse = {
   hubs: Array<Record<string, unknown>>;
   shockers: Array<Record<string, unknown>>;
   shared: Array<Record<string, unknown>>;
-  links: Array<Record<string, unknown>>;
   online: Record<string, boolean>;
 };
 
@@ -2136,7 +2135,7 @@ export function App() {
             ? 'Link PiShock to make your shockers available in this Discord activity.'
             : next === 'settings'
               ? 'Link PiShock to configure Activity Limits for your devices.'
-              : 'Link PiShock to manage your website shares and links.',
+              : 'Link PiShock to manage your share codes.',
         );
         return;
       }
@@ -2414,7 +2413,7 @@ export function App() {
               [
                 ['availability', 'Available in Discord', 'mdi-account-check'],
                 ['settings', 'Activity Limits', 'mdi-tune'],
-                ['shares', 'Shares & links', 'mdi-share-variant'],
+                ['shares', 'Shares', 'mdi-share-variant'],
                 ['logs', 'Logs', 'mdi-message-text-clock'],
               ] as const
             )
@@ -2599,9 +2598,8 @@ export function App() {
           />
         </PsDialog>
 
-        <PsDialog open={overlay === 'shares'} title="Shares & links" onClose={() => setOverlay(null)} wide>
+        <PsDialog open={overlay === 'shares'} title="Shares" onClose={() => setOverlay(null)} wide>
           <SharesPanel
-            links={(devices?.links as Array<Record<string, unknown>>) ?? []}
             shared={
               Array.isArray(devices?.shared)
                 ? (devices?.shared as Array<Record<string, unknown>>)
@@ -2609,45 +2607,6 @@ export function App() {
             }
             shockers={ownedShockers.map((s) => ({ id: s.id, name: s.name }))}
             busy={busy}
-            onCreate={async (payload) => {
-              if (!token) return;
-              setBusy(true);
-              try {
-                await apiFetch('/links', token, { method: 'POST', body: JSON.stringify(payload) });
-                await refreshDevices(token);
-              } catch (err) {
-                setActionError(err instanceof Error ? err.message : String(err));
-              } finally {
-                setBusy(false);
-              }
-            }}
-            onPause={async (linkId, pauseState) => {
-              if (!token) return;
-              setBusy(true);
-              try {
-                await apiFetch('/pause', token, {
-                  method: 'POST',
-                  body: JSON.stringify({ linkId, pauseState }),
-                });
-                await refreshDevices(token);
-              } catch (err) {
-                setActionError(err instanceof Error ? err.message : String(err));
-              } finally {
-                setBusy(false);
-              }
-            }}
-            onDelete={async (linkId) => {
-              if (!token) return;
-              setBusy(true);
-              try {
-                await apiFetch(`/links/${linkId}`, token, { method: 'DELETE' });
-                await refreshDevices(token);
-              } catch (err) {
-                setActionError(err instanceof Error ? err.message : String(err));
-              } finally {
-                setBusy(false);
-              }
-            }}
             onCreateShare={async (shockerId) => {
               if (!token) return;
               setBusy(true);

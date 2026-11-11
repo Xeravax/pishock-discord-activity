@@ -35,8 +35,6 @@ export class PiShockApiError extends Error {
  * every few seconds after both auth styles failed.
  */
 const rejectedApiKeys = new Set<string>();
-/** GET /Links 401s some API keys that Hub, Shockers, and Account accept. */
-const linksUnsupportedKeys = new Set<string>();
 const apiKeyRejectedListeners = new Set<(token: string) => void>();
 
 export function isPiShockApiKeyRejected(token: string): boolean {
@@ -51,12 +49,10 @@ export function onPiShockApiKeyRejected(listener: (token: string) => void): () =
 /** Explicit re-link of a key may try it again. The next 401 blocks it once more. */
 export function allowPiShockApiKey(token: string): void {
   rejectedApiKeys.delete(token);
-  linksUnsupportedKeys.delete(token);
 }
 
 export function resetRejectedPiShockApiKeysForTests(): void {
   rejectedApiKeys.clear();
-  linksUnsupportedKeys.clear();
 }
 
 function rejectPiShockApiKey(token: string): void {
@@ -206,43 +202,6 @@ export async function getShockers(creds: PiShockCreds) {
 
 export async function getShared(creds: PiShockCreds) {
   return request(creds, 'GET', `${PISHOCK_API}/Share/GetShared`);
-}
-
-export async function getLinks(creds: PiShockCreds) {
-  // Session login uses the website token; a 401 there really is logged out.
-  if (creds.mode === 'session') return request(creds, 'GET', `${PISHOCK_API}/Links`);
-  if (linksUnsupportedKeys.has(creds.token)) {
-    return { status: 200, data: [] as unknown[], raw: '' };
-  }
-  try {
-    return await request(creds, 'GET', `${PISHOCK_API}/Links`, undefined, { fatalAuth: false });
-  } catch (err) {
-    if (isPiShockApiKeyRejected(creds.token)) throw err;
-    if (err instanceof PiShockApiError && err.status === 401) {
-      linksUnsupportedKeys.add(creds.token);
-      console.warn('[pishock] GET /Links rejected this API key; skipping Links until re-link');
-      return { status: 200, data: [] as unknown[], raw: '' };
-    }
-    throw err;
-  }
-}
-
-export async function createLink(creds: PiShockCreds, payload: Record<string, unknown>) {
-  return request(creds, 'POST', `${PISHOCK_API}/Links`, payload, {
-    fatalAuth: creds.mode === 'session',
-  });
-}
-
-export async function pauseLink(creds: PiShockCreds, linkId: number, pauseState: boolean | null) {
-  return request(creds, 'PATCH', `${PISHOCK_API}/Links/Pause/${linkId}`, {
-    PauseState: pauseState,
-  }, { fatalAuth: creds.mode === 'session' });
-}
-
-export async function deleteLink(creds: PiShockCreds, linkId: number) {
-  return request(creds, 'DELETE', `${PISHOCK_API}/Links/${linkId}`, undefined, {
-    fatalAuth: creds.mode === 'session',
-  });
 }
 
 function shareShockerId(payload: Record<string, unknown>): number {
@@ -479,16 +438,14 @@ export type ControlSnapshot = {
   hubs: unknown[];
   shockers: unknown[];
   shared: unknown[];
-  links: unknown[];
 };
 
 export async function fetchControlSnapshot(creds: PiShockCreds): Promise<ControlSnapshot> {
-  const [hubs, shockers, shared, links] = await Promise.all([
+  const [hubs, shockers, shared] = await Promise.all([
     softList('Hub', () => getHubs(creds)),
     softList('Shockers', () => getShockers(creds)),
     softList('Share/GetShared', () => getShared(creds)),
-    softList('Links', () => getLinks(creds)),
   ]);
 
-  return { hubs, shockers, shared, links };
+  return { hubs, shockers, shared };
 }

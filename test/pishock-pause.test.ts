@@ -45,7 +45,6 @@ describe('PiShock pause flags', () => {
         { ShockerId: 9, isPaused: true },
       ],
       shared: [{ Id: 99, Paused: true }],
-      links: [],
     });
     assert.deepEqual(ids, [7, 9]);
   });

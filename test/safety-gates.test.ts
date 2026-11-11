@@ -40,7 +40,6 @@ function emptySnapshot(overrides: Partial<ControlSnapshot> = {}): ControlSnapsho
     hubs: [],
     shockers: [],
     shared: [],
-    links: [],
     ...overrides,
   };
 }

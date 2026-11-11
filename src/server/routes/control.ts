@@ -4,14 +4,11 @@ import type { AppEnv } from '../env.js';
 import {
   PiShockApiError,
   claimShareCodes,
-  createLink,
   createShare,
-  deleteLink,
   deleteShare,
   fetchControlSnapshot,
   operateById,
   operateByShare,
-  pauseLink,
   pauseShare,
 } from '../pishock/client.js';
 import {
@@ -629,76 +626,22 @@ export const controlRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app, op
     if (blocked) return blocked;
     const body = req.body as {
       shareId?: number;
-      linkId?: number;
       pauseState?: boolean | null;
     };
     try {
-      if (body.shareId != null) {
-        const result = await pauseShare(req.pishockCreds!, body.shareId, body.pauseState ?? null);
-        if (result.status === 404 || result.status === 405) {
-          return reply.code(result.status).send({ error: 'Pause share route unavailable' });
-        }
-        await logCommand({
-          discordUserId: req.discordUser.id,
-          action: 'pause_share',
-          success: true,
-          detail: `shareId=${body.shareId}`,
-        });
-        return { ok: true };
+      if (body.shareId == null) {
+        return reply.code(400).send({ error: 'shareId required' });
       }
-      if (body.linkId != null) {
-        const result = await pauseLink(req.pishockCreds!, body.linkId, body.pauseState ?? null);
-        if (result.status === 404 || result.status === 405) {
-          return reply.code(result.status).send({ error: 'Pause link route unavailable' });
-        }
-        await logCommand({
-          discordUserId: req.discordUser.id,
-          action: 'pause_link',
-          success: true,
-          detail: `linkId=${body.linkId}`,
-        });
-        return { ok: true };
-      }
-      return reply.code(400).send({ error: 'shareId or linkId required' });
-    } catch (err) {
-      return handlePiShockError(err, req.discordUser.id, reply);
-    }
-  });
-
-  app.get('/api/links', async (req, reply) => {
-    const blocked = requireSession(req, reply);
-    if (blocked) return blocked;
-    try {
-      const snapshot = await fetchControlSnapshot(req.pishockCreds!);
-      return { links: snapshot.links };
-    } catch (err) {
-      return handlePiShockError(err, req.discordUser.id, reply);
-    }
-  });
-
-  app.post('/api/links', async (req, reply) => {
-    const blocked = requireSession(req, reply);
-    if (blocked) return blocked;
-    try {
-      const result = await createLink(req.pishockCreds!, req.body as Record<string, unknown>);
+      const result = await pauseShare(req.pishockCreds!, body.shareId, body.pauseState ?? null);
       if (result.status === 404 || result.status === 405) {
-        return reply.code(result.status).send({ error: 'Create link unavailable' });
+        return reply.code(result.status).send({ error: 'Pause share route unavailable' });
       }
-      return { ok: true };
-    } catch (err) {
-      return handlePiShockError(err, req.discordUser.id, reply);
-    }
-  });
-
-  app.delete('/api/links/:linkId', async (req, reply) => {
-    const blocked = requireSession(req, reply);
-    if (blocked) return blocked;
-    const linkId = Number((req.params as { linkId: string }).linkId);
-    try {
-      const result = await deleteLink(req.pishockCreds!, linkId);
-      if (result.status === 404 || result.status === 405) {
-        return reply.code(result.status).send({ error: 'Delete link unavailable' });
-      }
+      await logCommand({
+        discordUserId: req.discordUser.id,
+        action: 'pause_share',
+        success: true,
+        detail: `shareId=${body.shareId}`,
+      });
       return { ok: true };
     } catch (err) {
       return handlePiShockError(err, req.discordUser.id, reply);

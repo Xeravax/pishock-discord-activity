@@ -58,7 +58,7 @@ import type { ControlSnapshot, PiShockCreds } from '../src/server/pishock/client
 const CREDS: PiShockCreds = { userId: 1, username: 'test-user', token: 'test-token' };
 
 function emptySnapshot(overrides: Partial<ControlSnapshot> = {}): ControlSnapshot {
-  return { hubs: [], shockers: [], shared: [], links: [], ...overrides };
+  return { hubs: [], shockers: [], shared: [], ...overrides };
 }
 
 function shareRow(overrides: Partial<ActivitySharePolicyRow> = {}): ActivitySharePolicyRow {
