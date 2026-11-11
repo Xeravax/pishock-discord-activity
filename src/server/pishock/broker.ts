@@ -1,7 +1,7 @@
 import WebSocket from 'ws';
 import { AGENT_NAME, PISHOCK_BROKER, ShockerOp } from '../../shared/constants.js';
 import { ingestBrokerDeviceLog } from './broker-log-ingest.js';
-import type { PiShockCreds } from './client.js';
+import { isPiShockApiKeyRejected, type PiShockCreds } from './client.js';
 
 export type BrokerEvent =
   | { type: 'online'; clientId: string; online: boolean; at: number }
@@ -39,6 +39,10 @@ export function subscribeBroker(
   clientIds: string[],
   subscriber: Subscriber,
 ): () => void {
+  if (isPiShockApiKeyRejected(creds.token)) {
+    disconnectBroker(discordUserId);
+    return () => {};
+  }
   let session = sessions.get(discordUserId);
   if (!session) {
     session = {
@@ -135,6 +139,10 @@ export function ensureLogCapture(
   creds: PiShockCreds,
   clientIds: string[],
 ) {
+  if (isPiShockApiKeyRejected(creds.token)) {
+    disconnectBroker(discordUserId);
+    return;
+  }
   let session = sessions.get(discordUserId);
   if (!session) {
     session = {
@@ -357,6 +365,7 @@ function isPublishError(text: string): boolean {
 }
 
 function publishPayload(creds: PiShockCreds, payload: string): Promise<boolean> {
+  if (isPiShockApiKeyRejected(creds.token)) return Promise.resolve(false);
   return new Promise((resolve) => {
     let settled = false;
     const done = (ok: boolean) => {
@@ -402,6 +411,10 @@ function publishPayload(creds: PiShockCreds, payload: string): Promise<boolean> 
 function ensureConnected(discordUserId: string) {
   const session = sessions.get(discordUserId);
   if (!session) return;
+  if (isPiShockApiKeyRejected(session.creds.token)) {
+    disconnectBroker(discordUserId);
+    return;
+  }
   if (session.ws && (session.ws.readyState === WebSocket.OPEN || session.ws.readyState === WebSocket.CONNECTING)) {
     return;
   }
@@ -429,7 +442,7 @@ function ensureConnected(discordUserId: string) {
   ws.on('close', () => {
     session.ws = null;
     broadcast(session, { type: 'status', message: 'broker disconnected', at: Date.now() });
-    if (session.subscribers.size > 0) {
+    if (session.subscribers.size > 0 && !isPiShockApiKeyRejected(session.creds.token)) {
       session.reconnectTimer = setTimeout(() => ensureConnected(discordUserId), 3000);
     }
   });
@@ -560,12 +573,24 @@ function teardown(discordUserId: string) {
   clearIdleTimer(session);
   clearLogCaptureIdleTimer(session);
   session.logCapture = undefined;
+  session.subscribers.clear();
   try {
     session.ws?.close();
   } catch {
     // ignore
   }
   sessions.delete(discordUserId);
+}
+
+/** Drop the broker socket now. Used when the stored API key is rejected or unlinked. */
+export function disconnectBroker(discordUserId: string) {
+  teardown(discordUserId);
+}
+
+export function disconnectBrokerSessionsForToken(token: string) {
+  for (const [id, session] of [...sessions.entries()]) {
+    if (session.creds.token === token) teardown(id);
+  }
 }
 
 /** Close every PiShock broker socket so the process can exit on SIGTERM. */

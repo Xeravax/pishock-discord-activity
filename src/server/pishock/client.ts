@@ -29,6 +29,62 @@ export class PiShockApiError extends Error {
   }
 }
 
+/**
+ * API keys PiShock has already rejected with 401. Further calls with the same
+ * token must not leave the process — device polls and pause sync were retrying
+ * every few seconds after both auth styles failed.
+ */
+const rejectedApiKeys = new Set<string>();
+const apiKeyRejectedListeners = new Set<(token: string) => void>();
+
+export function isPiShockApiKeyRejected(token: string): boolean {
+  return rejectedApiKeys.has(token);
+}
+
+export function onPiShockApiKeyRejected(listener: (token: string) => void): () => void {
+  apiKeyRejectedListeners.add(listener);
+  return () => apiKeyRejectedListeners.delete(listener);
+}
+
+/** Explicit re-link of a key may try it again. The next 401 blocks it once more. */
+export function allowPiShockApiKey(token: string): void {
+  rejectedApiKeys.delete(token);
+}
+
+export function resetRejectedPiShockApiKeysForTests(): void {
+  rejectedApiKeys.clear();
+}
+
+function rejectPiShockApiKey(token: string): void {
+  const key = token.trim();
+  if (!key || rejectedApiKeys.has(key)) return;
+  rejectedApiKeys.add(key);
+  console.warn('[pishock] API key rejected (401); blocking further requests');
+  for (const listener of apiKeyRejectedListeners) {
+    try {
+      listener(key);
+    } catch (err) {
+      console.warn(
+        '[pishock] API key rejection handler failed',
+        err instanceof Error ? err.message : err,
+      );
+    }
+  }
+}
+
+function ensureApiKeyUsable(creds: PiShockCreds): void {
+  if (isPiShockApiKeyRejected(creds.token)) {
+    throw new PiShockApiError(401, 'Unauthorized');
+  }
+}
+
+function noteRejectedApiKey(creds: PiShockCreds, err: unknown, fatalAuth: boolean): void {
+  if (!fatalAuth) return;
+  if (err instanceof PiShockApiError && err.needsRelogin) {
+    rejectPiShockApiKey(creds.token);
+  }
+}
+
 type AuthStyle = 'session' | 'apiKeyHeader' | 'apiKeyAsToken' | 'apiKeyBearer';
 
 function headers(
@@ -69,6 +125,7 @@ async function requestOnce<T = unknown>(
   style: AuthStyle,
   body?: unknown,
 ): Promise<{ status: number; data: T | null; raw: string }> {
+  ensureApiKeyUsable(creds);
   const hasJsonBody = body !== undefined;
   const res = await fetch(url, {
     method,
@@ -100,7 +157,10 @@ async function request<T = unknown>(
   method: string,
   url: string,
   body?: unknown,
+  opts?: { fatalAuth?: boolean },
 ): Promise<{ status: number; data: T | null; raw: string }> {
+  ensureApiKeyUsable(creds);
+  const fatalAuth = opts?.fatalAuth !== false;
   const styles = authStylesFor(creds);
   let last401: PiShockApiError | null = null;
   for (let i = 0; i < styles.length; i++) {
@@ -115,9 +175,11 @@ async function request<T = unknown>(
         );
         continue;
       }
+      noteRejectedApiKey(creds, err, fatalAuth);
       throw err;
     }
   }
+  noteRejectedApiKey(creds, last401, fatalAuth);
   throw last401 ?? new PiShockApiError(401, 'Unauthorized');
 }
 
@@ -165,12 +227,18 @@ function shareShockerId(payload: Record<string, unknown>): number {
  * A share-only 401 must not clear the stored key (needsRelogin stays false).
  */
 export async function createShare(creds: PiShockCreds, payload: Record<string, unknown>) {
+  if (isPiShockApiKeyRejected(creds.token)) {
+    throw new PiShockApiError(401, 'Unauthorized', true);
+  }
   const shockerId = shareShockerId(payload);
   const body = { ShockerId: shockerId };
 
   let sawMissing = false;
   try {
-    const created = await request(creds, 'POST', `${PISHOCK_API}/Share`, body);
+    // Share creation 401s keys that Hub and Shockers still accept. Do not retire the key here.
+    const created = await request(creds, 'POST', `${PISHOCK_API}/Share`, body, {
+      fatalAuth: false,
+    });
     if (created.status !== 404 && created.status !== 405) return created;
     sawMissing = true;
   } catch (err) {
@@ -219,6 +287,9 @@ async function createLegacyShare(
   creds: PiShockCreds,
   shockerId: number,
 ): Promise<{ status: number; data: unknown; raw: string }> {
+  if (isPiShockApiKeyRejected(creds.token)) {
+    return { status: 401, data: null, raw: 'Unauthorized' };
+  }
   const query = new URLSearchParams({
     UserId: String(creds.userId),
     Token: creds.token,
@@ -265,6 +336,9 @@ export async function getUserDevices(creds: PiShockCreds): Promise<{
     Token: creds.token,
   });
   if (creds.mode !== 'session') query.set('api', 'true');
+  if (isPiShockApiKeyRejected(creds.token)) {
+    throw new PiShockApiError(401, 'Unauthorized');
+  }
   const res = await fetch(`${PISHOCK_LEGACY_API}/PiShock/GetUserDevices?${query}`, {
     method: 'GET',
     headers: {
@@ -356,8 +430,8 @@ async function softList(
       return [];
     } catch (err) {
       lastErr = err;
-      // Do not wipe the whole link from one soft list 401 (parallel Hub/Links races).
-      // Hard auth failures are handled by operate routes / confirm-time validateApiKey.
+      // A 401 after both auth styles means the key is dead. Retrying just spams PiShock.
+      if (err instanceof PiShockApiError && err.needsRelogin) throw err;
       if (i + 1 < attempts) {
         await new Promise((r) => setTimeout(r, 250));
         continue;

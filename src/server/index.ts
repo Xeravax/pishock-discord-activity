@@ -16,6 +16,7 @@ import { attachRealtime, broadcastRealtimeAll } from './realtime.js';
 import { loadAppVersion } from './app-version.js';
 import { prisma } from './db.js';
 import { closeAllBrokerSessions } from './pishock/broker.js';
+import { installPiShockKeyRejectionHandler } from './session.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -27,6 +28,7 @@ const SHUTDOWN_NOTIFY_MS = 250;
 
 async function main() {
   const env = loadEnv();
+  installPiShockKeyRejectionHandler(env);
   const appVersion = loadAppVersion();
   const app = Fastify({ logger: true });
   let shuttingDown = false;

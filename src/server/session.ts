@@ -1,8 +1,13 @@
 import { prisma } from './db.js';
 import { decryptToken, encryptToken } from './crypto.js';
 import type { AppEnv } from './env.js';
-import type { PiShockCreds } from './pishock/client.js';
-import { stopLogCapture } from './pishock/broker.js';
+import {
+  allowPiShockApiKey,
+  isPiShockApiKeyRejected,
+  onPiShockApiKeyRejected,
+  type PiShockCreds,
+} from './pishock/client.js';
+import { disconnectBroker, disconnectBrokerSessionsForToken } from './pishock/broker.js';
 import {
   QUEUE_PROGRESS_MAX_MS,
   QUEUE_PROGRESS_MIN_MS,
@@ -24,6 +29,7 @@ export async function savePiShockSession(
   },
 ) {
   const enc = encryptToken(env.tokenKey, input.apiKey);
+  allowPiShockApiKey(input.apiKey);
   await prisma.piShockSession.upsert({
     where: { discordUserId },
     create: {
@@ -56,6 +62,10 @@ export async function loadPiShockCreds(
   if (!row) return null;
   // No clock wipe — keys stay until PiShock rejects them (401 → clearPiShockSession).
   const token = decryptToken(env.tokenKey, row.encryptedToken, row.tokenIv, row.tokenAuthTag);
+  if (isPiShockApiKeyRejected(token)) {
+    await clearPiShockSession(discordUserId);
+    return null;
+  }
   return {
     userId: row.pishockUserId,
     username: row.pishockUsername,
@@ -64,8 +74,47 @@ export async function loadPiShockCreds(
 }
 
 export async function clearPiShockSession(discordUserId: string) {
-  stopLogCapture(discordUserId);
+  disconnectBroker(discordUserId);
   await prisma.piShockSession.deleteMany({ where: { discordUserId } });
+}
+
+let rejectionHandlerInstalled = false;
+
+/** Drop stored keys and broker sockets after PiShock confirms a 401. */
+export function installPiShockKeyRejectionHandler(env: AppEnv) {
+  if (rejectionHandlerInstalled) return;
+  rejectionHandlerInstalled = true;
+  onPiShockApiKeyRejected((token) => {
+    disconnectBrokerSessionsForToken(token);
+    void purgePiShockSessionsForRejectedKey(env, token).catch((err) => {
+      console.warn(
+        '[pishock] failed to clear rejected API key session',
+        err instanceof Error ? err.message : err,
+      );
+    });
+  });
+}
+
+async function purgePiShockSessionsForRejectedKey(env: AppEnv, token: string) {
+  const rows = await prisma.piShockSession.findMany({
+    select: {
+      discordUserId: true,
+      encryptedToken: true,
+      tokenIv: true,
+      tokenAuthTag: true,
+    },
+  });
+  for (const row of rows) {
+    let stored = '';
+    try {
+      stored = decryptToken(env.tokenKey, row.encryptedToken, row.tokenIv, row.tokenAuthTag);
+    } catch {
+      continue;
+    }
+    if (stored !== token) continue;
+    console.warn(`[pishock] clearing session for ${row.discordUserId} after API key 401`);
+    await clearPiShockSession(row.discordUserId);
+  }
 }
 
 export async function getConsent(discordUserId: string) {

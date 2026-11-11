@@ -241,13 +241,28 @@ export function App() {
     return data;
   }, []);
 
+  const unlinkRejectedPiShock = useCallback(() => {
+    setMe((prev) => (prev ? { ...prev, pishockLinked: false, pishockUserId: null } : prev));
+    setDevices(null);
+    setLoginUrl(null);
+  }, []);
+
   const refreshDevices = useCallback(async (accessToken: string) => {
-    const data = await apiFetch<
-      DevicesResponse & {
-        emergencyStopShockerIds?: number[];
-        pausedShockerIds?: number[];
-      }
-    >('/devices', accessToken);
+    let data: DevicesResponse & {
+      emergencyStopShockerIds?: number[];
+      pausedShockerIds?: number[];
+    };
+    try {
+      data = await apiFetch<
+        DevicesResponse & {
+          emergencyStopShockerIds?: number[];
+          pausedShockerIds?: number[];
+        }
+      >('/devices', accessToken);
+    } catch (err) {
+      if (err instanceof ApiError && err.code === 'PISHOCK_RELOGIN') unlinkRejectedPiShock();
+      throw err;
+    }
     setDevices(data);
     setLivePausedIds((prev) => {
       const next = new Set(prev);
@@ -276,7 +291,7 @@ export function App() {
     }
     setOnline((prev) => ({ ...prev, ...nextOnline }));
     return data;
-  }, []);
+  }, [unlinkRejectedPiShock]);
 
   const refreshLogs = useCallback(async (accessToken: string) => {
     const data = await apiFetch<{
@@ -730,8 +745,8 @@ export function App() {
     const run = async (waitMs: number) => {
       try {
         await refreshOnlineStatus(token, clientIds, waitMs);
-      } catch {
-        // transient; next poll retries
+      } catch (err) {
+        if (err instanceof ApiError && err.code === 'PISHOCK_RELOGIN') unlinkRejectedPiShock();
       }
     };
 
@@ -744,7 +759,7 @@ export function App() {
       cancelled = true;
       window.clearInterval(timer);
     };
-  }, [token, me?.pishockLinked, devices, refreshOnlineStatus]);
+  }, [token, me?.pishockLinked, devices, refreshOnlineStatus, unlinkRejectedPiShock]);
 
   useEffect(() => {
     if (!token || !me?.pishockLinked) return;
@@ -1447,9 +1462,7 @@ export function App() {
   };
 
   const handleReloginNeeded = async () => {
-    setMe((prev) => (prev ? { ...prev, pishockLinked: false, pishockUserId: null } : prev));
-    setDevices(null);
-    setLoginUrl(null);
+    unlinkRejectedPiShock();
   };
 
   const requirePiShockLink = (reason: string) => {
