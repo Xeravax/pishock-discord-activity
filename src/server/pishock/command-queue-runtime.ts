@@ -15,9 +15,7 @@ import {
 import {
   agentNameForExecutor,
   operateById,
-  operateByShare,
   PiShockApiError,
-  type PiShockCreds,
 } from './client.js';
 import { getPiShockPausedShockerIds, rememberPiShockPaused } from './pause.js';
 import { publishOperate } from './broker.js';
@@ -170,11 +168,6 @@ async function endQueuedItem(item: QueueItemInternal): Promise<void> {
   const targetCreds = await loadPiShockCreds(payload.env, item.ownerDiscordUserId);
   if (!targetCreds) return;
 
-  let executorCreds: PiShockCreds | null = null;
-  if (payload.executorHadSession) {
-    executorCreds = await loadPiShockCreds(payload.env, item.executorDiscordUserId);
-  }
-  const useSharePath = Boolean(item.shareCode && executorCreds);
   const agent = agentNameForExecutor(
     executorLabel({
       id: item.executorDiscordUserId,
@@ -183,14 +176,13 @@ async function endQueuedItem(item: QueueItemInternal): Promise<void> {
     }),
   );
 
-  await publishOperate(useSharePath ? executorCreds! : targetCreds, {
+  await publishOperate(targetCreds, {
     clientId: item.hubClientId,
     shockerId: item.shockerId,
     operation: 'e',
     intensity: 0,
     durationMs: 0,
     end: true,
-    shareCode: useSharePath ? item.shareCode! : undefined,
     agentName: agent,
   });
 }
@@ -206,13 +198,6 @@ async function executeQueuedItem(item: QueueItemInternal): Promise<void> {
     throw new Error('Target unlinked');
   }
 
-  let executorCreds: PiShockCreds | null = null;
-  if (payload.executorHadSession) {
-    executorCreds = await loadPiShockCreds(payload.env, item.executorDiscordUserId);
-  }
-
-  const shareCode = item.shareCode;
-  const useSharePath = Boolean(shareCode && executorCreds);
   const clientId = item.hubClientId ?? undefined;
   const agent = agentNameForExecutor(
     executorLabel({
@@ -241,7 +226,7 @@ async function executeQueuedItem(item: QueueItemInternal): Promise<void> {
     shockerName: shareMeta?.shockerName ?? null,
     hubClientId: item.hubClientId ?? shareMeta?.hubClientId ?? null,
     hubName: shareMeta?.hubName ?? null,
-    shareCode,
+    shareCode: null as string | null,
     intensity: item.intensity,
     durationMs,
     location,
@@ -249,7 +234,7 @@ async function executeQueuedItem(item: QueueItemInternal): Promise<void> {
 
   try {
     if ((hold || warning) && clientId != null) {
-      const published = await publishOperate(useSharePath ? executorCreds! : targetCreds, {
+      const published = await publishOperate(targetCreds, {
         clientId,
         shockerId: item.shockerId,
         operation: op,
@@ -258,17 +243,16 @@ async function executeQueuedItem(item: QueueItemInternal): Promise<void> {
         hold,
         warning,
         end: false,
-        shareCode: useSharePath ? shareCode! : undefined,
         agentName: agent,
       });
       if (published) {
         if (hold) {
-          scheduleHoldAutoEnd(useSharePath ? executorCreds! : targetCreds, {
+          scheduleHoldAutoEnd(targetCreds, {
             ownerDiscordUserId: item.ownerDiscordUserId,
             shockerId: item.shockerId,
             clientId,
             durationMs,
-            shareCode: useSharePath ? shareCode : null,
+            shareCode: null,
             agentName: agent,
           });
         }
@@ -277,7 +261,7 @@ async function executeQueuedItem(item: QueueItemInternal): Promise<void> {
           success: true,
           detail: JSON.stringify({
             via: 'broker',
-            path: useSharePath ? 'executor_share' : 'target_session',
+            path: 'target_session',
             agent,
             executor: item.executorDiscordUserId,
             target: item.ownerDiscordUserId,
@@ -287,24 +271,6 @@ async function executeQueuedItem(item: QueueItemInternal): Promise<void> {
         });
         return;
       }
-    }
-
-    if (useSharePath) {
-      await operateByShare(executorCreds!, shareCode!, op, intensity, durationMs, agent);
-      await auditParticipantCommand({
-        ...auditBase,
-        success: true,
-        detail: JSON.stringify({
-          via: 'operateByShare',
-          path: 'executor_share',
-          agent,
-          executor: item.executorDiscordUserId,
-          target: item.ownerDiscordUserId,
-          instanceId: item.instanceId,
-          queued: true,
-        }),
-      });
-      return;
     }
 
     await operateById(targetCreds, item.shockerId, op, intensity, durationMs, agent);
@@ -325,7 +291,7 @@ async function executeQueuedItem(item: QueueItemInternal): Promise<void> {
     if (err instanceof PiShockApiError && err.status === 503) {
       rememberPiShockPaused(item.ownerDiscordUserId, {
         shockerId: item.shockerId,
-        shareCode: item.shareCode,
+        shareCode: null,
       });
     }
     await auditParticipantCommand({

@@ -1,6 +1,5 @@
 import type { FastifyPluginAsync } from 'fastify';
 import type { AppEnv } from '../env.js';
-import { createShare } from '../pishock/client.js';
 import {
   ABS_MAX_DURATION_MS,
   ABS_MAX_INTENSITY,
@@ -111,34 +110,6 @@ async function normalizeShareRow(
     s.requiredWarningLevel ?? prev?.requiredWarningLevel,
   );
 
-  // Never accept a client-supplied share code — only keep prior server-created codes
-  let shareCode = retainedShareCode(prev?.shareCode, s.shareCode);
-  const capsChanged =
-    !shareCode ||
-    (prev != null &&
-      (prev.maxIntensity !== bands.shock.maxIntensity ||
-        prev.maxDurationMs !== bands.shock.maxDurationMs ||
-        prev.canShock !== canShock ||
-        prev.canVibrate !== canVibrate ||
-        prev.canBeep !== canBeep));
-
-  if (!shareCode || capsChanged) {
-    try {
-      const created = await createShare(creds, {
-        ShockerId: shockerId,
-        MaxIntensity: bands.shock.maxIntensity,
-        MaxDuration: Math.max(1, Math.min(15, Math.round(bands.shock.maxDurationMs / 1000))),
-        CanShock: canShock,
-        CanVibrate: canVibrate,
-        CanBeep: canBeep,
-      });
-      const nextCode = extractShareCode(created.data);
-      if (nextCode) shareCode = nextCode;
-    } catch {
-      // Fall back to target-session OperateById when share creation fails
-    }
-  }
-
   return {
     ok: true,
     row: {
@@ -146,7 +117,7 @@ async function normalizeShareRow(
       shockerName: String(s.shockerName || prev?.shockerName || `Shocker ${shockerId}`).slice(0, 120),
       hubClientId,
       hubName,
-      shareCode,
+      shareCode: activityShareCodeOnSave(prev?.shareCode, s.shareCode),
       deviceMaxIntensity,
       deviceMaxDurationMs,
       enabled: s.enabled !== false,
@@ -317,20 +288,6 @@ export const activityShareRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (a
   });
 };
 
-function extractShareCode(data: unknown): string | null {
-  if (!data || typeof data !== 'object') return null;
-  const row = data as Record<string, unknown>;
-  const direct = row.ShareCode ?? row.shareCode ?? row.Code ?? row.code;
-  if (typeof direct === 'string' && direct.trim()) return direct.trim();
-  if (Array.isArray(data)) {
-    for (const item of data) {
-      const found = extractShareCode(item);
-      if (found) return found;
-    }
-  }
-  return null;
-}
-
 /** Activity/share caps cannot exceed the live device ceilings; mins stay ≤ maxes. */
 export function clampShareLimits(input: {
   deviceMaxIntensity: number;
@@ -378,6 +335,18 @@ export function retainedShareCode(
   _clientShareCode?: string | null,
 ): string | null {
   return previousShareCode ?? null;
+}
+
+/**
+ * Activity shares operate with the owner's API key.
+ * Never mint or retain a PiShock share code on save.
+ */
+export function activityShareCodeOnSave(
+  previousShareCode: string | null | undefined,
+  clientShareCode?: string | null,
+): null {
+  void retainedShareCode(previousShareCode, clientShareCode);
+  return null;
 }
 
 /** API responses expose presence of a share code, never the raw capability string. */
