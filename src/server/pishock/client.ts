@@ -96,6 +96,7 @@ function rejectPiShockApiKey(token: string): void {
   const key = token.trim();
   if (!key || rejectedApiKeys.has(key)) return;
   rejectedApiKeys.add(key);
+  invalidateControlSnapshotsForToken(key);
   console.warn('[pishock] API key rejected (401); blocking further requests');
   for (const listener of apiKeyRejectedListeners) {
     try {
@@ -416,22 +417,22 @@ async function softList(
   label: string,
   call: () => ReturnType<typeof request>,
   attempts = 2,
-): Promise<unknown[]> {
+): Promise<{ rows: unknown[]; ok: boolean }> {
   let lastErr: unknown;
   for (let i = 0; i < attempts; i++) {
     try {
       const res = await call();
-      if (res.status === 404 || res.status === 405) return [];
-      if (Array.isArray(res.data)) return res.data;
-      if (res.data == null) return [];
+      if (res.status === 404 || res.status === 405) return { rows: [], ok: true };
+      if (Array.isArray(res.data)) return { rows: res.data, ok: true };
+      if (res.data == null) return { rows: [], ok: true };
       // Some endpoints wrap lists
       if (typeof res.data === 'object') {
         const obj = res.data as Record<string, unknown>;
         for (const key of ['items', 'Items', 'data', 'Data', 'shockers', 'Shockers']) {
-          if (Array.isArray(obj[key])) return obj[key] as unknown[];
+          if (Array.isArray(obj[key])) return { rows: obj[key] as unknown[], ok: true };
         }
       }
-      return [];
+      return { rows: [], ok: true };
     } catch (err) {
       lastErr = err;
       // A 401 after both auth styles means the key is dead. Retrying just spams PiShock.
@@ -447,7 +448,7 @@ async function softList(
     `[pishock] ${label} failed; returning []`,
     lastErr instanceof Error ? redactPiShockSecrets(lastErr.message) : lastErr,
   );
-  return [];
+  return { rows: [], ok: false };
 }
 
 export type ControlSnapshot = {
@@ -456,12 +457,101 @@ export type ControlSnapshot = {
   shared: unknown[];
 };
 
-export async function fetchControlSnapshot(creds: PiShockCreds): Promise<ControlSnapshot> {
+/** Repeat shocks reuse this instead of listing hubs, shockers, and shares again. */
+const CONTROL_SNAPSHOT_TTL_MS = 8_000;
+
+type SnapshotCacheEntry = {
+  at: number;
+  token: string;
+  snapshot: ControlSnapshot;
+};
+
+const controlSnapshotCache = new Map<string, SnapshotCacheEntry>();
+const controlSnapshotInflight = new Map<string, Promise<ControlSnapshot>>();
+const controlSnapshotEpoch = new Map<string, number>();
+
+function snapshotCacheKey(userId: string | number): string {
+  return String(userId);
+}
+
+/** Drop a cached device list. The next lookup hits PiShock. */
+export function invalidateControlSnapshot(userId: string | number): void {
+  const key = snapshotCacheKey(userId);
+  controlSnapshotCache.delete(key);
+  controlSnapshotEpoch.set(key, (controlSnapshotEpoch.get(key) ?? 0) + 1);
+}
+
+export function invalidateControlSnapshotsForToken(token: string): void {
+  for (const [key, entry] of controlSnapshotCache) {
+    if (entry.token === token) {
+      controlSnapshotCache.delete(key);
+      controlSnapshotEpoch.set(key, (controlSnapshotEpoch.get(key) ?? 0) + 1);
+    }
+  }
+}
+
+export function resetControlSnapshotCacheForTests(): void {
+  controlSnapshotCache.clear();
+  controlSnapshotInflight.clear();
+  controlSnapshotEpoch.clear();
+}
+
+async function loadControlSnapshot(
+  creds: PiShockCreds,
+): Promise<{ snapshot: ControlSnapshot; complete: boolean }> {
   const [hubs, shockers, shared] = await Promise.all([
     softList('Hub', () => getHubs(creds)),
     softList('Shockers', () => getShockers(creds)),
     softList('Share/GetShared', () => getShared(creds)),
   ]);
+  return {
+    snapshot: { hubs: hubs.rows, shockers: shockers.rows, shared: shared.rows },
+    complete: hubs.ok && shockers.ok && shared.ok,
+  };
+}
 
-  return { hubs, shockers, shared };
+/**
+ * Hubs, shockers, and shares for an account.
+ * A successful list is reused for a few seconds. `fresh` forces a new PiShock read
+ * and replaces the cache, which is what the device screen does.
+ */
+export async function fetchControlSnapshot(
+  creds: PiShockCreds,
+  opts?: { fresh?: boolean },
+): Promise<ControlSnapshot> {
+  if (isPiShockApiKeyRejected(creds.token)) {
+    invalidateControlSnapshot(creds.userId);
+    throw new PiShockApiError(401, 'Unauthorized');
+  }
+  const key = snapshotCacheKey(creds.userId);
+  if (!opts?.fresh) {
+    const hit = controlSnapshotCache.get(key);
+    if (hit && hit.token === creds.token && Date.now() - hit.at < CONTROL_SNAPSHOT_TTL_MS) {
+      return hit.snapshot;
+    }
+    const pending = controlSnapshotInflight.get(key);
+    if (pending) return pending;
+  }
+
+  const epoch = controlSnapshotEpoch.get(key) ?? 0;
+  const pending = loadControlSnapshot(creds)
+    .then((loaded) => {
+      if (
+        loaded.complete &&
+        (controlSnapshotEpoch.get(key) ?? 0) === epoch &&
+        !isPiShockApiKeyRejected(creds.token)
+      ) {
+        controlSnapshotCache.set(key, {
+          at: Date.now(),
+          token: creds.token,
+          snapshot: loaded.snapshot,
+        });
+      }
+      return loaded.snapshot;
+    })
+    .finally(() => {
+      if (controlSnapshotInflight.get(key) === pending) controlSnapshotInflight.delete(key);
+    });
+  controlSnapshotInflight.set(key, pending);
+  return pending;
 }

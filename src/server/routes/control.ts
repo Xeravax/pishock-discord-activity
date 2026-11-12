@@ -10,6 +10,7 @@ import {
   createShare,
   deleteShare,
   fetchControlSnapshot,
+  invalidateControlSnapshot,
   operateById,
   operateByShare,
   pauseShare,
@@ -163,7 +164,7 @@ export const controlRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app, op
     const blocked = requireSession(req, reply);
     if (blocked) return blocked;
     try {
-      const snapshot = await fetchControlSnapshot(req.pishockCreds!);
+      const snapshot = await fetchControlSnapshot(req.pishockCreds!, { fresh: true });
       const clientIds = collectHubClientIds(snapshot.hubs);
       ensureLogCapture(req.discordUser.id, req.pishockCreds!, clientIds);
       const [emergencyStopShockerIds, pause] = await Promise.all([
@@ -731,6 +732,7 @@ export const controlRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app, op
         return reply.code(400).send({ error: 'shareId required' });
       }
       const result = await pauseShare(req.pishockCreds!, body.shareId, body.pauseState ?? null);
+      invalidateControlSnapshot(req.pishockCreds!.userId);
       if (result.status === 404 || result.status === 405) {
         return reply.code(result.status).send({ error: 'Pause share route unavailable' });
       }
@@ -751,6 +753,7 @@ export const controlRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app, op
     if (blocked) return blocked;
     try {
       const result = await createShare(req.pishockCreds!, req.body as Record<string, unknown>);
+      invalidateControlSnapshot(req.pishockCreds!.userId);
       if (result.status === 404 || result.status === 405) {
         return reply.code(result.status).send({ error: 'Create share unavailable' });
       }
@@ -775,6 +778,7 @@ export const controlRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app, op
     }
     try {
       const result = await claimShareCodes(req.pishockCreds!, codes);
+      invalidateControlSnapshot(req.pishockCreds!.userId);
       if (result.status === 404 || result.status === 405) {
         return reply.code(result.status).send({ error: 'Claim share unavailable' });
       }
@@ -801,6 +805,7 @@ export const controlRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app, op
     const shareId = Number((req.params as { shareId: string }).shareId);
     try {
       const result = await deleteShare(req.pishockCreds!, shareId);
+      invalidateControlSnapshot(req.pishockCreds!.userId);
       if (result.status === 404 || result.status === 405) {
         return reply.code(result.status).send({ error: 'Delete share unavailable' });
       }

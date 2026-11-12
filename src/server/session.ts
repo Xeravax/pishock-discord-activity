@@ -3,6 +3,7 @@ import { decryptToken, encryptToken, hashApiKey } from './crypto.js';
 import type { AppEnv } from './env.js';
 import {
   allowPiShockApiKey,
+  invalidateControlSnapshot,
   isPiShockApiKeyRejected,
   onPiShockApiKeyRejected,
   type PiShockCreds,
@@ -129,6 +130,11 @@ export async function loadPiShockCreds(
 }
 
 export async function clearPiShockSession(discordUserId: string) {
+  const row = await prisma.piShockSession.findUnique({
+    where: { discordUserId },
+    select: { pishockUserId: true },
+  });
+  if (row) invalidateControlSnapshot(row.pishockUserId);
   disconnectBroker(discordUserId);
   await prisma.piShockSession.deleteMany({ where: { discordUserId } });
 }

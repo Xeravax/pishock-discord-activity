@@ -746,7 +746,7 @@ export async function resolveDeviceCeilingsFromPiShock(
   hubName: string | null;
   found: boolean;
 }> {
-  const snapshot = await fetchControlSnapshot(creds);
+  const snapshot = await fetchControlSnapshot(creds, { fresh: true });
   const owned = findShockerInSnapshot(snapshot, shockerId);
   if (!owned) {
     return {

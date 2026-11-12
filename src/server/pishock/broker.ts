@@ -10,6 +10,11 @@ export type BrokerEvent =
 
 type Subscriber = (event: BrokerEvent) => void;
 
+type PendingPublish = {
+  payload: string;
+  resolve: (ok: boolean) => void;
+};
+
 type BrokerSession = {
   ws: WebSocket | null;
   creds: PiShockCreds;
@@ -18,14 +23,37 @@ type BrokerSession = {
   online: Map<string, boolean>;
   lastSeenAt: Map<string, number>;
   reconnectTimer?: NodeJS.Timeout;
+  /** PiShock closes a quiet socket. Pings keep it open until they do. */
+  keepAliveTimer?: NodeJS.Timeout;
+  reconnectAttempt: number;
   idleTimer?: NodeJS.Timeout;
   logCapture?: Subscriber;
   logCaptureTouchAt?: number;
   logCaptureIdleTimer?: NodeJS.Timeout;
+  /** One publish at a time so each ack matches the command that was just sent. */
+  publishQueue: PendingPublish[];
+  publishActive: { resolve: (ok: boolean) => void; timer: NodeJS.Timeout } | null;
+  publishPumping: boolean;
 };
 
+function blankSession(creds: PiShockCreds): BrokerSession {
+  return {
+    ws: null,
+    creds,
+    clientIds: new Set(),
+    subscribers: new Set(),
+    online: new Map(),
+    lastSeenAt: new Map(),
+    publishQueue: [],
+    publishActive: null,
+    publishPumping: false,
+    reconnectAttempt: 0,
+  };
+}
+
 const sessions = new Map<string, BrokerSession>();
-const IDLE_TEARDOWN_MS = 90_000;
+/** Stay under PiShock's idle disconnect. They close the socket; we do not. */
+const BROKER_KEEPALIVE_MS = 20_000;
 /** Keep `-log` capture warm between Discord activity polls without holding forever. */
 const LOG_CAPTURE_IDLE_MS = 15 * 60 * 1000;
 
@@ -43,14 +71,19 @@ function replaceSessionCreds(session: BrokerSession, creds: PiShockCreds): void 
     clearTimeout(session.reconnectTimer);
     session.reconnectTimer = undefined;
   }
+  // The command already sent on the old socket will not be acked there.
+  finishActivePublish(session, false, { pump: false });
   const old = session.ws;
   session.ws = null;
-  if (!old) return;
-  try {
-    old.close();
-  } catch {
-    // ignore
+  if (old) {
+    try {
+      old.close();
+    } catch {
+      // ignore
+    }
   }
+  const id = idForSession(session);
+  if (id && session.publishQueue.length > 0) void pumpPublishes(id);
 }
 
 export function subscribeBroker(
@@ -65,14 +98,7 @@ export function subscribeBroker(
   }
   let session = sessions.get(discordUserId);
   if (!session) {
-    session = {
-      ws: null,
-      creds,
-      clientIds: new Set(),
-      subscribers: new Set(),
-      online: new Map(),
-      lastSeenAt: new Map(),
-    };
+    session = blankSession(creds);
     sessions.set(discordUserId, session);
   } else {
     replaceSessionCreds(session, creds);
@@ -95,9 +121,6 @@ export function subscribeBroker(
     const current = sessions.get(discordUserId);
     if (!current) return;
     current.subscribers.delete(subscriber);
-    if (current.subscribers.size === 0) {
-      scheduleIdleTeardown(discordUserId);
-    }
   };
 }
 
@@ -128,18 +151,6 @@ function clearLogCaptureIdleTimer(session: BrokerSession) {
   }
 }
 
-function scheduleIdleTeardown(discordUserId: string) {
-  const session = sessions.get(discordUserId);
-  if (!session) return;
-  clearIdleTimer(session);
-  session.idleTimer = setTimeout(() => {
-    const current = sessions.get(discordUserId);
-    if (!current) return;
-    if (current.subscribers.size === 0) teardown(discordUserId);
-  }, IDLE_TEARDOWN_MS);
-  session.idleTimer.unref?.();
-}
-
 function scheduleLogCaptureIdle(discordUserId: string) {
   const session = sessions.get(discordUserId);
   if (!session?.logCapture) return;
@@ -165,14 +176,7 @@ export function ensureLogCapture(
   }
   let session = sessions.get(discordUserId);
   if (!session) {
-    session = {
-      ws: null,
-      creds,
-      clientIds: new Set(),
-      subscribers: new Set(),
-      online: new Map(),
-      lastSeenAt: new Map(),
-    };
+    session = blankSession(creds);
     sessions.set(discordUserId, session);
   } else {
     replaceSessionCreds(session, creds);
@@ -214,9 +218,6 @@ export function stopLogCapture(discordUserId: string) {
   session.subscribers.delete(session.logCapture);
   session.logCapture = undefined;
   session.logCaptureTouchAt = undefined;
-  if (session.subscribers.size === 0) {
-    scheduleIdleTeardown(discordUserId);
-  }
 }
 
 /**
@@ -352,6 +353,133 @@ export async function publishOperate(
   return publishPayload(creds, payload);
 }
 
+function idForSession(session: BrokerSession): string | null {
+  for (const [id, current] of sessions) {
+    if (current === session) return id;
+  }
+  return null;
+}
+
+/** Prefer the socket already open for this API key. Otherwise keep one per PiShock account. */
+function sessionForCreds(creds: PiShockCreds): { id: string; session: BrokerSession } {
+  let fallback: { id: string; session: BrokerSession } | null = null;
+  for (const [id, session] of sessions) {
+    if (session.creds.token !== creds.token) continue;
+    if (session.ws?.readyState === WebSocket.OPEN) {
+      replaceSessionCreds(session, creds);
+      return { id, session };
+    }
+    if (!fallback) fallback = { id, session };
+  }
+  if (fallback) {
+    replaceSessionCreds(fallback.session, creds);
+    return fallback;
+  }
+  const id = `pishock:${creds.userId}`;
+  let session = sessions.get(id);
+  if (!session) {
+    session = blankSession(creds);
+    sessions.set(id, session);
+  } else {
+    replaceSessionCreds(session, creds);
+  }
+  return { id, session };
+}
+
+function finishActivePublish(
+  session: BrokerSession,
+  ok: boolean,
+  opts?: { pump?: boolean },
+): void {
+  const active = session.publishActive;
+  if (!active) return;
+  clearTimeout(active.timer);
+  session.publishActive = null;
+  active.resolve(ok);
+  if (opts?.pump === false) return;
+  const id = idForSession(session);
+  if (id) void pumpPublishes(id);
+}
+
+function dropPendingPublishes(session: BrokerSession): void {
+  finishActivePublish(session, false, { pump: false });
+  const queued = session.publishQueue.splice(0, session.publishQueue.length);
+  for (const job of queued) job.resolve(false);
+}
+
+function waitUntilOpen(id: string, session: BrokerSession): Promise<WebSocket | null> {
+  if (session.reconnectTimer) {
+    clearTimeout(session.reconnectTimer);
+    session.reconnectTimer = undefined;
+  }
+  ensureConnected(id);
+  const ws = session.ws;
+  if (!ws) return Promise.resolve(null);
+  if (ws.readyState === WebSocket.OPEN) return Promise.resolve(ws);
+  if (ws.readyState !== WebSocket.CONNECTING) return Promise.resolve(null);
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (sock: WebSocket | null) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      ws.off('open', onOpen);
+      ws.off('close', onClose);
+      ws.off('error', onError);
+      resolve(sock);
+    };
+    const timer = setTimeout(() => finish(null), 8000);
+    const onOpen = () => finish(ws);
+    const onClose = () => finish(null);
+    const onError = () => finish(null);
+    ws.once('open', onOpen);
+    ws.once('close', onClose);
+    ws.once('error', onError);
+  });
+}
+
+async function pumpPublishes(id: string): Promise<void> {
+  const session = sessions.get(id);
+  if (!session || session.publishActive || session.publishPumping) return;
+  const next = session.publishQueue.shift();
+  if (!next) return;
+  session.publishPumping = true;
+  const ws = await waitUntilOpen(id, session);
+  const current = sessions.get(id);
+  if (!current || current !== session) {
+    session.publishPumping = false;
+    next.resolve(false);
+    return;
+  }
+  session.publishPumping = false;
+  if (!ws || ws.readyState !== WebSocket.OPEN || session.ws !== ws) {
+    next.resolve(false);
+    void pumpPublishes(id);
+    return;
+  }
+  const timer = setTimeout(() => finishActivePublish(session, false), 8000);
+  session.publishActive = { resolve: next.resolve, timer };
+  try {
+    ws.send(next.payload);
+  } catch (err) {
+    console.warn(
+      '[broker] publish send failed',
+      redactPiShockSecrets(err instanceof Error ? err.message : String(err)),
+    );
+    finishActivePublish(session, false);
+  }
+}
+
+function publishPayload(creds: PiShockCreds, payload: string): Promise<boolean> {
+  if (isPiShockApiKeyRejected(creds.token)) return Promise.resolve(false);
+  const { id, session } = sessionForCreds(creds);
+  clearIdleTimer(session);
+  return new Promise((resolve) => {
+    session.publishQueue.push({ payload, resolve });
+    void pumpPublishes(id);
+  });
+}
+
 function isPublishSuccess(text: string): boolean {
   const lower = text.toLowerCase();
   if (lower.includes('publish successful') || lower.includes('publish success')) return true;
@@ -384,51 +512,36 @@ function isPublishError(text: string): boolean {
   }
 }
 
-function publishPayload(creds: PiShockCreds, payload: string): Promise<boolean> {
-  if (isPiShockApiKeyRejected(creds.token)) return Promise.resolve(false);
-  return new Promise((resolve) => {
-    let settled = false;
-    const done = (ok: boolean) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      try {
-        ws.close();
-      } catch {
-        // ignore
-      }
-      resolve(ok);
-    };
+function stopKeepAlive(session: BrokerSession) {
+  if (!session.keepAliveTimer) return;
+  clearInterval(session.keepAliveTimer);
+  session.keepAliveTimer = undefined;
+}
 
-    const url = brokerUrl(creds);
-    const ws = new WebSocket(url);
-    const timer = setTimeout(() => done(false), 8000);
+function startKeepAlive(id: string, session: BrokerSession, ws: WebSocket) {
+  stopKeepAlive(session);
+  session.keepAliveTimer = setInterval(() => {
+    if (sessions.get(id) !== session || session.ws !== ws || ws.readyState !== WebSocket.OPEN) {
+      stopKeepAlive(session);
+      return;
+    }
+    safeSend(ws, JSON.stringify({ Operation: 'PING' }));
+  }, BROKER_KEEPALIVE_MS);
+  session.keepAliveTimer.unref?.();
+}
 
-    ws.on('open', () => {
-      ws.send(payload);
-    });
-    ws.on('message', (data) => {
-      const text = data.toString();
-      if (isPublishSuccess(text)) {
-        done(true);
-        return;
-      }
-      if (isPublishError(text)) {
-        console.warn('[broker] publish error', text.slice(0, 300));
-        done(false);
-      }
-    });
-    ws.on('error', (err) => {
-      console.warn(
-        '[broker] publish socket error',
-        redactPiShockSecrets(err instanceof Error ? err.message : String(err)),
-      );
-      done(false);
-    });
-    ws.on('close', () => {
-      if (!settled) done(false);
-    });
-  });
+function scheduleReconnect(id: string, session: BrokerSession) {
+  if (session.reconnectTimer) return;
+  if (isPiShockApiKeyRejected(session.creds.token)) return;
+  if (sessions.get(id) !== session) return;
+  const attempt = session.reconnectAttempt;
+  const delay = Math.min(15_000, 1_000 * 2 ** Math.min(attempt, 4));
+  session.reconnectAttempt = attempt + 1;
+  session.reconnectTimer = setTimeout(() => {
+    session.reconnectTimer = undefined;
+    ensureConnected(id);
+  }, delay);
+  session.reconnectTimer.unref?.();
 }
 
 function ensureConnected(discordUserId: string) {
@@ -447,6 +560,8 @@ function ensureConnected(discordUserId: string) {
   session.ws = ws;
 
   ws.on('open', () => {
+    session.reconnectAttempt = 0;
+    startKeepAlive(discordUserId, session, ws);
     broadcast(session, { type: 'status', message: 'broker connected', at: Date.now() });
     safeSend(ws, JSON.stringify({ Operation: 'PING' }));
     subscribeTargets(session, [...session.clientIds]);
@@ -456,6 +571,17 @@ function ensureConnected(discordUserId: string) {
     // replaceSessionCreds detaches this socket before close; ignore its late frames.
     if (session.ws !== ws) return;
     const text = data.toString();
+    if (session.publishActive) {
+      if (isPublishSuccess(text)) {
+        finishActivePublish(session, true);
+        return;
+      }
+      if (isPublishError(text)) {
+        console.warn('[broker] publish error', text.slice(0, 300));
+        finishActivePublish(session, false);
+        return;
+      }
+    }
     try {
       const parsed = JSON.parse(text) as Record<string, unknown>;
       handleBrokerMessage(session, parsed);
@@ -467,10 +593,10 @@ function ensureConnected(discordUserId: string) {
   ws.on('close', () => {
     if (session.ws !== ws) return;
     session.ws = null;
+    stopKeepAlive(session);
+    finishActivePublish(session, false);
     broadcast(session, { type: 'status', message: 'broker disconnected', at: Date.now() });
-    if (session.subscribers.size > 0 && !isPiShockApiKeyRejected(session.creds.token)) {
-      session.reconnectTimer = setTimeout(() => ensureConnected(discordUserId), 3000);
-    }
+    scheduleReconnect(discordUserId, session);
   });
 
   ws.on('error', () => {
@@ -596,16 +722,20 @@ function teardown(discordUserId: string) {
   const session = sessions.get(discordUserId);
   if (!session) return;
   if (session.reconnectTimer) clearTimeout(session.reconnectTimer);
+  stopKeepAlive(session);
   clearIdleTimer(session);
   clearLogCaptureIdleTimer(session);
   session.logCapture = undefined;
   session.subscribers.clear();
+  dropPendingPublishes(session);
+  const ws = session.ws;
+  session.ws = null;
+  sessions.delete(discordUserId);
   try {
-    session.ws?.close();
+    ws?.close();
   } catch {
     // ignore
   }
-  sessions.delete(discordUserId);
 }
 
 /** Drop the broker socket now. Used when the stored API key is rejected or unlinked. */
