@@ -211,7 +211,7 @@ export function assertWithinCeilings(
   minDurationMs: number = ABS_MIN_DURATION_MS,
 ): void {
   const inten = Number(intensity ?? minIntensity);
-  const dur = Number(durationMs ?? Math.max(minDurationMs, 300));
+  const dur = Number(durationMs ?? clampDurationMs(undefined, maxDurationMs, minDurationMs));
   if (Number.isFinite(inten) && inten < minIntensity) {
     throw new OperatePolicyError('Intensity below allowed minimum', 412, 'INTENSITY_FLOOR');
   }

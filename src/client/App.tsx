@@ -215,12 +215,8 @@ export function App() {
   const deviceFetchGenRef = useRef(0);
   const emergencyStopWriteGenRef = useRef(0);
   const loadSettingsRef = useRef<(() => Promise<unknown>) | null>(null);
-  /** True after `/queue` has loaded once. A later failed refresh keeps that snapshot. */
-  const queueSettingsLoadedRef = useRef(false);
-
   const refreshQueue = useCallback(async (accessToken: string) => {
     const data = await apiFetch<QueueState & { stars?: string[] }>('/queue', accessToken);
-    queueSettingsLoadedRef.current = true;
     setQueueState({
       enabled: Boolean(data.enabled),
       progressMs: Number(data.progressMs) || 0,
@@ -1419,6 +1415,7 @@ export function App() {
   };
 
   const continueAfterApiKeyReveal = async (accessToken: string) => {
+    setLinkError(null);
     setSetupDevicesReady(false);
     setSetupSharePhase(true);
     try {
@@ -1427,6 +1424,7 @@ export function App() {
         await refreshDevices(accessToken);
         await refreshLogs(accessToken).catch(() => undefined);
         await loadSettingsRef.current?.();
+        await refreshQueue(accessToken);
         setApiKeyReveal(null);
         setSetupDevicesReady(true);
       } else {
@@ -1867,11 +1865,7 @@ export function App() {
     try {
       await refreshDevices(token);
       await loadSettingsRef.current?.();
-      try {
-        await refreshQueue(token);
-      } catch (err) {
-        if (!queueSettingsLoadedRef.current) throw err;
-      }
+      await refreshQueue(token);
       setSetupDevicesReady(true);
     } catch (err) {
       setLinkError(err instanceof Error ? err.message : String(err));
@@ -2081,6 +2075,11 @@ export function App() {
         apiKeyName={apiKeyReveal.apiKeyName}
         expiresAt={apiKeyReveal.expiresAt}
         pishockUsername={apiKeyReveal.pishockUsername}
+        error={linkError}
+        onExit={() => {
+          setApiKeyReveal(null);
+          finishSetupShare();
+        }}
         onContinue={() => {
           if (!token) {
             setApiKeyReveal(null);

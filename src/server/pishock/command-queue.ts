@@ -373,14 +373,18 @@ export function createCommandQueue(deps: CommandQueueDeps) {
         if (q.paused || q.advanceHeld) break;
         if (q.active) break;
 
+        const gen = q.generation;
         const next = await pickNext(ownerDiscordUserId);
         if (!next) break;
+        if (q.generation !== gen) {
+          emitTicket(next, 'removed', null, q.paused, { estimatedWaitMs: null, estimatedStartAt: null });
+          continue;
+        }
         if (q.paused || q.advanceHeld) {
           q.waiting.push(next);
           break;
         }
 
-        const gen = q.generation;
         let ok = false;
         try {
           ok = await deps.validateBeforeRun(next);

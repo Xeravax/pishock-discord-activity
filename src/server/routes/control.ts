@@ -59,6 +59,8 @@ import {
   loadPiShockCreds,
   logCommand,
   setEmergencyStops,
+  gateEmergencyStops,
+  isEmergencyStopped,
 } from '../session.js';
 import { broadcastRealtimeAll } from '../realtime.js';
 import {
@@ -228,7 +230,10 @@ export const controlRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app, op
     }
 
     let cutFailures = 0;
+    let result;
     if (body.engaged) {
+      gateEmergencyStops(req.discordUser.id, shockerIds, true);
+      for (const id of shockerIds) cancelPendingHold(req.discordUser.id, id);
       commandQueue.holdAdvance(req.discordUser.id);
       commandQueue.invalidateInFlight(req.discordUser.id);
       try {
@@ -265,14 +270,21 @@ export const controlRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app, op
           }
           clearHoldAutoEnd(req.discordUser.id, cut.shockerId);
         }
-        // Latch and clear pending work even when an immediate cut fails.
-        await commandQueue.hardClear(req.discordUser.id, { endActiveDevice: false });
       } finally {
-        commandQueue.releaseAdvance(req.discordUser.id);
+        try {
+          await commandQueue.hardClear(req.discordUser.id, { endActiveDevice: false });
+        } finally {
+          result = await setEmergencyStops(req.discordUser.id, shockerIds, true);
+          gateEmergencyStops(req.discordUser.id, shockerIds, false);
+          commandQueue.releaseAdvance(req.discordUser.id);
+        }
       }
+    } else {
+      result = await setEmergencyStops(req.discordUser.id, shockerIds, false);
+      gateEmergencyStops(req.discordUser.id, shockerIds, false);
+      commandQueue.releaseAdvance(req.discordUser.id);
     }
 
-    const result = await setEmergencyStops(req.discordUser.id, shockerIds, body.engaged);
     if (body.engaged && cutFailures > 0) {
       broadcastRealtimeAll({
         type: 'emergency_stop',
@@ -525,6 +537,12 @@ export const controlRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app, op
         return { ok: true, via: 'broker', canceled: true };
       }
 
+      if (shockerId != null && await isEmergencyStopped(policy.ownerDiscordUserId, shockerId)) {
+        return reply.code(423).send({ error: 'Owner has emergency stop engaged', code: 'EMERGENCY_STOP' });
+      }
+      if (pendingHold != null && shockerId != null && !isPendingHoldCurrent(policy.ownerDiscordUserId, shockerId, pendingHold)) {
+        return { ok: true, via: 'broker', canceled: true };
+      }
       const op =
         operation === 'shock' || operation === 'hold'
           ? ShockerOp.Shock
@@ -543,6 +561,14 @@ export const controlRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app, op
           hold,
           warning,
         });
+        if (pendingHold != null && shockerId != null && !isPendingHoldCurrent(policy.ownerDiscordUserId, shockerId, pendingHold)) {
+          const ended = await publishOperate(creds, {
+            clientId: clientId!, shockerId, operation: 'e', intensity: 0, durationMs: 0,
+            end: true, agentName: 'Tap Release', shareCode: shareCode ?? undefined,
+          });
+          if (!ended) throw new Error('Failed to end canceled hold');
+          return { ok: true, via: 'broker', canceled: true };
+        }
         if (published) {
           if (hold) {
             scheduleHoldAutoEnd(creds, {
@@ -583,6 +609,14 @@ export const controlRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app, op
           warning,
           shareCode: shareCode ?? undefined,
         });
+        if (pendingHold != null && shockerId != null && !isPendingHoldCurrent(policy.ownerDiscordUserId, shockerId, pendingHold)) {
+          const ended = await publishOperate(creds, {
+            clientId: clientId!, shockerId, operation: 'e', intensity: 0, durationMs: 0,
+            end: true, agentName: 'Tap Release', shareCode: shareCode ?? undefined,
+          });
+          if (!ended) throw new Error('Failed to end canceled hold');
+          return { ok: true, via: 'broker', canceled: true };
+        }
         if (published) {
           if (hold) {
             scheduleHoldAutoEnd(creds, {

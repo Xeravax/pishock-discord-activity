@@ -329,6 +329,8 @@ async function executeQueuedItem(
       throw new Error('Hold requires a hub client id so it can be ended');
     }
 
+    if (isCanceled?.() || await isEmergencyStopped(item.ownerDiscordUserId, item.shockerId)) return;
+    if (isCanceled?.()) return;
     await warnBeforeShock({
       operation: item.operation,
       requestedWarningLevel: item.warningLevel,

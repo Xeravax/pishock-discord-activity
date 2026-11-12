@@ -504,17 +504,11 @@ describe('should refuse — must not proceed', () => {
     assert.doesNotThrow(() => assertWithinCeilings(40, 1000, 50, 5000));
   });
 
-  it('assertWithinCeilings omitted intensity/duration use band min and max(min, 300)', () => {
+  it('assertWithinCeilings omitted intensity/duration use band min and band-bounded duration default', () => {
     assert.doesNotThrow(() =>
       assertWithinCeilings(undefined, undefined, 50, 5_000, 10, 16),
     );
-    assert.throws(
-      () => assertWithinCeilings(undefined, undefined, 50, 200, 10, 16),
-      (err: unknown) =>
-        err instanceof OperatePolicyError &&
-        err.status === 416 &&
-        err.code === 'DURATION_CEILING',
-    );
+    assert.doesNotThrow(() => assertWithinCeilings(undefined, undefined, 50, 200, 10, 16));
     assert.throws(
       () => assertWithinCeilings(5, 1_000, 50, 5_000, 10, 16),
       (err: unknown) =>

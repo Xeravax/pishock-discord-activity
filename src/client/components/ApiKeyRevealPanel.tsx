@@ -8,6 +8,8 @@ type Props = {
   expiresAt?: string | null;
   pishockUsername?: string | null;
   onContinue: () => void;
+  error: string | null;
+  onExit: () => void;
 };
 
 function formatExpiry(iso: string | null | undefined): string | null {
@@ -27,6 +29,8 @@ export function ApiKeyRevealPanel({
   expiresAt,
   pishockUsername,
   onContinue,
+  error,
+  onExit,
 }: Props) {
   const [copied, setCopied] = useState(false);
   const [copyError, setCopyError] = useState<string | null>(null);
@@ -82,6 +86,8 @@ export function ApiKeyRevealPanel({
           <SecretValue value={apiKey} label="API key" className="auth-boot__api-key" />
         </div>
 
+        {error ? <div className="auth-boot__error" role="alert"><p>{error}</p></div> : null}
+
         {copyError ? (
           <div className="auth-boot__error" role="alert">
             <p>{copyError}</p>
@@ -89,6 +95,7 @@ export function ApiKeyRevealPanel({
         ) : null}
 
         <div className="auth-boot__actions">
+          <button type="button" onClick={onExit}>Finish later</button>
           <button
             type="button"
             className="q-btn q-btn-item non-selectable no-outline text-secondary bg-dark q-btn--outline q-btn--rectangle q-btn--actionable"

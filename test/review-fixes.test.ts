@@ -207,6 +207,23 @@ describe('warnBeforeShock', () => {
     );
   });
 
+  it('aborts when stop engages during the post-warning share lookup', async () => {
+    let stopped = false;
+    await assert.rejects(
+      warnBeforeShock({
+        operation: 'shock', requestedWarningLevel: 'small', requiredWarningLevel: 'none',
+        canVibrate: true, creds: CREDS, clientId: 'hub-1', shockerId: 7,
+        ownerDiscordUserId: 'owner', vibrateBand: vibeBand, gateOnShare: true,
+      }, {
+        publishOperate: async () => true,
+        sleep: async () => undefined,
+        isEmergencyStopped: async () => stopped,
+        isShareBlocked: async () => { stopped = true; return false; },
+      }),
+      (err: unknown) => err instanceof ShockWarningError && err.code === 'EMERGENCY_STOP',
+    );
+  });
+
   it('aborts after the wait when the share is disabled or paused', async () => {
     let slept = false;
     await assert.rejects(

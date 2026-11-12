@@ -18,6 +18,7 @@ import {
 import { publishOperate } from '../pishock/broker.js';
 import {
   assertModeAllowed,
+  assertWithinCeilings,
   assertOperateRateLimit,
   beginPendingHold,
   cancelPendingHold,
@@ -29,7 +30,7 @@ import {
   scheduleHoldAutoEnd,
 } from '../operate-policy.js';
 import { bandForOperation, nestBands, personalBandsFromUser, shareBandsFromRow } from '../limit-bands.js';
-import { atLeastWarning, normalizeWarningLevel } from '../../shared/warning.js';
+import { atLeastWarning, normalizeWarningLevel, warningRank } from '../../shared/warning.js';
 import type { WarningLevel } from '../../shared/warning.js';
 import { shockWarningBody, ShockWarningError, warnBeforeShock } from '../pishock/shock-warning.js';
 import {
@@ -227,6 +228,7 @@ export const participantRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app
         pause.unknown || pause.shockerIds.includes(shockerId);
       const theirPaused = theirSettings.enabled ? commandQueue.getPaused(id) : false;
       const theirHalted = theirSettings.enabled ? commandQueue.getHalted(id) : false;
+      const ownerPersonal = personalBandsFromUser(await getPersonalActivityLimits(id));
       const eStops = new Set(await getEmergencyStopShockerIds(id));
       const active = shares.filter(
         (s: { enabled: boolean; paused: boolean }) => s.enabled && !s.paused,
@@ -257,7 +259,13 @@ export const participantRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app
             }) => {
               const stopped = eStops.has(s.shockerId);
               const devicePaused = shockerIsPaused(s.shockerId);
-              const bands = shareBandsFromRow(s);
+              const shareBands = shareBandsFromRow(s);
+              const bands = {
+                shock: nestBands([shareBands.shock, ownerPersonal.shock], s.deviceMaxIntensity, s.deviceMaxDurationMs),
+                vibrate: nestBands([shareBands.vibrate, ownerPersonal.vibrate], s.deviceMaxIntensity, s.deviceMaxDurationMs),
+                beep: nestBands([shareBands.beep, ownerPersonal.beep], s.deviceMaxIntensity, s.deviceMaxDurationMs),
+                requiredWarningLevel: atLeastWarning(shareBands.requiredWarningLevel, ownerPersonal.requiredWarningLevel),
+              };
               return {
                 shockerId: s.shockerId,
                 shockerName: s.shockerName,
@@ -583,7 +591,7 @@ export const participantRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app
     };
     const band = bandForOperation(modes, operation);
     const intensityCheck = Number(body.intensity ?? band.minIntensity);
-    const durationCheck = Number(body.durationMs ?? Math.max(band.minDurationMs, 300));
+    const durationCheck = Number(body.durationMs ?? clampDurationMs(undefined, band.maxDurationMs, band.minDurationMs));
     if (Number.isFinite(intensityCheck) && intensityCheck < band.minIntensity) {
       return reply.code(412).send({ error: 'Intensity below allowed minimum' });
     }
@@ -728,6 +736,49 @@ export const participantRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app
         }
         throw err;
       }
+      const shareBandsNow = shareBandsFromRow(shareNow);
+      const ownerPersonalNow = personalBandsFromUser(
+        await getPersonalActivityLimits(targetDiscordUserId),
+      );
+      const modesNow = {
+        shock: nestBands(
+          [shareBandsNow.shock, ownerPersonalNow.shock],
+          shareNow.deviceMaxIntensity,
+          shareNow.deviceMaxDurationMs,
+        ),
+        vibrate: nestBands(
+          [shareBandsNow.vibrate, ownerPersonalNow.vibrate],
+          shareNow.deviceMaxIntensity,
+          shareNow.deviceMaxDurationMs,
+        ),
+        beep: nestBands(
+          [shareBandsNow.beep, ownerPersonalNow.beep],
+          shareNow.deviceMaxIntensity,
+          shareNow.deviceMaxDurationMs,
+        ),
+        requiredWarningLevel: atLeastWarning(
+          shareBandsNow.requiredWarningLevel,
+          ownerPersonalNow.requiredWarningLevel,
+        ),
+      };
+      if (operation === 'shock' || operation === 'hold') {
+        const sentWarning = atLeastWarning(
+          normalizeWarningLevel(body.warningLevel),
+          modes.requiredWarningLevel,
+        );
+        if (warningRank(sentWarning) < warningRank(modesNow.requiredWarningLevel)) {
+          throw new Error('Required warning changed before the shock was sent');
+        }
+      }
+      const bandNow = bandForOperation(modesNow, operation);
+      assertWithinCeilings(
+        intensity,
+        durationMs,
+        bandNow.maxIntensity,
+        bandNow.maxDurationMs,
+        bandNow.minIntensity,
+        bandNow.minDurationMs,
+      );
       if (await isEmergencyStopped(targetDiscordUserId, shockerId)) {
         return reply.code(423).send({
           error: 'Owner has emergency stop engaged',
@@ -755,6 +806,14 @@ export const participantRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app
           end: false,
           agentName: agent,
         });
+        if (pendingHold != null && shockerId != null && !isPendingHoldCurrent(targetDiscordUserId, shockerId, pendingHold)) {
+          const ended = await publishOperate(targetCreds, {
+            clientId: clientId!, shockerId, operation: 'e', intensity: 0, durationMs: 0,
+            end: true, agentName: agent,
+          });
+          if (!ended) throw new Error('Failed to end canceled hold');
+          return { ok: true, via: 'broker', canceled: true };
+        }
         if (published) {
           if (hold) {
             scheduleHoldAutoEnd(targetCreds, {

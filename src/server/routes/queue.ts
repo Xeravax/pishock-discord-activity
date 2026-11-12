@@ -210,7 +210,7 @@ export const queueRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app) => {
     }
 
     const skipped = await commandQueue.skipActive(req.discordUser.id);
-    if (!skipped.ended) {
+    if (!skipped.ended && skipped.state.active) {
       return reply.code(502).send({
         error: 'Failed to end the active command',
         code: 'END_FAILED',

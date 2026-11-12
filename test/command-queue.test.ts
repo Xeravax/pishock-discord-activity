@@ -481,6 +481,42 @@ describe('command queue', () => {
     assert.deepEqual(h.executed, [item.itemId]);
   });
 
+  it('discards selection cleared while priority lookup is pending, even when advancement is held', async () => {
+    let releaseLookup!: () => void;
+    let lookupStarted!: () => void;
+    const started = new Promise<void>((resolve) => { lookupStarted = resolve; });
+    const gate = new Promise<void>((resolve) => { releaseLookup = resolve; });
+    let blockSelection = false;
+    const executed: string[] = [];
+    const queue = createCommandQueue({
+      isStarred: async () => {
+        if (blockSelection) { lookupStarted(); await gate; }
+        return false;
+      },
+      getLimits: () => ({ progressMs: 0, maxPerSender: 3 }),
+      validateBeforeRun: async () => true,
+      execute: async (item) => { executed.push(item.id); },
+      endActive: async () => true,
+      onStateChange: () => undefined,
+      onTicket: () => undefined,
+    });
+    await queue.setPaused('owner', true);
+    await queue.enqueue(baseInput({ ownerDiscordUserId: 'owner', executorDiscordUserId: 'a' }));
+    blockSelection = true;
+    const resume = queue.setPaused('owner', false);
+    await started;
+    queue.holdAdvance('owner');
+    await queue.hardClear('owner', { endActiveDevice: false });
+    releaseLookup();
+    await resume;
+    for (let i = 0; i < 30; i++) await Promise.resolve();
+    const state = await queue.snapshot('owner');
+    assert.equal(state.active, null);
+    assert.equal(state.waiting.length, 0);
+    assert.deepEqual(executed, []);
+    queue.resetAll();
+  });
+
   it('does not run an item cleared while validation is in flight', async () => {
     let releaseValidate: () => void = () => undefined;
     const gate = new Promise<void>((resolve) => {

@@ -160,4 +160,7 @@ export async function warnBeforeShock(
       throw new ShockWarningError('Share is not available', 404, 'TARGET_UNAVAILABLE');
     }
   }
+  if (await deps.isEmergencyStopped(input.ownerDiscordUserId, input.shockerId)) {
+    throw new ShockWarningError('Owner has emergency stop engaged', 423, 'EMERGENCY_STOP');
+  }
 }

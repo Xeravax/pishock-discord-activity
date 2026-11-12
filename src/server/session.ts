@@ -546,9 +546,22 @@ export async function getEmergencyStopShockerIds(discordUserId: string): Promise
   return user?.emergencyStopShockerIds ?? [];
 }
 
+const pendingEmergencyStops = new Set<string>();
+
+/** Keep admission closed while the durable emergency-stop latch is being written. */
+export function gateEmergencyStops(discordUserId: string, shockerIds: number[], engaged: boolean): void {
+  for (const id of shockerIds) {
+    const key = `${discordUserId}:${id}`;
+    if (engaged) pendingEmergencyStops.add(key);
+    else pendingEmergencyStops.delete(key);
+  }
+}
+
 export async function isEmergencyStopped(discordUserId: string, shockerId: number): Promise<boolean> {
+  const key = `${discordUserId}:${shockerId}`;
+  if (pendingEmergencyStops.has(key)) return true;
   const ids = await getEmergencyStopShockerIds(discordUserId);
-  return ids.includes(shockerId);
+  return pendingEmergencyStops.has(key) || ids.includes(shockerId);
 }
 
 /** Latch or release owner emergency stop for one or more shockers. */
