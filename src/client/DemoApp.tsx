@@ -60,7 +60,9 @@ const DEMO_STATUS: Record<string, ParticipantStatus> = {
         hubClientId: '7343',
         deviceMaxIntensity: 100,
         deviceMaxDurationMs: 15000,
+        minIntensity: 1,
         maxIntensity: 80,
+        minDurationMs: 16,
         maxDurationMs: 10000,
         canShock: true,
         canVibrate: true,
@@ -101,9 +103,13 @@ const DEMO_SHOCKERS: ShockerView[] = [
     canPause: false,
     deviceMaxIntensity: 100,
     deviceMaxDuration: 15000,
+    activityMinIntensity: 1,
     activityMaxIntensity: 70,
+    activityMinDuration: 16,
     activityMaxDuration: 8000,
+    minIntensity: 1,
     maxIntensity: 70,
+    minDuration: 16,
     maxDuration: 8000,
     isV3: true,
     online: true,
@@ -124,25 +130,16 @@ const DEMO_SHOCKERS: ShockerView[] = [
     canPause: false,
     deviceMaxIntensity: 100,
     deviceMaxDuration: 15000,
+    activityMinIntensity: 1,
     activityMaxIntensity: 100,
+    activityMinDuration: 16,
     activityMaxDuration: 15000,
+    minIntensity: 1,
     maxIntensity: 100,
+    minDuration: 16,
     maxDuration: 15000,
     isV3: true,
     online: false,
-  },
-];
-
-const DEMO_LINKS = [
-  {
-    LinkId: 5158,
-    ShockerId: 26515,
-    Code: '58a93a7b-demo',
-    Name: 'Lemonade',
-    Paused: false,
-    ShockEnabled: true,
-    VibrateEnabled: false,
-    BeepEnabled: false,
   },
 ];
 
@@ -407,7 +404,7 @@ export function DemoApp() {
                 className="q-item q-item-type row no-wrap full-width bg-transparent text-left cursor-pointer"
                 onClick={() => setOverlay('shares')}
               >
-                <div className="q-item__label text-grey-3">Shares & links</div>
+                <div className="q-item__label text-grey-3">Shares</div>
               </button>
               <button
                 type="button"
@@ -421,7 +418,7 @@ export function DemoApp() {
 
           <PsDialog
             open={overlay === 'shares' || screen === 'shares'}
-            title="Shares & links"
+            title="Shares"
             onClose={() => {
               setOverlay(null);
               if (screen === 'shares') setScreen('control');
@@ -429,13 +426,9 @@ export function DemoApp() {
             wide
           >
             <SharesPanel
-              links={DEMO_LINKS}
               shared={[]}
               shockers={DEMO_SHOCKERS.filter((s) => s.owned).map((s) => ({ id: s.id, name: s.name }))}
               busy={false}
-              onCreate={() => flash('Would create link')}
-              onPause={() => flash('Would pause link')}
-              onDelete={() => flash('Would delete link')}
               onCreateShare={() => flash('Would create share code')}
               onClaimShare={() => flash('Would redeem share code')}
             />

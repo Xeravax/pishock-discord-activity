@@ -3,7 +3,10 @@ export const AGENT_NAME = 'Discord PiShock Activity';
 
 export const PISHOCK_API = 'https://api.pishock.com';
 export const PISHOCK_AUTH = 'https://auth.pishock.com';
-export const PISHOCK_DO = 'https://do.pishock.com';
+/** Legacy host. POST /Share on the new API often 401s an API key that Hub/Shockers accept. */
+export const PISHOCK_LEGACY_API = 'https://ps.pishock.com';
+/** Legacy operate host (do.pishock.com apioperate / share helpers). */
+export const PISHOCK_DO_API = 'https://do.pishock.com/api';
 export const PISHOCK_RELAY = 'wss://relay.pishock.com';
 export const PISHOCK_BROKER = 'wss://broker.pishock.com/v2';
 export const PISHOCK_LOGIN = 'https://login.pishock.com';
@@ -17,3 +20,6 @@ export enum ShockerOp {
 }
 
 export const RELAY_LOGIN_TIMEOUT_MS = 5 * 60 * 1000;
+
+/** Named PiShock API key created for this activity (does not replace other named keys). */
+export const PISHOCK_API_KEY_NAME = 'Discord Activity';

@@ -20,7 +20,9 @@ const STEPS = [
         <PiShockAuthDisclaimer />
         <p>
           Your PiShock <strong>password never enters Discord</strong>. Linking opens PiShock&apos;s
-          own browser login page; only the session token PiShock returns is kept (encrypted).
+          own browser login page; we then create a <strong>named API key</strong> and store it
+          encrypted (shown to you once). Unlinking removes the key from this app. The key stays
+          valid at PiShock until you revoke it there or PiShock rejects it.
         </p>
       </>
     ),
@@ -37,7 +39,7 @@ const STEPS = [
           <li>A PiShock login URL opens in your browser</li>
           <li>Log in on that page (password never enters Discord)</li>
           <li>Come back here — we detect the successful login</li>
-          <li>Confirm “Is this your PiShock account?” before anything is linked</li>
+          <li>Confirm the account — that creates a named API key (shown once)</li>
         </ol>
       </>
     ),

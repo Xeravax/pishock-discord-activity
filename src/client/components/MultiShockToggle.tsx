@@ -26,11 +26,11 @@ export function MultiShockToggle({
   );
 }
 
-/** Soft pill toggle for per-person shock intensity while Multi is on. */
+/** Soft pill toggle for per-person shock settings while Multi is on. */
 export function IndividualIntensityToggle({
   active,
   onToggle,
-  title = 'Set shock intensity separately for each selected person',
+  title = "Set each person's shocker intensity individually",
   compact,
 }: Props) {
   return (
@@ -42,9 +42,10 @@ export function IndividualIntensityToggle({
       onClick={onToggle}
       title={title}
       aria-pressed={active}
+      aria-label="Set each person's shocker individually"
     >
       <i className="q-icon mdi mdi-account-edit" aria-hidden />
-      <span>Each</span>
+      <span>Per person</span>
     </button>
   );
 }

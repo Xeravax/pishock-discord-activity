@@ -1,6 +1,6 @@
 import type { FastifyPluginAsync } from 'fastify';
 import type { AppEnv } from '../env.js';
-import { broadcastRealtime } from '../realtime.js';
+import { broadcastRealtime, broadcastRealtimeAll } from '../realtime.js';
 import { commandQueue } from '../pishock/command-queue-runtime.js';
 import { CommandQueueError } from '../pishock/command-queue.js';
 import {
@@ -35,12 +35,19 @@ async function broadcastOwnerQueueState(
       maxPerSender: settings.maxPerSender,
       starOnly: settings.starOnly,
       paused: state.paused,
+      halted: state.halted,
       active: state.active,
       waiting: state.waiting,
       at: Date.now(),
     },
     { discordUserId: ownerDiscordUserId },
   );
+  // Friends need live star/pause/halt banners — owner-only queue_state is not enough.
+  broadcastRealtimeAll({
+    type: 'participants_invalidate',
+    reason: 'queue',
+    at: Date.now(),
+  });
   return state;
 }
 
@@ -57,6 +64,7 @@ export const queueRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app) => {
     return {
       ...settings,
       paused: state.paused,
+      halted: state.halted,
       active: state.active,
       waiting: state.waiting,
       stars,
@@ -80,6 +88,7 @@ export const queueRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app) => {
     if (before.enabled && !settings.enabled) {
       await commandQueue.clearWaiting(req.discordUser.id);
       await commandQueue.setPaused(req.discordUser.id, false);
+      await commandQueue.setHalted(req.discordUser.id, false);
     }
 
     const state = await broadcastOwnerQueueState(req.discordUser.id, settings);
@@ -87,6 +96,7 @@ export const queueRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app) => {
       ok: true,
       ...settings,
       paused: state.paused,
+      halted: state.halted,
       active: state.active,
       waiting: state.waiting,
     };
@@ -107,6 +117,7 @@ export const queueRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app) => {
     if (!settings.enabled) {
       await commandQueue.clearWaiting(req.discordUser.id);
       await commandQueue.setPaused(req.discordUser.id, false);
+      await commandQueue.setHalted(req.discordUser.id, false);
     }
 
     const state = await broadcastOwnerQueueState(req.discordUser.id, settings);
@@ -114,6 +125,7 @@ export const queueRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app) => {
       ok: true,
       ...settings,
       paused: state.paused,
+      halted: state.halted,
       active: state.active,
       waiting: state.waiting,
     };
@@ -136,6 +148,7 @@ export const queueRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app) => {
       ok: true,
       ...settings,
       paused: state.paused,
+      halted: state.halted,
       active: state.active,
       waiting: state.waiting,
     };
@@ -156,6 +169,34 @@ export const queueRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app) => {
     }
 
     const state = await commandQueue.setPaused(req.discordUser.id, body.paused);
+    broadcastRealtimeAll({
+      type: 'participants_invalidate',
+      reason: 'queue_pause',
+      at: Date.now(),
+    });
+    return { ok: true, ...settings, ...state };
+  });
+
+  app.post('/api/queue/halt', async (req, reply) => {
+    const blocked = requireConsent(req, reply);
+    if (blocked) return blocked;
+
+    const settings = await getCommandQueueSettings(req.discordUser.id);
+    if (!settings.enabled) {
+      return reply.code(409).send({ error: 'Command queue is disabled', code: 'QUEUE_DISABLED' });
+    }
+
+    const body = req.body as { halted?: boolean };
+    if (typeof body.halted !== 'boolean') {
+      return reply.code(400).send({ error: 'halted boolean required' });
+    }
+
+    const state = await commandQueue.setHalted(req.discordUser.id, body.halted);
+    broadcastRealtimeAll({
+      type: 'participants_invalidate',
+      reason: 'queue_halt',
+      at: Date.now(),
+    });
     return { ok: true, ...settings, ...state };
   });
 
@@ -168,8 +209,16 @@ export const queueRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app) => {
       return reply.code(409).send({ error: 'Command queue is disabled', code: 'QUEUE_DISABLED' });
     }
 
-    const state = await commandQueue.skipActive(req.discordUser.id);
-    return { ok: true, ...settings, ...state };
+    const skipped = await commandQueue.skipActive(req.discordUser.id);
+    if (!skipped.ended && skipped.state.active) {
+      return reply.code(502).send({
+        error: 'Failed to end the active command',
+        code: 'END_FAILED',
+        ...settings,
+        ...skipped.state,
+      });
+    }
+    return { ok: true, ...settings, ...skipped.state };
   });
 
   app.post('/api/queue/clear', async (req, reply) => {
@@ -225,6 +274,13 @@ export const queueRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app) => {
     const settings = await getCommandQueueSettings(req.discordUser.id);
     if (settings.enabled) {
       await broadcastOwnerQueueState(req.discordUser.id, settings);
+    } else {
+      // Stars still affect priority / stars-only once the queue is enabled — refresh peers.
+      broadcastRealtimeAll({
+        type: 'participants_invalidate',
+        reason: 'queue_star',
+        at: Date.now(),
+      });
     }
 
     return { ok: true, starred, discordUserId: starredDiscordUserId };

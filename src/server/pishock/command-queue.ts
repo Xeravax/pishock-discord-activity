@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import type { WarningLevel } from '../../shared/warning.js';
 import { HOLD_AUTO_END_GRACE_MS } from '../operate-policy.js';
 
 export const QUEUE_MAX_WAITING_TOTAL = 30;
@@ -57,6 +58,8 @@ export type QueueItemPublic = {
 export type QueueStatePublic = {
   ownerDiscordUserId: string;
   paused: boolean;
+  /** When true, reject new enqueue; existing waiting/active items are kept. */
+  halted: boolean;
   active: QueueItemPublic | null;
   waiting: QueueItemPublic[];
 };
@@ -87,6 +90,8 @@ export type QueueEnqueueInput = {
   durationMs: number;
   hold: boolean;
   warning: boolean;
+  /** User-selected warning for a queued shock or hold. Execution raises it to the current requirement. */
+  warningLevel?: WarningLevel;
   shockerId: number;
   shareCode: string | null;
   hubClientId: string | null;
@@ -118,10 +123,13 @@ export type CommandQueueDeps = {
   getLimits: (ownerDiscordUserId: string) => QueueOwnerLimits | Promise<QueueOwnerLimits>;
   /** Re-check before running a waiting item. Return false to drop it. */
   validateBeforeRun: (item: QueueItemInternal) => boolean | Promise<boolean>;
-  /** Publish the command to the device. */
-  execute: (item: QueueItemInternal) => Promise<void>;
-  /** Cut an active command short (broker end). */
-  endActive: (item: QueueItemInternal) => Promise<void>;
+  /** Publish the command to the device. isCanceled is true after skip, clear, or emergency stop. */
+  execute: (item: QueueItemInternal, isCanceled?: () => boolean) => Promise<void>;
+  /**
+   * Cut an active command short.
+   * Return false when the device was not stopped; void/true means it was.
+   */
+  endActive: (item: QueueItemInternal) => Promise<boolean | void>;
   onStateChange: (state: QueueStatePublic) => void;
   onTicket: (ticket: QueueTicketEvent) => void;
   now?: () => number;
@@ -130,6 +138,7 @@ export type CommandQueueDeps = {
 
 type OwnerQueue = {
   paused: boolean;
+  halted: boolean;
   waiting: QueueItemInternal[];
   active: QueueItemInternal | null;
   /** When the active item began occupying the slot (for ETA). */
@@ -138,6 +147,8 @@ type OwnerQueue = {
   activeAdvanceMs: number | null;
   /** Incremented to cancel in-flight sleep / advance loops. */
   generation: number;
+  /** While set, skip and pump must not start the next waiting command. */
+  advanceHeld: boolean;
   running: boolean;
   /** Resolvers waiting to interrupt the active duration sleep. */
   wake: Array<() => void>;
@@ -181,11 +192,13 @@ export function createCommandQueue(deps: CommandQueueDeps) {
     if (!q) {
       q = {
         paused: false,
+        halted: false,
         waiting: [],
         active: null,
         activeStartedAt: null,
         activeAdvanceMs: null,
         generation: 0,
+        advanceHeld: false,
         running: false,
         wake: [],
       };
@@ -241,6 +254,7 @@ export function createCommandQueue(deps: CommandQueueDeps) {
     return {
       ownerDiscordUserId,
       paused: q.paused,
+      halted: q.halted,
       active,
       waiting,
     };
@@ -356,14 +370,35 @@ export function createCommandQueue(deps: CommandQueueDeps) {
     q.running = true;
     try {
       while (true) {
-        if (q.paused) break;
+        if (q.paused || q.advanceHeld) break;
         if (q.active) break;
 
+        const gen = q.generation;
         const next = await pickNext(ownerDiscordUserId);
         if (!next) break;
+        if (q.generation !== gen) {
+          emitTicket(next, 'removed', null, q.paused, { estimatedWaitMs: null, estimatedStartAt: null });
+          continue;
+        }
+        if (q.paused || q.advanceHeld) {
+          q.waiting.push(next);
+          break;
+        }
 
-        const gen = q.generation;
-        const ok = await deps.validateBeforeRun(next);
+        let ok = false;
+        try {
+          ok = await deps.validateBeforeRun(next);
+        } catch {
+          ok = false;
+        }
+        if (q.generation !== gen) {
+          // hardClear / invalidate removed this item while it was off the waiting list.
+          emitTicket(next, 'removed', null, q.paused, {
+            estimatedWaitMs: null,
+            estimatedStartAt: null,
+          });
+          continue;
+        }
         if (!ok) {
           emitTicket(next, 'removed', null, q.paused, {
             estimatedWaitMs: null,
@@ -373,8 +408,23 @@ export function createCommandQueue(deps: CommandQueueDeps) {
           await notifyWaitingPositions(ownerDiscordUserId);
           continue;
         }
+        if (q.paused || q.advanceHeld) {
+          q.waiting.push(next);
+          break;
+        }
 
         const limits = await deps.getLimits(ownerDiscordUserId);
+        if (q.generation !== gen) {
+          emitTicket(next, 'removed', null, q.paused, {
+            estimatedWaitMs: null,
+            estimatedStartAt: null,
+          });
+          continue;
+        }
+        if (q.paused || q.advanceHeld) {
+          q.waiting.push(next);
+          break;
+        }
         const waitMs = resolveQueueAdvanceMs(next.durationMs, limits.progressMs);
         q.active = next;
         q.activeStartedAt = now();
@@ -388,7 +438,10 @@ export function createCommandQueue(deps: CommandQueueDeps) {
 
         let failed = false;
         try {
-          await deps.execute(next);
+          await deps.execute(
+            next,
+            () => q.generation !== gen || q.active?.id !== next.id,
+          );
         } catch {
           failed = true;
         }
@@ -418,7 +471,7 @@ export function createCommandQueue(deps: CommandQueueDeps) {
     } finally {
       q.running = false;
       // Another enqueue may have raced while we were leaving.
-      if (!q.paused && !q.active && q.waiting.length > 0) {
+      if (!q.paused && !q.advanceHeld && !q.active && q.waiting.length > 0) {
         void pump(ownerDiscordUserId);
       }
     }
@@ -428,12 +481,21 @@ export function createCommandQueue(deps: CommandQueueDeps) {
     itemId: string;
     position: number;
     paused: boolean;
+    halted: boolean;
     estimatedWaitMs: number;
     estimatedStartAt: number;
     state: QueueStatePublic;
   }> {
     const q = ensure(input.ownerDiscordUserId);
     const limits = await deps.getLimits(input.ownerDiscordUserId);
+
+    if (q.halted) {
+      throw new CommandQueueError(
+        'Their command queue is closed to new entries',
+        423,
+        'QUEUE_HALTED',
+      );
+    }
 
     if (q.waiting.length >= QUEUE_MAX_WAITING_TOTAL) {
       throw new CommandQueueError(
@@ -475,6 +537,7 @@ export function createCommandQueue(deps: CommandQueueDeps) {
       itemId: item.id,
       position,
       paused: q.paused,
+      halted: q.halted,
       estimatedWaitMs,
       estimatedStartAt,
       state,
@@ -485,8 +548,15 @@ export function createCommandQueue(deps: CommandQueueDeps) {
     const q = ensure(ownerDiscordUserId);
     q.paused = paused;
     const state = await emitState(ownerDiscordUserId);
-    if (!paused) void pump(ownerDiscordUserId);
+    await notifyWaitingPositions(ownerDiscordUserId);
+    if (!paused && !q.advanceHeld) void pump(ownerDiscordUserId);
     return state;
+  }
+
+  async function setHalted(ownerDiscordUserId: string, halted: boolean): Promise<QueueStatePublic> {
+    const q = ensure(ownerDiscordUserId);
+    q.halted = halted;
+    return emitState(ownerDiscordUserId);
   }
 
   async function clearWaiting(ownerDiscordUserId: string): Promise<QueueStatePublic> {
@@ -514,26 +584,35 @@ export function createCommandQueue(deps: CommandQueueDeps) {
     return snapshot(ownerDiscordUserId);
   }
 
-  async function skipActive(ownerDiscordUserId: string): Promise<QueueStatePublic> {
+  async function skipActive(
+    ownerDiscordUserId: string,
+  ): Promise<{ ended: boolean; state: QueueStatePublic }> {
     const q = ensure(ownerDiscordUserId);
     const active = q.active;
     if (!active) {
-      return emitState(ownerDiscordUserId);
+      return { ended: false, state: await emitState(ownerDiscordUserId) };
+    }
+    let ended = false;
+    try {
+      ended = (await deps.endActive(active)) !== false;
+    } catch {
+      ended = false;
+    }
+    if (!ended) {
+      return { ended: false, state: await snapshot(ownerDiscordUserId) };
+    }
+    if (q.active !== active) {
+      return { ended: true, state: await snapshot(ownerDiscordUserId) };
     }
     bumpGeneration(q);
     clearActiveSlot(q);
-    try {
-      await deps.endActive(active);
-    } catch {
-      // Device may already be idle.
-    }
     emitTicket(active, 'removed', null, q.paused, {
       estimatedWaitMs: null,
       estimatedStartAt: null,
     });
     const state = await emitState(ownerDiscordUserId);
-    if (!q.paused) void pump(ownerDiscordUserId);
-    return state;
+    if (!q.paused && !q.advanceHeld) void pump(ownerDiscordUserId);
+    return { ended: true, state };
   }
 
   /**
@@ -579,15 +658,15 @@ export function createCommandQueue(deps: CommandQueueDeps) {
     ownerDiscordUserId: string,
     executorDiscordUserId: string,
     shockerId: number,
-  ): Promise<{ handled: boolean; state: QueueStatePublic }> {
+  ): Promise<{ handled: boolean; ended: boolean; state: QueueStatePublic }> {
     const q = ensure(ownerDiscordUserId);
     if (
       q.active &&
       q.active.executorDiscordUserId === executorDiscordUserId &&
       q.active.shockerId === shockerId
     ) {
-      await skipActive(ownerDiscordUserId);
-      return { handled: true, state: await snapshot(ownerDiscordUserId) };
+      const skipped = await skipActive(ownerDiscordUserId);
+      return { handled: true, ended: skipped.ended, state: skipped.state };
     }
 
     const waitingMatch = q.waiting.find(
@@ -598,14 +677,36 @@ export function createCommandQueue(deps: CommandQueueDeps) {
     );
     if (waitingMatch) {
       await removeItem(ownerDiscordUserId, waitingMatch.id);
-      return { handled: true, state: await snapshot(ownerDiscordUserId) };
+      return { handled: true, ended: true, state: await snapshot(ownerDiscordUserId) };
     }
 
-    return { handled: false, state: await snapshot(ownerDiscordUserId) };
+    return { handled: false, ended: false, state: await snapshot(ownerDiscordUserId) };
+  }
+
+  function holdAdvance(ownerDiscordUserId: string): void {
+    ensure(ownerDiscordUserId).advanceHeld = true;
+  }
+
+  function releaseAdvance(ownerDiscordUserId: string): void {
+    const q = queues.get(ownerDiscordUserId);
+    if (!q) return;
+    q.advanceHeld = false;
+    if (!q.paused) void pump(ownerDiscordUserId);
+  }
+
+  /** Bump generation so an in-flight execute can see it was canceled before it publishes. */
+  function invalidateInFlight(ownerDiscordUserId: string): void {
+    const q = queues.get(ownerDiscordUserId);
+    if (!q) return;
+    bumpGeneration(q);
   }
 
   function getPaused(ownerDiscordUserId: string): boolean {
     return ensure(ownerDiscordUserId).paused;
+  }
+
+  function getHalted(ownerDiscordUserId: string): boolean {
+    return ensure(ownerDiscordUserId).halted;
   }
 
   /** Test / shutdown helper. */
@@ -615,6 +716,8 @@ export function createCommandQueue(deps: CommandQueueDeps) {
       q.waiting = [];
       clearActiveSlot(q);
       q.paused = false;
+      q.halted = false;
+      q.advanceHeld = false;
       q.running = false;
     }
     queues.clear();
@@ -624,13 +727,18 @@ export function createCommandQueue(deps: CommandQueueDeps) {
   return {
     enqueue,
     setPaused,
+    setHalted,
     clearWaiting,
     removeItem,
     skipActive,
     hardClear,
+    holdAdvance,
+    releaseAdvance,
+    invalidateInFlight,
     handleSenderEnd,
     snapshot,
     getPaused,
+    getHalted,
     resetAll,
   };
 }

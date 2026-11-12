@@ -10,24 +10,36 @@ import {
 import {
   agentNameForExecutor,
   operateById,
-  operateByShare,
+  piShockLogError,
   PiShockApiError,
+  publicPiShockError,
+  redactPiShockSecrets,
 } from '../pishock/client.js';
 import { publishOperate } from '../pishock/broker.js';
 import {
   assertModeAllowed,
+  assertWithinCeilings,
   assertOperateRateLimit,
+  beginPendingHold,
+  cancelPendingHold,
   clearHoldAutoEnd,
+  isPendingHoldCurrent,
   clampDurationMs,
   clampIntensity,
   OperatePolicyError,
   scheduleHoldAutoEnd,
 } from '../operate-policy.js';
+import { bandForOperation, nestBands, personalBandsFromUser, shareBandsFromRow } from '../limit-bands.js';
+import { atLeastWarning, normalizeWarningLevel, warningRank } from '../../shared/warning.js';
+import type { WarningLevel } from '../../shared/warning.js';
+import { shockWarningBody, ShockWarningError, warnBeforeShock } from '../pishock/shock-warning.js';
 import {
+  findActivityShareByShocker,
   getCommandQueueEnabled,
   getCommandQueueSettings,
   getConsent,
   getEmergencyStopShockerIds,
+  getPersonalActivityLimits,
   isEmergencyStopped,
   isExecutorBanned,
   listEnabledActivityShares,
@@ -45,6 +57,38 @@ import {
 } from '../discord-location.js';
 import { commandQueue } from '../pishock/command-queue-runtime.js';
 import { CommandQueueError, type QueuedOperation } from '../pishock/command-queue.js';
+import {
+  getPiShockPauseState,
+  rememberPiShockPaused,
+  shockerPauseBlocks,
+  type PiShockPauseState,
+} from '../pishock/pause.js';
+import { allActiveShockersEStopped } from '../pishock/estop-sync.js';
+
+const PARTICIPANT_STATUS_CONCURRENCY = 4;
+
+async function mapWithConcurrency<T, R>(
+  items: T[],
+  limit: number,
+  fn: (item: T) => Promise<R>,
+): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let next = 0;
+  const workers = Math.min(Math.max(1, limit), items.length);
+  async function worker() {
+    while (next < items.length) {
+      const index = next;
+      next += 1;
+      const item = items[index];
+      if (item === undefined) return;
+      results[index] = await fn(item);
+    }
+  }
+  if (workers > 0) {
+    await Promise.all(Array.from({ length: workers }, () => worker()));
+  }
+  return results;
+}
 
 function executorLabel(user: { id: string; username?: string | null; global_name?: string | null }) {
   const name = user.global_name || user.username || 'unknown';
@@ -59,6 +103,9 @@ async function auditParticipantCommand(input: {
   executorAvatar?: string | null;
   action: string;
   shockerId: number;
+  shockerName?: string | null;
+  hubClientId?: string | null;
+  hubName?: string | null;
   shareCode?: string | null;
   intensity: number;
   durationMs: number;
@@ -72,6 +119,9 @@ async function auditParticipantCommand(input: {
     targetDiscordUserId: input.targetDiscordUserId,
     action: input.action,
     shockerId: input.shockerId,
+    shockerName: input.shockerName,
+    hubClientId: input.hubClientId,
+    hubName: input.hubName,
     intensity: input.intensity,
     durationMs: input.durationMs,
     success: input.success,
@@ -157,24 +207,36 @@ export const participantRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app
 
     const ids = [...new Set((body.discordUserIds ?? []).map(String).filter(Boolean))].slice(0, 50);
     const myStars = new Set(await listQueueStars(req.discordUser.id));
-    const participants = [];
-    for (const id of ids) {
-      const [user, shares, bannedYou, hasSession, hasConsent, theirSettings, theyStarredMe] =
+    const participants = await mapWithConcurrency(ids, PARTICIPANT_STATUS_CONCURRENCY, async (id) => {
+      const [user, shares, bannedYou, targetCreds, hasConsent, theirSettings, theyStarredMe] =
         await Promise.all([
           prisma.discordUser.findUnique({ where: { id } }),
           listEnabledActivityShares(id),
           isExecutorBanned(id, req.discordUser.id),
-          loadPiShockCreds(opts.env, id).then(Boolean),
+          loadPiShockCreds(opts.env, id),
           getConsent(id),
           getCommandQueueSettings(id),
           isQueueStarred(id, req.discordUser.id),
         ]);
+      const hasSession = Boolean(targetCreds);
+      const pause: PiShockPauseState = targetCreds
+        ? await getPiShockPauseState(id, targetCreds).catch(
+            (): PiShockPauseState => ({ shockerIds: [], shareCodes: [], unknown: true }),
+          )
+        : { shockerIds: [], shareCodes: [], unknown: false };
+      const shockerIsPaused = (shockerId: number) =>
+        pause.unknown || pause.shockerIds.includes(shockerId);
+      const theirPaused = theirSettings.enabled ? commandQueue.getPaused(id) : false;
+      const theirHalted = theirSettings.enabled ? commandQueue.getHalted(id) : false;
+      const ownerPersonal = personalBandsFromUser(await getPersonalActivityLimits(id));
       const eStops = new Set(await getEmergencyStopShockerIds(id));
       const active = shares.filter(
         (s: { enabled: boolean; paused: boolean }) => s.enabled && !s.paused,
       );
-      const operable = active.filter((s: { shockerId: number }) => !eStops.has(s.shockerId));
-      const allEStopped = active.length > 0 && operable.length === 0;
+      const operable = active.filter(
+        (s: { shockerId: number }) => !eStops.has(s.shockerId) && !shockerIsPaused(s.shockerId),
+      );
+      const allEStopped = allActiveShockersEStopped(active, eStops);
       const visibleShockers = bannedYou
         ? []
         : active.map(
@@ -182,9 +244,12 @@ export const participantRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app
               shockerId: number;
               shockerName: string;
               hubClientId: string | null;
+              hubName?: string | null;
               deviceMaxIntensity: number;
               deviceMaxDurationMs: number;
+              minIntensity: number;
               maxIntensity: number;
+              minDurationMs: number;
               maxDurationMs: number;
               canShock: boolean;
               canVibrate: boolean;
@@ -193,24 +258,44 @@ export const participantRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app
               paused: boolean;
             }) => {
               const stopped = eStops.has(s.shockerId);
+              const devicePaused = shockerIsPaused(s.shockerId);
+              const shareBands = shareBandsFromRow(s);
+              const bands = {
+                shock: nestBands([shareBands.shock, ownerPersonal.shock], s.deviceMaxIntensity, s.deviceMaxDurationMs),
+                vibrate: nestBands([shareBands.vibrate, ownerPersonal.vibrate], s.deviceMaxIntensity, s.deviceMaxDurationMs),
+                beep: nestBands([shareBands.beep, ownerPersonal.beep], s.deviceMaxIntensity, s.deviceMaxDurationMs),
+                requiredWarningLevel: atLeastWarning(shareBands.requiredWarningLevel, ownerPersonal.requiredWarningLevel),
+              };
               return {
                 shockerId: s.shockerId,
                 shockerName: s.shockerName,
                 hubClientId: s.hubClientId,
+                hubName: s.hubName ?? null,
                 deviceMaxIntensity: s.deviceMaxIntensity,
                 deviceMaxDurationMs: s.deviceMaxDurationMs,
-                maxIntensity: s.maxIntensity,
-                maxDurationMs: s.maxDurationMs,
-                canShock: !stopped && s.canShock,
-                canVibrate: !stopped && s.canVibrate,
-                canBeep: !stopped && s.canBeep,
-                canHold: !stopped && s.canHold,
-                paused: s.paused,
+                minIntensity: bands.shock.minIntensity,
+                maxIntensity: bands.shock.maxIntensity,
+                minDurationMs: bands.shock.minDurationMs,
+                maxDurationMs: bands.shock.maxDurationMs,
+                vibMinIntensity: bands.vibrate.minIntensity,
+                vibMaxIntensity: bands.vibrate.maxIntensity,
+                vibMinDurationMs: bands.vibrate.minDurationMs,
+                vibMaxDurationMs: bands.vibrate.maxDurationMs,
+                beepMinIntensity: bands.beep.minIntensity,
+                beepMaxIntensity: bands.beep.maxIntensity,
+                beepMinDurationMs: bands.beep.minDurationMs,
+                beepMaxDurationMs: bands.beep.maxDurationMs,
+                requiredWarningLevel: bands.requiredWarningLevel,
+                canShock: !stopped && !devicePaused && s.canShock,
+                canVibrate: !stopped && !devicePaused && s.canVibrate,
+                canBeep: !stopped && !devicePaused && s.canBeep,
+                canHold: !stopped && !devicePaused && s.canHold,
+                paused: devicePaused || s.paused,
                 emergencyStop: stopped,
               };
             },
           );
-      participants.push({
+      return {
         discordUserId: id,
         username: user?.username ?? null,
         globalName: user?.globalName ?? null,
@@ -230,13 +315,17 @@ export const participantRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app
           enabled: theirSettings.enabled,
           starOnly: theirSettings.starOnly,
           starredByThem: theyStarredMe,
-          canOperate: !theirSettings.starOnly || theyStarredMe,
+          canOperate:
+            (!theirSettings.starOnly || theyStarredMe) &&
+            !(theirSettings.enabled && theirHalted),
+          paused: Boolean(theirPaused),
+          halted: Boolean(theirHalted),
           maxPerSender: theirSettings.maxPerSender,
           progressMs: theirSettings.progressMs,
         },
         shockers: visibleShockers,
-      });
-    }
+      };
+    });
     return { participants };
   });
 
@@ -266,6 +355,7 @@ export const participantRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app
       durationMs?: number;
       hold?: boolean;
       warning?: boolean;
+      warningLevel?: WarningLevel | string;
       clientId?: string | number;
     };
 
@@ -338,14 +428,14 @@ export const participantRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app
         .send({ error: 'Emergency stop is only available to the device owner' });
     }
 
-    // Only the stored hub — never body.clientId
+    // Only the stored hub — never body.clientId.
+    // Activity shares always operate with the owner's API key (no PiShock share codes).
     const clientId = share.hubClientId ?? undefined;
-    const shareCode = share.shareCode ? String(share.shareCode) : null;
     const agent = agentNameForExecutor(executorLabel(req.discordUser));
     const executorCreds = req.pishockCreds;
-    const useSharePath = Boolean(shareCode && executorCreds);
 
     if (operation === 'end') {
+      cancelPendingHold(targetDiscordUserId, shockerId);
       if (await getCommandQueueEnabled(targetDiscordUserId)) {
         const handled = await commandQueue.handleSenderEnd(
           targetDiscordUserId,
@@ -353,6 +443,36 @@ export const participantRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app
           shockerId,
         );
         if (handled.handled) {
+          if (!handled.ended) {
+            await auditParticipantCommand({
+              executorDiscordUserId: req.discordUser.id,
+              executorUsername: req.discordUser.username,
+              executorGlobalName: req.discordUser.global_name ?? null,
+              executorAvatar: req.discordUser.avatar ?? null,
+              targetDiscordUserId,
+              action: 'participant_end',
+              shockerId,
+              shockerName: share.shockerName,
+              hubClientId: share.hubClientId ?? clientId ?? null,
+              hubName: share.hubName ?? null,
+              shareCode: null,
+              intensity: 0,
+              durationMs: 0,
+              success: false,
+              location,
+              detail: JSON.stringify({
+                via: 'queue',
+                path: 'queue_end',
+                ended: false,
+                agent,
+                instanceId,
+              }),
+            });
+            return reply.code(502).send({
+              error: 'Failed to end the command on the device',
+              code: 'END_FAILED',
+            });
+          }
           await auditParticipantCommand({
             executorDiscordUserId: req.discordUser.id,
             executorUsername: req.discordUser.username,
@@ -361,7 +481,10 @@ export const participantRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app
             targetDiscordUserId,
             action: 'participant_end',
             shockerId,
-            shareCode,
+            shockerName: share.shockerName,
+            hubClientId: share.hubClientId ?? clientId ?? null,
+            hubName: share.hubName ?? null,
+            shareCode: null,
             intensity: 0,
             durationMs: 0,
             success: true,
@@ -380,14 +503,13 @@ export const participantRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app
         return reply.code(400).send({ error: 'end requires a stored hub client id on the share' });
       }
       clearHoldAutoEnd(targetDiscordUserId, shockerId);
-      const published = await publishOperate(useSharePath ? executorCreds! : targetCreds, {
+      const published = await publishOperate(targetCreds, {
         clientId,
         shockerId,
         operation: 'e',
         intensity: 0,
         durationMs: 0,
         end: true,
-        shareCode: useSharePath ? shareCode! : undefined,
         agentName: agent,
       });
       await auditParticipantCommand({
@@ -398,14 +520,17 @@ export const participantRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app
         targetDiscordUserId,
         action: 'participant_end',
         shockerId,
-        shareCode,
+        shockerName: share.shockerName,
+        hubClientId: share.hubClientId ?? clientId ?? null,
+        hubName: share.hubName ?? null,
+        shareCode: null,
         intensity: 0,
         durationMs: 0,
         success: published,
         location,
         detail: JSON.stringify({
           via: 'broker',
-          path: useSharePath ? 'executor_share' : 'target_session',
+          path: 'target_session',
           agent,
           instanceId,
         }),
@@ -439,17 +564,76 @@ export const participantRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app
       throw err;
     }
 
-    const maxIntensity = Math.min(share.maxIntensity, share.deviceMaxIntensity);
-    const maxDurationMs = Math.min(share.maxDurationMs, share.deviceMaxDurationMs);
-    if (Number(body.intensity ?? 1) > maxIntensity) {
+    const shareBands = shareBandsFromRow(share);
+    const ownerPersonal = personalBandsFromUser(
+      await getPersonalActivityLimits(targetDiscordUserId),
+    );
+    const modes = {
+      shock: nestBands(
+        [shareBands.shock, ownerPersonal.shock],
+        share.deviceMaxIntensity,
+        share.deviceMaxDurationMs,
+      ),
+      vibrate: nestBands(
+        [shareBands.vibrate, ownerPersonal.vibrate],
+        share.deviceMaxIntensity,
+        share.deviceMaxDurationMs,
+      ),
+      beep: nestBands(
+        [shareBands.beep, ownerPersonal.beep],
+        share.deviceMaxIntensity,
+        share.deviceMaxDurationMs,
+      ),
+      requiredWarningLevel: atLeastWarning(
+        shareBands.requiredWarningLevel,
+        ownerPersonal.requiredWarningLevel,
+      ),
+    };
+    const band = bandForOperation(modes, operation);
+    const intensityCheck = Number(body.intensity ?? band.minIntensity);
+    const durationCheck = Number(body.durationMs ?? clampDurationMs(undefined, band.maxDurationMs, band.minDurationMs));
+    if (Number.isFinite(intensityCheck) && intensityCheck < band.minIntensity) {
+      return reply.code(412).send({ error: 'Intensity below allowed minimum' });
+    }
+    if (Number.isFinite(intensityCheck) && intensityCheck > band.maxIntensity) {
       return reply.code(412).send({ error: 'Intensity exceeds allowed maximum' });
     }
-    if (Number(body.durationMs ?? 300) > maxDurationMs) {
+    if (Number.isFinite(durationCheck) && durationCheck < band.minDurationMs) {
+      return reply.code(416).send({ error: 'Duration below allowed minimum' });
+    }
+    if (Number.isFinite(durationCheck) && durationCheck > band.maxDurationMs) {
       return reply.code(416).send({ error: 'Duration exceeds allowed maximum' });
     }
 
-    const intensity = clampIntensity(body.intensity, maxIntensity);
-    const durationMs = clampDurationMs(body.durationMs, maxDurationMs);
+    const intensity = clampIntensity(body.intensity, band.maxIntensity, band.minIntensity);
+    const durationMs = clampDurationMs(body.durationMs, band.maxDurationMs, band.minDurationMs);
+
+    const devicePaused = await shockerPauseBlocks(targetDiscordUserId, targetCreds, shockerId);
+    if (devicePaused) {
+      return reply.code(503).send({
+        error: 'This shocker or share is paused on PiShock',
+        code: 'PISHOCK_PAUSED',
+      });
+    }
+
+    const requestedWarningLevel = normalizeWarningLevel(body.warningLevel);
+    const effectiveWarningLevel = atLeastWarning(
+      requestedWarningLevel,
+      modes.requiredWarningLevel,
+    );
+    const shockOrHold = operation === 'shock' || operation === 'hold';
+    if (shockOrHold && effectiveWarningLevel !== 'none' && !share.canVibrate) {
+      return reply.code(405).send({
+        error:
+          modes.requiredWarningLevel !== 'none'
+            ? 'Owner requires a warning vibe before shock, but vibrate is disabled'
+            : 'Vibrate is disabled, so the warning before shock was not sent',
+        code: 'WARNING_REQUIRED',
+        ...(modes.requiredWarningLevel !== 'none'
+          ? { requiredWarningLevel: modes.requiredWarningLevel }
+          : {}),
+      });
+    }
 
     if (await getCommandQueueEnabled(targetDiscordUserId)) {
       const queuedOp: QueuedOperation =
@@ -474,9 +658,10 @@ export const participantRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app
           durationMs,
           hold,
           warning,
+          warningLevel: requestedWarningLevel,
           shockerId,
-          shareCode,
-          hubClientId: clientId ?? null,
+          shareCode: null,
+          hubClientId: share.hubClientId ?? clientId ?? null,
           instanceId,
           payload: {
             env: opts.env,
@@ -509,8 +694,108 @@ export const participantRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app
           : ShockerOp.Beep;
 
     try {
+      if (hold && !clientId) {
+        return reply.code(502).send({
+          error: 'Hold requires a hub client id so it can be ended',
+          code: 'BROKER_PUBLISH_FAILED',
+        });
+      }
+      const pendingHold = hold ? beginPendingHold(targetDiscordUserId, shockerId) : null;
+      await warnBeforeShock({
+        operation,
+        requestedWarningLevel,
+        requiredWarningLevel: modes.requiredWarningLevel,
+        canVibrate: share.canVibrate,
+        creds: targetCreds,
+        clientId: clientId ?? null,
+        shockerId,
+        ownerDiscordUserId: targetDiscordUserId,
+        vibrateBand: modes.vibrate,
+        gateOnShare: true,
+      });
+      if (pendingHold != null && !isPendingHoldCurrent(targetDiscordUserId, shockerId, pendingHold)) {
+        return { ok: true, via: 'broker', canceled: true };
+      }
+      const shareNow = await findActivityShareByShocker(targetDiscordUserId, shockerId);
+      if (!shareNow || !shareNow.enabled || shareNow.paused) {
+        return reply.code(404).send({
+          error: 'Share is not available',
+          code: 'TARGET_UNAVAILABLE',
+        });
+      }
+      try {
+        assertModeAllowed(operation, hold, {
+          canShock: shareNow.canShock,
+          canVibrate: shareNow.canVibrate,
+          canBeep: shareNow.canBeep,
+          canHold: shareNow.canHold,
+        });
+      } catch (err) {
+        if (err instanceof OperatePolicyError) {
+          return reply.code(err.status).send({ error: err.message, code: err.code });
+        }
+        throw err;
+      }
+      const shareBandsNow = shareBandsFromRow(shareNow);
+      const ownerPersonalNow = personalBandsFromUser(
+        await getPersonalActivityLimits(targetDiscordUserId),
+      );
+      const modesNow = {
+        shock: nestBands(
+          [shareBandsNow.shock, ownerPersonalNow.shock],
+          shareNow.deviceMaxIntensity,
+          shareNow.deviceMaxDurationMs,
+        ),
+        vibrate: nestBands(
+          [shareBandsNow.vibrate, ownerPersonalNow.vibrate],
+          shareNow.deviceMaxIntensity,
+          shareNow.deviceMaxDurationMs,
+        ),
+        beep: nestBands(
+          [shareBandsNow.beep, ownerPersonalNow.beep],
+          shareNow.deviceMaxIntensity,
+          shareNow.deviceMaxDurationMs,
+        ),
+        requiredWarningLevel: atLeastWarning(
+          shareBandsNow.requiredWarningLevel,
+          ownerPersonalNow.requiredWarningLevel,
+        ),
+      };
+      if (operation === 'shock' || operation === 'hold') {
+        const sentWarning = atLeastWarning(
+          normalizeWarningLevel(body.warningLevel),
+          modes.requiredWarningLevel,
+        );
+        if (warningRank(sentWarning) < warningRank(modesNow.requiredWarningLevel)) {
+          throw new Error('Required warning changed before the shock was sent');
+        }
+      }
+      const bandNow = bandForOperation(modesNow, operation);
+      assertWithinCeilings(
+        intensity,
+        durationMs,
+        bandNow.maxIntensity,
+        bandNow.maxDurationMs,
+        bandNow.minIntensity,
+        bandNow.minDurationMs,
+      );
+      if (await isEmergencyStopped(targetDiscordUserId, shockerId)) {
+        return reply.code(423).send({
+          error: 'Owner has emergency stop engaged',
+          code: 'EMERGENCY_STOP',
+        });
+      }
+      if (await shockerPauseBlocks(targetDiscordUserId, targetCreds, shockerId)) {
+        return reply.code(503).send({
+          error: 'This shocker or share is paused on PiShock',
+          code: 'PISHOCK_PAUSED',
+        });
+      }
+      if (pendingHold != null && !isPendingHoldCurrent(targetDiscordUserId, shockerId, pendingHold)) {
+        return { ok: true, via: 'broker', canceled: true };
+      }
       if ((hold || warning) && clientId != null) {
-        const published = await publishOperate(useSharePath ? executorCreds! : targetCreds, {
+        const published = await publishOperate(targetCreds, {
           clientId,
           shockerId,
           operation: op,
@@ -519,17 +804,24 @@ export const participantRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app
           hold,
           warning,
           end: false,
-          shareCode: useSharePath ? shareCode! : undefined,
           agentName: agent,
         });
+        if (pendingHold != null && shockerId != null && !isPendingHoldCurrent(targetDiscordUserId, shockerId, pendingHold)) {
+          const ended = await publishOperate(targetCreds, {
+            clientId: clientId!, shockerId, operation: 'e', intensity: 0, durationMs: 0,
+            end: true, agentName: agent,
+          });
+          if (!ended) throw new Error('Failed to end canceled hold');
+          return { ok: true, via: 'broker', canceled: true };
+        }
         if (published) {
           if (hold) {
-            scheduleHoldAutoEnd(useSharePath ? executorCreds! : targetCreds, {
+            scheduleHoldAutoEnd(targetCreds, {
               ownerDiscordUserId: targetDiscordUserId,
               shockerId,
               clientId,
               durationMs,
-              shareCode: useSharePath ? shareCode : null,
+              shareCode: null,
               agentName: agent,
             });
           }
@@ -541,56 +833,38 @@ export const participantRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app
             targetDiscordUserId,
             action: `participant_${operation}`,
             shockerId,
-            shareCode,
+            shockerName: share.shockerName,
+            hubClientId: share.hubClientId ?? clientId ?? null,
+            hubName: share.hubName ?? null,
+            shareCode: null,
             intensity,
             durationMs,
             success: true,
             location,
             detail: JSON.stringify({
               via: 'broker',
-              path: useSharePath ? 'executor_share' : 'target_session',
+              path: 'target_session',
               agent,
               executor: req.discordUser.id,
               target: targetDiscordUserId,
               instanceId,
             }),
           });
-          return { ok: true, via: 'broker', path: useSharePath ? 'executor_share' : 'target_session' };
+          return { ok: true, via: 'broker', path: 'target_session' };
+        }
+        if (hold || warning) {
+          return reply.code(502).send({
+            error: 'Hold/warning requires broker; publish failed',
+            code: 'BROKER_PUBLISH_FAILED',
+          });
         }
       }
 
-      if (useSharePath) {
-        await operateByShare(
-          executorCreds!,
-          shareCode!,
-          op,
-          Math.max(1, intensity),
-          durationMs,
-          agent,
-        );
-        await auditParticipantCommand({
-          executorDiscordUserId: req.discordUser.id,
-          executorUsername: req.discordUser.username,
-          executorGlobalName: req.discordUser.global_name ?? null,
-          executorAvatar: req.discordUser.avatar ?? null,
-          targetDiscordUserId,
-          action: `participant_${operation}`,
-          shockerId,
-          shareCode,
-          intensity,
-          durationMs,
-          success: true,
-          location,
-          detail: JSON.stringify({
-            via: 'operateByShare',
-            path: 'executor_share',
-            agent,
-            executor: req.discordUser.id,
-            target: targetDiscordUserId,
-            instanceId,
-          }),
+      if (hold) {
+        return reply.code(502).send({
+          error: 'Hold requires broker; publish failed',
+          code: 'BROKER_PUBLISH_FAILED',
         });
-        return { ok: true, via: 'operateByShare', path: 'executor_share' };
       }
 
       await operateById(
@@ -610,7 +884,10 @@ export const participantRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app
         targetDiscordUserId,
         action: `participant_${operation}`,
         shockerId,
-        shareCode,
+        shockerName: share.shockerName,
+        hubClientId: share.hubClientId ?? clientId ?? null,
+        hubName: share.hubName ?? null,
+        shareCode: null,
         intensity,
         durationMs,
         success: true,
@@ -622,7 +899,6 @@ export const participantRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app
           executor: req.discordUser.id,
           target: targetDiscordUserId,
           instanceId,
-          note: 'Executor has no PiShock session; used target credentials with attributed AgentName',
         }),
       });
       return { ok: true, via: 'operateById', path: 'target_session' };
@@ -635,21 +911,36 @@ export const participantRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app
         targetDiscordUserId,
         action: `participant_${operation}`,
         shockerId,
-        shareCode,
+        shockerName: share.shockerName,
+        hubClientId: share.hubClientId ?? clientId ?? null,
+        hubName: share.hubName ?? null,
+        shareCode: null,
         intensity,
         durationMs,
         success: false,
         location,
         detail: JSON.stringify({
-          error: err instanceof Error ? err.message : String(err),
+          error: piShockLogError(err),
           agent,
           executor: req.discordUser.id,
           target: targetDiscordUserId,
           instanceId,
         }),
       });
+      if (err instanceof ShockWarningError) {
+        return reply.code(err.status).send(shockWarningBody(err));
+      }
       if (err instanceof PiShockApiError) {
-        return reply.code(err.status).send({ error: err.message, body: err.body });
+        console.warn(
+          `[pishock] participant operate ${err.status}: ${redactPiShockSecrets(err.body).slice(0, 200)}`,
+        );
+        if (err.status === 503) {
+          rememberPiShockPaused(targetDiscordUserId, { shockerId, shareCode: null });
+        }
+        const pub = publicPiShockError(err, { relink: false });
+        return reply.code(pub.status).send(
+          pub.code ? { error: pub.error, code: pub.code } : { error: pub.error },
+        );
       }
       throw err;
     }

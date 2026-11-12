@@ -46,6 +46,7 @@ export type RealtimeEvent =
       maxPerSender: number;
       starOnly: boolean;
       paused: boolean;
+      halted: boolean;
       active: {
         id: string;
         executorDiscordUserId: string;
@@ -224,6 +225,8 @@ export function attachRealtime(server: HttpServer): () => void {
       return;
     }
 
+    console.info(`[realtime] upgrade ${pathname} clients=${clients.size}`);
+
     void (async () => {
       const token = extractToken(req);
 
@@ -234,6 +237,7 @@ export function attachRealtime(server: HttpServer): () => void {
           discordUserId = user.id;
         } catch (err) {
           const status = err instanceof DiscordAuthError ? err.status : 401;
+          console.warn(`[realtime] upgrade auth failed status=${status}`);
           socket.write(`HTTP/1.1 ${status} Unauthorized\r\nConnection: close\r\n\r\n`);
           socket.destroy();
           return;
@@ -250,6 +254,7 @@ export function attachRealtime(server: HttpServer): () => void {
         let authed = false;
         const timeout = setTimeout(() => {
           if (!authed) {
+            console.warn('[realtime] auth timeout — closing socket');
             try {
               ws.close(4401, 'auth timeout');
             } catch {
@@ -285,8 +290,14 @@ export function attachRealtime(server: HttpServer): () => void {
               // Replace listeners by attaching the authenticated client handlers
               ws.removeAllListeners('message');
               attachAuthenticatedClient(ws, user.id);
+              console.info(`[realtime] authed ${user.id} clients=${clients.size}`);
             })
-            .catch(() => {
+            .catch((err) => {
+              console.warn(
+                `[realtime] first-message auth failed: ${
+                  err instanceof Error ? err.message : String(err)
+                }`,
+              );
               try {
                 ws.close(4401, 'unauthorized');
               } catch {

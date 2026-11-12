@@ -58,13 +58,18 @@ function resolve() {
   refName = refName.replace(/^refs\/(heads|tags)\//, '');
 
   const short = shortSha(sha);
+  const builtAt = new Date().toISOString();
   let label;
   if (refType === 'tag' || /^v\d/.test(refName)) {
     label = refName.startsWith('v') ? refName : `v${refName}`;
     refType = 'tag';
   } else {
     const branch = refName && refName !== 'HEAD' ? refName : 'local';
-    label = `${branch}-${short}`;
+    // Local/placeholder SHAs need a unique stamp so redeploys force client relaunch.
+    label =
+      short === 'local' || short === 'unknown'
+        ? `${branch}-${Date.now().toString(36)}`
+        : `${branch}-${short}`;
     refType = 'branch';
   }
 
@@ -75,7 +80,7 @@ function resolve() {
     shortSha: short,
     ref: refName,
     refType,
-    builtAt: new Date().toISOString(),
+    builtAt,
   };
 }
 
@@ -87,7 +92,7 @@ fs.writeFileSync(outPath, `${JSON.stringify(info, null, 2)}\n`, 'utf8');
 const envPath = path.join(root, '.env.version');
 fs.writeFileSync(
   envPath,
-  `VITE_APP_VERSION=${info.label}\nVITE_APP_SHA=${info.shortSha}\nVITE_APP_REF=${info.ref}\n`,
+  `VITE_APP_VERSION=${info.label}\nVITE_APP_SHA=${info.shortSha}\nVITE_APP_REF=${info.ref}\nVITE_APP_BUILT_AT=${info.builtAt}\n`,
   'utf8',
 );
 

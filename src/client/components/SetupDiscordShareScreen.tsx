@@ -1,20 +1,55 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { AppVersionBadge } from './AppVersionBadge';
 import type { ShockerView } from './ShockerCard';
 import type { ActivityShareConfig } from './AvailabilitySettings';
-import type { PersonalLimits } from './ActivityLimitsSettings';
+import type { PersonalLimits, ShareLimitRow } from './ActivityLimitsSettings';
+import { ModeLimitsEditor, type ModeLimitsValue } from './ModeLimitsEditor';
 import {
   LimitSlider,
   formatDurationMs,
-  formatIntensityPct,
 } from './LimitSlider';
+import { normalizeWarningLevel } from '../../shared/warning';
 import type { QueuePanelSettings } from './QueuePanel';
+
+function SetupLimitsPane({
+  title,
+  open,
+  onToggle,
+  children,
+}: {
+  title: string;
+  open: boolean;
+  onToggle: () => void;
+  children: ReactNode;
+}) {
+  return (
+    <section className={`setup-limits-pane${open ? ' is-open' : ' is-collapsed'}`}>
+      <button type="button" className="setup-limits-pane__toggle" onClick={onToggle}>
+        <span className="setup-limits-pane__title">{title}</span>
+        <i
+          className={`q-icon mdi ${open ? 'mdi-chevron-down' : 'mdi-chevron-right'}`}
+          aria-hidden
+        />
+      </button>
+      {open ? <div className="setup-limits-pane__body">{children}</div> : null}
+    </section>
+  );
+}
 
 type SetupStep = 'loading' | 'devices' | 'limits' | 'queue';
 
 type Props = {
   shockers: ShockerView[];
   initialPersonal: PersonalLimits;
+  /**
+   * Pre-select these shockers when redoing setup.
+   * Undefined selects every owned shocker. An explicit empty list selects none.
+   */
+  initialSelectedIds?: number[];
+  /** Saved share rows. Personal defaults are used only when a shocker has no row. */
+  initialShares?: ShareLimitRow[];
+  /** Current queue settings. Leaving the step unchanged posts these, not disabled defaults. */
+  initialQueue?: QueuePanelSettings;
   /** True after post-confirm device fetch finishes (even if the list is empty). */
   devicesReady?: boolean;
   busy?: boolean;
@@ -34,34 +69,168 @@ const DEFAULT_QUEUE: QueuePanelSettings = {
   starOnly: false,
 };
 
+function personalToMode(p: PersonalLimits): ModeLimitsValue {
+  return {
+    canShock: p.activityCanShock !== false,
+    canVibrate: p.activityCanVibrate !== false,
+    canBeep: p.activityCanBeep !== false,
+    canHold: p.activityCanHold !== false,
+    shock: {
+      minIntensity: p.activityMinIntensity,
+      maxIntensity: p.activityMaxIntensity,
+      minDurationMs: p.activityMinDurationMs,
+      maxDurationMs: p.activityMaxDurationMs,
+    },
+    vibrate: {
+      minIntensity: p.activityVibMinIntensity,
+      maxIntensity: p.activityVibMaxIntensity,
+      minDurationMs: p.activityVibMinDurationMs,
+      maxDurationMs: p.activityVibMaxDurationMs,
+    },
+    beep: {
+      minIntensity: p.activityBeepMinIntensity,
+      maxIntensity: p.activityBeepMaxIntensity,
+      minDurationMs: p.activityBeepMinDurationMs,
+      maxDurationMs: p.activityBeepMaxDurationMs,
+    },
+    requiredWarningLevel: normalizeWarningLevel(p.activityRequiredWarningLevel),
+  };
+}
+
+function modeToPersonal(m: ModeLimitsValue, prev: PersonalLimits): PersonalLimits {
+  return {
+    ...prev,
+    activityMinIntensity: m.shock.minIntensity,
+    activityMaxIntensity: m.shock.maxIntensity,
+    activityMinDurationMs: m.shock.minDurationMs,
+    activityMaxDurationMs: m.shock.maxDurationMs,
+    activityVibMinIntensity: m.vibrate.minIntensity,
+    activityVibMaxIntensity: m.vibrate.maxIntensity,
+    activityVibMinDurationMs: m.vibrate.minDurationMs,
+    activityVibMaxDurationMs: m.vibrate.maxDurationMs,
+    activityBeepMinIntensity: m.beep.minIntensity,
+    activityBeepMaxIntensity: m.beep.maxIntensity,
+    activityBeepMinDurationMs: m.beep.minDurationMs,
+    activityBeepMaxDurationMs: m.beep.maxDurationMs,
+    activityCanShock: m.canShock,
+    activityCanVibrate: m.canVibrate,
+    activityCanBeep: m.canBeep,
+    activityCanHold: m.canHold,
+    activityRequiredWarningLevel: m.requiredWarningLevel,
+  };
+}
+
+function defaultShareMode(s: ShockerView, personal: PersonalLimits): ModeLimitsValue {
+  const deviceMaxI = Math.min(100, s.deviceMaxIntensity ?? s.maxIntensity ?? 100);
+  const deviceMaxD = Math.min(15_000, s.deviceMaxDuration ?? s.maxDuration ?? 15_000);
+  const shockMax = Math.min(deviceMaxI, personal.activityMaxIntensity);
+  const shockMaxD = Math.min(deviceMaxD, personal.activityMaxDurationMs);
+  const vibMax = Math.min(deviceMaxI, personal.activityVibMaxIntensity);
+  const vibMaxD = Math.min(deviceMaxD, personal.activityVibMaxDurationMs);
+  const beepMax = Math.min(deviceMaxI, personal.activityBeepMaxIntensity);
+  const beepMaxD = Math.min(deviceMaxD, personal.activityBeepMaxDurationMs);
+  return {
+    canShock: personal.activityCanShock !== false && s.canShock,
+    canVibrate: personal.activityCanVibrate !== false && s.canVibrate,
+    canBeep: personal.activityCanBeep !== false && s.canBeep,
+    canHold: personal.activityCanHold !== false && s.canHold,
+    shock: {
+      minIntensity: Math.min(shockMax, personal.activityMinIntensity),
+      maxIntensity: shockMax,
+      minDurationMs: Math.min(shockMaxD, personal.activityMinDurationMs),
+      maxDurationMs: shockMaxD,
+    },
+    vibrate: {
+      minIntensity: Math.min(vibMax, personal.activityVibMinIntensity),
+      maxIntensity: vibMax,
+      minDurationMs: Math.min(vibMaxD, personal.activityVibMinDurationMs),
+      maxDurationMs: vibMaxD,
+    },
+    beep: {
+      minIntensity: Math.min(beepMax, personal.activityBeepMinIntensity),
+      maxIntensity: beepMax,
+      minDurationMs: Math.min(beepMaxD, personal.activityBeepMinDurationMs),
+      maxDurationMs: beepMaxD,
+    },
+    requiredWarningLevel: normalizeWarningLevel(personal.activityRequiredWarningLevel),
+  };
+}
+
+function savedShareToMode(s: ShockerView, row: ShareLimitRow): ModeLimitsValue {
+  const deviceMaxI = Math.min(100, s.deviceMaxIntensity ?? s.maxIntensity ?? 100);
+  const deviceMaxD = Math.min(15_000, s.deviceMaxDuration ?? s.maxDuration ?? 15_000);
+  const shockMax = Math.min(deviceMaxI, row.maxIntensity);
+  const shockMin = Math.min(shockMax, Math.max(1, row.minIntensity ?? 1));
+  const shockMaxD = Math.min(deviceMaxD, row.maxDurationMs);
+  const shockMinD = Math.min(shockMaxD, Math.max(16, row.minDurationMs ?? 16));
+  const vibMax = Math.min(deviceMaxI, row.vibMaxIntensity ?? shockMax);
+  const vibMin = Math.min(vibMax, Math.max(1, row.vibMinIntensity ?? shockMin));
+  const vibMaxD = Math.min(deviceMaxD, row.vibMaxDurationMs ?? shockMaxD);
+  const vibMinD = Math.min(vibMaxD, Math.max(16, row.vibMinDurationMs ?? shockMinD));
+  const beepMax = Math.min(deviceMaxI, row.beepMaxIntensity ?? shockMax);
+  const beepMin = Math.min(beepMax, Math.max(1, row.beepMinIntensity ?? shockMin));
+  const beepMaxD = Math.min(deviceMaxD, row.beepMaxDurationMs ?? shockMaxD);
+  const beepMinD = Math.min(beepMaxD, Math.max(16, row.beepMinDurationMs ?? shockMinD));
+  return {
+    canShock: row.canShock,
+    canVibrate: row.canVibrate,
+    canBeep: row.canBeep,
+    canHold: row.canHold,
+    shock: {
+      minIntensity: shockMin,
+      maxIntensity: shockMax,
+      minDurationMs: shockMinD,
+      maxDurationMs: shockMaxD,
+    },
+    vibrate: {
+      minIntensity: vibMin,
+      maxIntensity: vibMax,
+      minDurationMs: vibMinD,
+      maxDurationMs: vibMaxD,
+    },
+    beep: {
+      minIntensity: beepMin,
+      maxIntensity: beepMax,
+      minDurationMs: beepMinD,
+      maxDurationMs: beepMaxD,
+    },
+    requiredWarningLevel: normalizeWarningLevel(row.requiredWarningLevel),
+  };
+}
+
 function toShare(
   s: ShockerView,
-  caps?: { maxIntensity: number; maxDurationMs: number },
+  mode: ModeLimitsValue,
+  saved?: ShareLimitRow | null,
 ): ActivityShareConfig {
   const deviceMaxI = Math.min(100, s.deviceMaxIntensity ?? s.maxIntensity ?? 100);
   const deviceMaxD = Math.min(15_000, s.deviceMaxDuration ?? s.maxDuration ?? 15_000);
-  const maxIntensity = Math.min(
-    deviceMaxI,
-    caps?.maxIntensity ?? s.activityMaxIntensity ?? s.maxIntensity ?? deviceMaxI,
-  );
-  const maxDurationMs = Math.min(
-    deviceMaxD,
-    caps?.maxDurationMs ?? s.activityMaxDuration ?? s.maxDuration ?? deviceMaxD,
-  );
   return {
     shockerId: s.id,
     shockerName: s.name,
     hubClientId: s.clientId != null ? String(s.clientId) : null,
+    hubName: s.hubName ?? null,
     enabled: true,
-    paused: false,
+    paused: Boolean(saved?.paused),
     deviceMaxIntensity: deviceMaxI,
     deviceMaxDurationMs: deviceMaxD,
-    maxIntensity,
-    maxDurationMs,
-    canShock: s.canShock,
-    canVibrate: s.canVibrate,
-    canBeep: s.canBeep,
-    canHold: s.canHold,
+    minIntensity: mode.shock.minIntensity,
+    maxIntensity: mode.shock.maxIntensity,
+    minDurationMs: mode.shock.minDurationMs,
+    maxDurationMs: mode.shock.maxDurationMs,
+    vibMinIntensity: mode.vibrate.minIntensity,
+    vibMaxIntensity: mode.vibrate.maxIntensity,
+    vibMinDurationMs: mode.vibrate.minDurationMs,
+    vibMaxDurationMs: mode.vibrate.maxDurationMs,
+    beepMinIntensity: mode.beep.minIntensity,
+    beepMaxIntensity: mode.beep.maxIntensity,
+    beepMinDurationMs: mode.beep.minDurationMs,
+    beepMaxDurationMs: mode.beep.maxDurationMs,
+    canShock: mode.canShock,
+    canVibrate: mode.canVibrate,
+    canBeep: mode.canBeep,
+    canHold: mode.canHold,
+    requiredWarningLevel: mode.requiredWarningLevel,
   };
 }
 
@@ -69,6 +238,9 @@ function toShare(
 export function SetupDiscordShareScreen({
   shockers,
   initialPersonal,
+  initialSelectedIds,
+  initialShares,
+  initialQueue,
   devicesReady = false,
   busy,
   error,
@@ -81,14 +253,34 @@ export function SetupDiscordShareScreen({
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [seeded, setSeeded] = useState(false);
   const [personal, setPersonal] = useState<PersonalLimits>(initialPersonal);
-  const [shareCaps, setShareCaps] = useState<
-    Record<number, { maxIntensity: number; maxDurationMs: number }>
-  >({});
-  const [queue, setQueue] = useState<QueuePanelSettings>(DEFAULT_QUEUE);
+  const [shareModes, setShareModes] = useState<Record<number, ModeLimitsValue>>({});
+  const [editedShareIds, setEditedShareIds] = useState<Set<number>>(() => new Set());
+  const [queue, setQueue] = useState<QueuePanelSettings>(initialQueue ?? DEFAULT_QUEUE);
+  const [queueTouched, setQueueTouched] = useState(false);
+  const [defaultsOpen, setDefaultsOpen] = useState(true);
+  const [sharesOpen, setSharesOpen] = useState(true);
 
   useEffect(() => {
     setPersonal(initialPersonal);
-  }, [initialPersonal.activityMaxIntensity, initialPersonal.activityMaxDurationMs]);
+  }, [initialPersonal]);
+
+  useEffect(() => {
+    if (queueTouched || !initialQueue) return;
+    setQueue(initialQueue);
+  }, [queueTouched, initialQueue]);
+
+  const updatePersonalDefaults = (next: PersonalLimits) => {
+    setPersonal(next);
+    const savedById = new Map((initialShares ?? []).map((row) => [row.shockerId, row]));
+    setShareModes((prev) => {
+      const out = { ...prev };
+      for (const s of owned) {
+        if (editedShareIds.has(s.id) || savedById.has(s.id)) continue;
+        out[s.id] = defaultShareMode(s, next);
+      }
+      return out;
+    });
+  };
 
   useEffect(() => {
     if (!devicesReady) {
@@ -96,17 +288,23 @@ export function SetupDiscordShareScreen({
       return;
     }
     if (owned.length > 0 && !seeded) {
-      setSelected(new Set(owned.map((s) => s.id)));
-      const caps: Record<number, { maxIntensity: number; maxDurationMs: number }> = {};
+      const ownedIds = new Set(owned.map((s) => s.id));
+      const selectedIds =
+        initialSelectedIds === undefined
+          ? owned.map((s) => s.id)
+          : initialSelectedIds.filter((id) => ownedIds.has(id));
+      setSelected(new Set(selectedIds));
+      const savedById = new Map((initialShares ?? []).map((row) => [row.shockerId, row]));
+      const modes: Record<number, ModeLimitsValue> = {};
       for (const s of owned) {
-        const row = toShare(s);
-        caps[s.id] = { maxIntensity: row.maxIntensity, maxDurationMs: row.maxDurationMs };
+        const saved = savedById.get(s.id);
+        modes[s.id] = saved ? savedShareToMode(s, saved) : defaultShareMode(s, initialPersonal);
       }
-      setShareCaps(caps);
+      setShareModes(modes);
       setSeeded(true);
     }
     setStep((prev) => (prev === 'loading' ? 'devices' : prev));
-  }, [owned, seeded, devicesReady]);
+  }, [owned, seeded, devicesReady, initialPersonal, initialSelectedIds, initialShares]);
 
   const go = (next: SetupStep, dir: 'forward' | 'back') => {
     setStepDir(dir);
@@ -128,7 +326,14 @@ export function SetupDiscordShareScreen({
   const selectedOwned = owned.filter((s) => selected.has(s.id));
 
   const submit = (includeQueue: boolean) => {
-    const shares = selectedOwned.map((s) => toShare(s, shareCaps[s.id]));
+    const savedById = new Map((initialShares ?? []).map((row) => [row.shockerId, row]));
+    const shares = selectedOwned.map((s) =>
+      toShare(
+        s,
+        shareModes[s.id] ?? defaultShareMode(s, personal),
+        savedById.get(s.id) ?? null,
+      ),
+    );
     void onComplete({
       shares,
       personal,
@@ -148,7 +353,7 @@ export function SetupDiscordShareScreen({
   return (
     <div className="auth-boot" role="dialog" aria-modal="true" aria-labelledby="setup-share-title">
       <div className="auth-boot__glow" aria-hidden />
-      <div className="auth-boot__panel auth-boot__panel--wide">
+      <div className="auth-boot__panel auth-boot__panel--wide auth-boot__panel--setup">
         <div className="auth-boot__mark" aria-hidden>
           <i
             className={`q-icon mdi auth-boot__bolt ${
@@ -288,7 +493,14 @@ export function SetupDiscordShareScreen({
                   type="button"
                   className="q-btn q-btn-item non-selectable no-outline bg-secondary text-dark q-btn--standard q-btn--rectangle q-btn--actionable"
                   disabled={busy}
-                  onClick={() => go('limits', 'forward')}
+                  onClick={() => {
+                    for (const s of selectedOwned) {
+                      setShareModes((prev) =>
+                        prev[s.id] ? prev : { ...prev, [s.id]: defaultShareMode(s, personal) },
+                      );
+                    }
+                    go('limits', 'forward');
+                  }}
                 >
                   <span className="q-btn__wrapper col row q-anchor--skip">
                     <span className="q-btn__content text-center col items-center q-anchor--skip justify-center row">
@@ -303,11 +515,11 @@ export function SetupDiscordShareScreen({
           {step === 'limits' ? (
             <>
               <h2 id="setup-share-title" className="auth-boot__heading">
-                Set your activity limits
+                Activity limits
               </h2>
               <p className="auth-boot__hint">
-                These ceilings apply in Discord and stay at or below each device’s PiShock max. Drag
-                the sliders — no typing needed.
+                Set shock and vibrate bands per shared shocker, toggle beep and hold, and
+                optionally enforce a warning before shock.
               </p>
 
               {error ? (
@@ -317,93 +529,76 @@ export function SetupDiscordShareScreen({
                 </div>
               ) : null}
 
-              <div className="setup-limits-block">
-                <div className="setup-limits-block__title">Your own devices</div>
-                <LimitSlider
-                  label="Max intensity"
-                  value={personal.activityMaxIntensity}
-                  min={1}
-                  max={100}
-                  formatValue={formatIntensityPct}
-                  disabled={busy}
-                  onChange={(activityMaxIntensity) =>
-                    setPersonal((p) => ({ ...p, activityMaxIntensity }))
-                  }
-                />
-                <LimitSlider
-                  label="Max duration"
-                  value={personal.activityMaxDurationMs}
-                  min={16}
-                  max={15_000}
-                  step={100}
-                  formatValue={formatDurationMs}
-                  disabled={busy}
-                  onChange={(activityMaxDurationMs) =>
-                    setPersonal((p) => ({ ...p, activityMaxDurationMs }))
-                  }
-                />
-              </div>
+              <div
+                className={`setup-limits-split${
+                  selectedOwned.length > 0 ? '' : ' setup-limits-split--single'
+                }`}
+              >
+                <SetupLimitsPane
+                  title="Your defaults"
+                  open={defaultsOpen}
+                  onToggle={() => setDefaultsOpen((open) => !open)}
+                >
+                  <p className="text-caption text-grey-5" style={{ margin: '0 0 8px' }}>
+                    These ranges are your saved own-device limits and the starting point for new
+                    shares. Turn actions on or off on each shared shocker below.
+                  </p>
+                  <ModeLimitsEditor
+                    value={personalToMode(personal)}
+                    deviceMaxIntensity={100}
+                    deviceMaxDurationMs={15_000}
+                    disabled={busy}
+                    hideActionToggles
+                    onChange={(m) => updatePersonalDefaults(modeToPersonal(m, personal))}
+                  />
+                </SetupLimitsPane>
 
-              {selectedOwned.length > 0 ? (
-                <div className="setup-limits-block">
-                  <div className="setup-limits-block__title">Shared Discord shockers</div>
-                  {selectedOwned.map((s) => {
-                    const deviceMaxI = Math.min(
-                      100,
-                      s.deviceMaxIntensity ?? s.maxIntensity ?? 100,
-                    );
-                    const deviceMaxD = Math.min(
-                      15_000,
-                      s.deviceMaxDuration ?? s.maxDuration ?? 15_000,
-                    );
-                    const caps = shareCaps[s.id] ?? {
-                      maxIntensity: Math.min(deviceMaxI, personal.activityMaxIntensity),
-                      maxDurationMs: Math.min(deviceMaxD, personal.activityMaxDurationMs),
-                    };
-                    return (
-                      <div key={s.id} className="setup-limits-shocker">
-                        <div className="setup-limits-shocker__name">{s.name}</div>
-                        <div className="setup-limits-shocker__cap">
-                          PiShock max {formatIntensityPct(deviceMaxI)} · {formatDurationMs(deviceMaxD)}
+                {selectedOwned.length > 0 ? (
+                  <SetupLimitsPane
+                    title="Shared Discord shockers"
+                    open={sharesOpen}
+                    onToggle={() => setSharesOpen((open) => !open)}
+                  >
+                    {selectedOwned.map((s) => {
+                      const deviceMaxI = Math.min(
+                        100,
+                        s.deviceMaxIntensity ?? s.maxIntensity ?? 100,
+                      );
+                      const deviceMaxD = Math.min(
+                        15_000,
+                        s.deviceMaxDuration ?? s.maxDuration ?? 15_000,
+                      );
+                      const mode = shareModes[s.id] ?? defaultShareMode(s, personal);
+                      return (
+                        <div key={s.id} className="setup-limits-shocker">
+                          <div className="setup-limits-shocker__name">{s.name}</div>
+                          <div className="setup-limits-shocker__cap">
+                            PiShock max {deviceMaxI}% ·{' '}
+                            {(deviceMaxD / 1000).toFixed(deviceMaxD % 1000 ? 1 : 0)}s
+                          </div>
+                          <ModeLimitsEditor
+                            value={mode}
+                            deviceMaxIntensity={deviceMaxI}
+                            deviceMaxDurationMs={deviceMaxD}
+                            disabled={busy}
+                            onChange={(m) => {
+                              setEditedShareIds((prev) => new Set(prev).add(s.id));
+                              setShareModes((prev) => ({
+                                ...prev,
+                                [s.id]: m,
+                              }));
+                            }}
+                          />
                         </div>
-                        <LimitSlider
-                          label="Activity max intensity"
-                          value={caps.maxIntensity}
-                          min={1}
-                          max={deviceMaxI}
-                          formatValue={formatIntensityPct}
-                          disabled={busy}
-                          onChange={(maxIntensity) =>
-                            setShareCaps((prev) => ({
-                              ...prev,
-                              [s.id]: { ...caps, maxIntensity },
-                            }))
-                          }
-                        />
-                        <LimitSlider
-                          label="Activity max duration"
-                          value={caps.maxDurationMs}
-                          min={16}
-                          max={deviceMaxD}
-                          step={100}
-                          formatValue={formatDurationMs}
-                          disabled={busy}
-                          onChange={(maxDurationMs) =>
-                            setShareCaps((prev) => ({
-                              ...prev,
-                              [s.id]: { ...caps, maxDurationMs },
-                            }))
-                          }
-                        />
-                      </div>
-                    );
-                  })}
-                </div>
-              ) : (
-                <p className="auth-boot__hint">
-                  No shockers selected to share — only your personal activity limits will be saved.
-                </p>
-              )}
+                      );
+                    })}
+                  </SetupLimitsPane>
+                ) : (
+                  <p className="auth-boot__hint setup-limits-split__empty">
+                    No shockers selected to share — only your personal activity limits will be saved.
+                  </p>
+                )}
+              </div>
 
               <div className="auth-boot__actions">
                 <button
@@ -465,7 +660,10 @@ export function SetupDiscordShareScreen({
                   type="checkbox"
                   checked={queue.enabled}
                   disabled={busy}
-                  onChange={(e) => setQueue((q) => ({ ...q, enabled: e.target.checked }))}
+                  onChange={(e) => {
+                    setQueueTouched(true);
+                    setQueue((q) => ({ ...q, enabled: e.target.checked }));
+                  }}
                 />
                 <span className="auth-boot__shocker-copy">
                   <span className="auth-boot__shocker-name">Enable command queue</span>
@@ -486,7 +684,10 @@ export function SetupDiscordShareScreen({
                     step={500}
                     formatValue={(ms) => (ms <= 0 ? 'Command length' : formatDurationMs(ms))}
                     disabled={busy}
-                    onChange={(progressMs) => setQueue((q) => ({ ...q, progressMs }))}
+                    onChange={(progressMs) => {
+                      setQueueTouched(true);
+                      setQueue((q) => ({ ...q, progressMs }));
+                    }}
                   />
                   <LimitSlider
                     label="Commands ahead per person"
@@ -496,14 +697,20 @@ export function SetupDiscordShareScreen({
                     step={1}
                     formatValue={(n) => String(n)}
                     disabled={busy}
-                    onChange={(maxPerSender) => setQueue((q) => ({ ...q, maxPerSender }))}
+                    onChange={(maxPerSender) => {
+                      setQueueTouched(true);
+                      setQueue((q) => ({ ...q, maxPerSender }));
+                    }}
                   />
                   <label className={`auth-boot__shocker${queue.starOnly ? ' is-on' : ''}`}>
                     <input
                       type="checkbox"
                       checked={queue.starOnly}
                       disabled={busy}
-                      onChange={(e) => setQueue((q) => ({ ...q, starOnly: e.target.checked }))}
+                      onChange={(e) => {
+                        setQueueTouched(true);
+                        setQueue((q) => ({ ...q, starOnly: e.target.checked }));
+                      }}
                     />
                     <span className="auth-boot__shocker-copy">
                       <span className="auth-boot__shocker-name">Stars only</span>

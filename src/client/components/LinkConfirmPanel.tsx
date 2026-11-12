@@ -3,6 +3,7 @@ import { PiShockAuthDisclaimer } from './PiShockAuthDisclaimer';
 
 type Props = {
   pishockUserId: number;
+  pishockUsername?: string | null;
   hubNames: string[];
   discordName: string;
   busy?: boolean;
@@ -13,6 +14,7 @@ type Props = {
 
 export function LinkConfirmPanel({
   pishockUserId,
+  pishockUsername,
   hubNames,
   discordName,
   busy,
@@ -40,7 +42,10 @@ export function LinkConfirmPanel({
         </h2>
         <p className="auth-boot__hint">
           PiShock confirmed a successful login. Link it to{' '}
-          <strong className="text-grey-3">{discordName}</strong> only if this is you.
+          <strong className="text-grey-3">{discordName}</strong> only if this is you. Confirming
+          creates a <strong>named API key</strong> (<strong>Discord Activity</strong>) used for
+          device control. Unlinking removes the key from this app. The key stays valid at PiShock
+          until you revoke it there or PiShock rejects it.
         </p>
 
         {error ? (
@@ -52,7 +57,12 @@ export function LinkConfirmPanel({
 
         <div className="auth-boot__account">
           <div className="auth-boot__account-label">PiShock account</div>
-          <div className="auth-boot__account-id">User ID {pishockUserId}</div>
+          {pishockUsername ? (
+            <div className="auth-boot__account-id">{pishockUsername}</div>
+          ) : null}
+          <div className={pishockUsername ? 'auth-boot__account-hubs' : 'auth-boot__account-id'}>
+            User ID {pishockUserId}
+          </div>
           {hubNames.length > 0 ? (
             <div className="auth-boot__account-hubs">Hubs: {hubNames.join(', ')}</div>
           ) : (
@@ -65,7 +75,8 @@ export function LinkConfirmPanel({
         <PiShockAuthDisclaimer compact />
 
         <p className="auth-boot__caption">
-          Only confirm if this is your account. Cancel discards the login and does not link anything.
+          Only confirm if this is your account. Cancel discards the login and does not create an API
+          key or link anything.
         </p>
 
         <div className="auth-boot__actions">
@@ -90,7 +101,9 @@ export function LinkConfirmPanel({
             <span className="q-btn__wrapper col row q-anchor--skip">
               <span className="q-btn__content text-center col items-center q-anchor--skip justify-center row no-wrap">
                 {busy ? <i className="q-icon on-left mdi mdi-loading mdi-spin" aria-hidden /> : null}
-                <span className="block">{busy ? 'Linking…' : 'Yes, link this account'}</span>
+                <span className="block">
+                  {busy ? 'Creating API key…' : 'Yes, create API key & link'}
+                </span>
               </span>
             </span>
           </button>

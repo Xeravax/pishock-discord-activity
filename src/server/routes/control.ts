@@ -3,40 +3,64 @@ import { ShockerOp } from '../../shared/constants.js';
 import type { AppEnv } from '../env.js';
 import {
   PiShockApiError,
-  clientOperate,
+  piShockLogError,
+  publicPiShockError,
+  redactPiShockSecrets,
   claimShareCodes,
-  createLink,
   createShare,
-  deleteLink,
   deleteShare,
   fetchControlSnapshot,
   operateById,
   operateByShare,
-  pauseLink,
   pauseShare,
 } from '../pishock/client.js';
-import { getOnlineMap, probeOnlineStatus, publishOperate } from '../pishock/broker.js';
+import {
+  ensureLogCapture,
+  getOnlineMap,
+  probeOnlineStatus,
+  publishOperate,
+} from '../pishock/broker.js';
 import { commandQueue } from '../pishock/command-queue-runtime.js';
+import {
+  annotateShockersWithPause,
+  getPiShockPauseState,
+  isPiShockSharePaused,
+  rememberPiShockPaused,
+  shockerPauseBlocks,
+  type PiShockPauseState,
+} from '../pishock/pause.js';
 import {
   assertModeAllowed,
   assertOperateRateLimit,
   assertWithinCeilings,
+  beginPendingHold,
+  cancelPendingHold,
   clearHoldAutoEnd,
   clampDurationMs,
   clampIntensity,
+  isPendingHoldCurrent,
+  findHubNameInSnapshot,
   findShockerInSnapshot,
   OperatePolicyError,
+  shockerIdOf,
+  shockerNameOf,
   resolveOwnOperatePolicy,
   scheduleHoldAutoEnd,
   verifyOwnedClientId,
 } from '../operate-policy.js';
+import { bandForOperation } from '../limit-bands.js';
+import { shockWarningBody, ShockWarningError, warnBeforeShock } from '../pishock/shock-warning.js';
+import type { WarningLevel } from '../../shared/warning.js';
 import {
   clearPiShockSession,
   listCommandLogs,
   listPublicCommandLogs,
+  getEmergencyStopShockerIds,
+  loadPiShockCreds,
   logCommand,
-  setEmergencyStop,
-  syncWebsiteDeviceLogs,
+  setEmergencyStops,
+  gateEmergencyStops,
+  isEmergencyStopped,
 } from '../session.js';
 import { broadcastRealtimeAll } from '../realtime.js';
 import {
@@ -51,6 +75,9 @@ async function logOperateEvent(input: {
   ownerDiscordUserId: string;
   action: string;
   shockerId?: number | null;
+  shockerName?: string | null;
+  hubClientId?: string | null;
+  hubName?: string | null;
   shareCode?: string | null;
   intensity: number;
   durationMs: number;
@@ -65,6 +92,9 @@ async function logOperateEvent(input: {
     targetDiscordUserId: input.ownerDiscordUserId,
     action: input.action,
     shockerId: input.shockerId ?? undefined,
+    shockerName: input.shockerName,
+    hubClientId: input.hubClientId,
+    hubName: input.hubName,
     shareCode: input.shareCode ?? undefined,
     intensity: input.intensity,
     durationMs: input.durationMs,
@@ -96,13 +126,36 @@ async function handlePiShockError(
   reply: { code: (n: number) => { send: (b: unknown) => unknown } },
 ) {
   if (err instanceof PiShockApiError) {
+    console.warn(
+      `[pishock] ${discordUserId} ${err.status}: ${redactPiShockSecrets(err.body).slice(0, 200)}`,
+    );
     if (err.needsRelogin) {
       await clearPiShockSession(discordUserId);
-      return reply.code(401).send({ error: 'PiShock session expired', code: 'PISHOCK_RELOGIN' });
     }
-    return reply.code(err.status).send({ error: err.message, body: err.body });
+    const pub = publicPiShockError(err);
+    return reply.code(pub.status).send(
+      pub.code ? { error: pub.error, code: pub.code } : { error: pub.error },
+    );
   }
   throw err;
+}
+
+function snapshotShockerIds(shockers: unknown[]): number[] {
+  const ids: number[] = [];
+  for (const raw of shockers) {
+    if (!raw || typeof raw !== 'object') continue;
+    const id = shockerIdOf(raw as Record<string, unknown>);
+    if (id != null) ids.push(id);
+  }
+  return ids;
+}
+
+/** Cut the active queued command when the emergency-stop publish itself failed. */
+async function stopActiveQueuedDevice(ownerDiscordUserId: string, shockerIds: number[]) {
+  commandQueue.holdAdvance(ownerDiscordUserId);
+  const state = await commandQueue.snapshot(ownerDiscordUserId);
+  if (!state.active || !shockerIds.includes(state.active.shockerId)) return;
+  await commandQueue.skipActive(ownerDiscordUserId);
 }
 
 export const controlRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app, opts) => {
@@ -111,9 +164,23 @@ export const controlRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app, op
     if (blocked) return blocked;
     try {
       const snapshot = await fetchControlSnapshot(req.pishockCreds!);
+      const clientIds = collectHubClientIds(snapshot.hubs);
+      ensureLogCapture(req.discordUser.id, req.pishockCreds!, clientIds);
+      const [emergencyStopShockerIds, pause] = await Promise.all([
+        getEmergencyStopShockerIds(req.discordUser.id),
+        getPiShockPauseState(req.discordUser.id, req.pishockCreds!).catch(
+          (): PiShockPauseState => ({ shockerIds: [], shareCodes: [], unknown: true }),
+        ),
+      ]);
+      const pausedIds = pause.unknown
+        ? snapshotShockerIds(snapshot.shockers ?? [])
+        : pause.shockerIds;
       return {
         ...snapshot,
+        shockers: annotateShockersWithPause(snapshot.shockers ?? [], pausedIds),
         online: getOnlineMap(req.discordUser.id),
+        emergencyStopShockerIds,
+        pausedShockerIds: pausedIds,
       };
     } catch (err) {
       return handlePiShockError(err, req.discordUser.id, reply);
@@ -130,11 +197,19 @@ export const controlRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app, op
 
     const body = req.body as {
       shockerId?: number;
+      shockerIds?: number[];
       engaged?: boolean;
       clientId?: number | string;
     };
-    const shockerId = Number(body.shockerId);
-    if (!Number.isFinite(shockerId) || shockerId <= 0) {
+    const requested = [
+      ...(Array.isArray(body.shockerIds) ? body.shockerIds : []),
+      body.shockerId,
+    ]
+      .map((id) => Number(id))
+      .filter((id) => Number.isFinite(id) && id > 0)
+      .map((id) => Math.floor(id));
+    const shockerIds = [...new Set(requested)];
+    if (shockerIds.length === 0) {
       return reply.code(400).send({ error: 'shockerId required' });
     }
     if (typeof body.engaged !== 'boolean') {
@@ -148,53 +223,125 @@ export const controlRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app, op
     } catch (err) {
       return handlePiShockError(err, req.discordUser.id, reply);
     }
-    if (!findShockerInSnapshot(snapshot, shockerId)) {
-      return reply.code(404).send({ error: 'Shocker not found on this PiShock account' });
+    for (const shockerId of shockerIds) {
+      if (!findShockerInSnapshot(snapshot, shockerId)) {
+        return reply.code(404).send({ error: 'Shocker not found on this PiShock account' });
+      }
     }
 
-    const clientId =
-      verifyOwnedClientId(snapshot, body.clientId) ??
-      (() => {
-        const row = findShockerInSnapshot(snapshot, shockerId);
-        return row ? String(row.ClientId ?? row.clientId ?? '') || null : null;
-      })();
+    let cutFailures = 0;
+    let result;
+    if (body.engaged) {
+      gateEmergencyStops(req.discordUser.id, shockerIds, true);
+      for (const id of shockerIds) cancelPendingHold(req.discordUser.id, id);
+      commandQueue.holdAdvance(req.discordUser.id);
+      commandQueue.invalidateInFlight(req.discordUser.id);
+      try {
+        const cuts: Array<{ shockerId: number; clientId: string | null }> = [];
+        for (const shockerId of shockerIds) {
+          const row = findShockerInSnapshot(snapshot, shockerId);
+          // Prefer the hub attached to this shocker; body.clientId is only a fallback.
+          const rowClientId = row
+            ? String(row.ClientId ?? row.clientId ?? '').trim() || null
+            : null;
+          const bodyClientId =
+            shockerIds.length === 1 ? verifyOwnedClientId(snapshot, body.clientId) : null;
+          cuts.push({ shockerId, clientId: rowClientId ?? bodyClientId });
+        }
+        for (const cut of cuts) {
+          if (!cut.clientId) {
+            cutFailures += 1;
+            await stopActiveQueuedDevice(req.discordUser.id, [cut.shockerId]);
+            continue;
+          }
+          const published = await publishOperate(creds, {
+            clientId: cut.clientId,
+            shockerId: cut.shockerId,
+            operation: 'e',
+            intensity: 0,
+            durationMs: 0,
+            end: true,
+            agentName: 'Emergency Stop',
+          });
+          if (!published) {
+            cutFailures += 1;
+            await stopActiveQueuedDevice(req.discordUser.id, [cut.shockerId]);
+            continue;
+          }
+          clearHoldAutoEnd(req.discordUser.id, cut.shockerId);
+        }
+      } finally {
+        try {
+          await commandQueue.hardClear(req.discordUser.id, { endActiveDevice: false });
+        } finally {
+          result = await setEmergencyStops(req.discordUser.id, shockerIds, true);
+          gateEmergencyStops(req.discordUser.id, shockerIds, false);
+          commandQueue.releaseAdvance(req.discordUser.id);
+        }
+      }
+    } else {
+      result = await setEmergencyStops(req.discordUser.id, shockerIds, false);
+      gateEmergencyStops(req.discordUser.id, shockerIds, false);
+      commandQueue.releaseAdvance(req.discordUser.id);
+    }
 
-    if (body.engaged && clientId) {
-      clearHoldAutoEnd(req.discordUser.id, shockerId);
-      await publishOperate(creds, {
-        clientId,
-        shockerId,
-        operation: 'e',
-        intensity: 0,
-        durationMs: 0,
-        end: true,
-        agentName: 'Emergency Stop',
+    if (body.engaged && cutFailures > 0) {
+      broadcastRealtimeAll({
+        type: 'emergency_stop',
+        ownerDiscordUserId: req.discordUser.id,
+        shockerId: shockerIds[0]!,
+        engaged: true,
+        emergencyStopShockerIds: result.emergencyStopShockerIds,
+        at: Date.now(),
+      });
+      return reply.code(502).send({
+        error:
+          cutFailures === shockerIds.length
+            ? 'Failed to cut the shocker'
+            : 'Emergency stop latched, but one or more cuts failed',
+        code: 'EMERGENCY_STOP_FAILED',
+        emergencyStopShockerIds: result.emergencyStopShockerIds,
+        cutFailures,
       });
     }
-
-    const result = await setEmergencyStop(req.discordUser.id, shockerId, body.engaged);
-    if (body.engaged) {
-      // Device already cut above; drop waiting + active queue slots for this wearer.
-      await commandQueue.hardClear(req.discordUser.id, { endActiveDevice: false });
+    for (const shockerId of shockerIds) {
+      const row = findShockerInSnapshot(snapshot, shockerId);
+      const hubClientId = row
+        ? String(row.ClientId ?? row.clientId ?? '').trim() || null
+        : null;
+      await logCommand({
+        discordUserId: req.discordUser.id,
+        action: body.engaged ? 'emergency_stop_on' : 'emergency_stop_off',
+        shockerId,
+        shockerName: row ? shockerNameOf(row) : null,
+        hubClientId,
+        hubName: findHubNameInSnapshot(snapshot, hubClientId),
+        intensity: 0,
+        durationMs: 0,
+        success: true,
+        detail: body.engaged
+          ? shockerIds.length > 1
+            ? 'latched-all'
+            : 'latched'
+          : shockerIds.length > 1
+            ? 'released-all'
+            : 'released',
+      });
     }
-    await logCommand({
-      discordUserId: req.discordUser.id,
-      action: body.engaged ? 'emergency_stop_on' : 'emergency_stop_off',
-      shockerId,
-      intensity: 0,
-      durationMs: 0,
-      success: true,
-      detail: body.engaged ? 'latched' : 'released',
-    });
+    const primaryId = shockerIds[0]!;
     broadcastRealtimeAll({
       type: 'emergency_stop',
       ownerDiscordUserId: req.discordUser.id,
-      shockerId,
-      engaged: result.engaged,
+      shockerId: primaryId,
+      engaged: result.engagedIds.includes(primaryId),
       emergencyStopShockerIds: result.emergencyStopShockerIds,
       at: Date.now(),
     });
-    return { ok: true, ...result };
+    return {
+      ok: true,
+      engaged: result.engagedIds.includes(primaryId),
+      emergencyStopShockerIds: result.emergencyStopShockerIds,
+    };
   });
 
   app.post('/api/operate', async (req, reply) => {
@@ -226,6 +373,7 @@ export const controlRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app, op
       clientId?: number | string;
       hold?: boolean;
       warning?: { Active: boolean; Min: number; Max: number } | null;
+      warningLevel?: WarningLevel | string;
       instanceId?: string;
       locationHint?: ClientLocationHint | null;
     };
@@ -253,10 +401,19 @@ export const controlRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app, op
     );
     let policy;
     try {
-      policy = await resolveOwnOperatePolicy(req.discordUser.id, creds, {
-        shockerId: body.shockerId,
-        shareCode: body.shareCode,
-      });
+      policy = await resolveOwnOperatePolicy(
+        req.discordUser.id,
+        creds,
+        {
+          shockerId: body.shockerId,
+          shareCode: body.shareCode,
+        },
+        {
+          loadOwnerPiShockCreds: (ownerId) => loadPiShockCreds(opts.env, ownerId),
+          ownerShockerPauseBlocks: (ownerId, ownerCreds, id) =>
+            shockerPauseBlocks(ownerId, ownerCreds, id),
+        },
+      );
     } catch (err) {
       if (err instanceof OperatePolicyError) {
         return reply.code(err.status).send({ error: err.message, code: err.code });
@@ -274,6 +431,7 @@ export const controlRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app, op
       if (shockerId == null || clientId == null) {
         return reply.code(400).send({ error: 'end requires a known shocker and hub client' });
       }
+      cancelPendingHold(policy.ownerDiscordUserId, shockerId);
       clearHoldAutoEnd(policy.ownerDiscordUserId, shockerId);
       const published = await publishOperate(creds, {
         clientId,
@@ -290,6 +448,9 @@ export const controlRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app, op
         ownerDiscordUserId: policy.ownerDiscordUserId,
         action: 'end',
         shockerId,
+        shockerName: policy.shockerName,
+        hubClientId: policy.hubClientId,
+        hubName: policy.hubName,
         shareCode: policy.crossUser ? null : shareCode,
         intensity: 0,
         durationMs: 0,
@@ -303,6 +464,24 @@ export const controlRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app, op
       return { ok: true, via: 'broker', ended: true };
     }
 
+    // Refuse before hitting PiShock when the site already reports this shocker/share paused.
+    if (shockerId != null || shareCode) {
+      const pausedByShocker =
+        shockerId != null
+          ? await shockerPauseBlocks(req.discordUser.id, creds, shockerId)
+          : false;
+      const pausedByShare = shareCode
+        ? await isPiShockSharePaused(req.discordUser.id, creds, shareCode)
+        : false;
+      if (pausedByShocker || pausedByShare) {
+        rememberPiShockPaused(req.discordUser.id, { shockerId, shareCode });
+        return reply.code(503).send({
+          error: 'This shocker or share is paused on PiShock',
+          code: 'PISHOCK_PAUSED',
+        });
+      }
+    }
+
     const hold = Boolean(body.hold) || operation === 'hold';
     const warning = Boolean(body.warning?.Active) || operation === 'warning';
     try {
@@ -314,12 +493,15 @@ export const controlRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app, op
       throw err;
     }
 
+    const band = bandForOperation(policy.bands, operation);
     try {
       assertWithinCeilings(
         body.intensity,
         body.durationMs,
-        policy.maxIntensity,
-        policy.maxDurationMs,
+        band.maxIntensity,
+        band.maxDurationMs,
+        band.minIntensity,
+        band.minDurationMs,
       );
     } catch (err) {
       if (err instanceof OperatePolicyError) {
@@ -328,10 +510,39 @@ export const controlRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app, op
       throw err;
     }
 
-    const intensity = clampIntensity(body.intensity, policy.maxIntensity);
-    const durationMs = clampDurationMs(body.durationMs, policy.maxDurationMs);
+    const intensity = clampIntensity(body.intensity, band.maxIntensity, band.minIntensity);
+    const durationMs = clampDurationMs(body.durationMs, band.maxDurationMs, band.minDurationMs);
 
+    const pendingHold =
+      hold && shockerId != null ? beginPendingHold(policy.ownerDiscordUserId, shockerId) : null;
     try {
+      await warnBeforeShock({
+        operation,
+        requestedWarningLevel: body.warningLevel,
+        requiredWarningLevel: policy.requiredWarningLevel,
+        canVibrate: policy.flags.canVibrate,
+        creds,
+        clientId,
+        shockerId,
+        shareCode,
+        ownerDiscordUserId: policy.ownerDiscordUserId,
+        vibrateBand: policy.bands.vibrate,
+        gateOnShare: policy.crossUser,
+      });
+      if (
+        pendingHold != null &&
+        shockerId != null &&
+        !isPendingHoldCurrent(policy.ownerDiscordUserId, shockerId, pendingHold)
+      ) {
+        return { ok: true, via: 'broker', canceled: true };
+      }
+
+      if (shockerId != null && await isEmergencyStopped(policy.ownerDiscordUserId, shockerId)) {
+        return reply.code(423).send({ error: 'Owner has emergency stop engaged', code: 'EMERGENCY_STOP' });
+      }
+      if (pendingHold != null && shockerId != null && !isPendingHoldCurrent(policy.ownerDiscordUserId, shockerId, pendingHold)) {
+        return { ok: true, via: 'broker', canceled: true };
+      }
       const op =
         operation === 'shock' || operation === 'hold'
           ? ShockerOp.Shock
@@ -350,6 +561,14 @@ export const controlRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app, op
           hold,
           warning,
         });
+        if (pendingHold != null && shockerId != null && !isPendingHoldCurrent(policy.ownerDiscordUserId, shockerId, pendingHold)) {
+          const ended = await publishOperate(creds, {
+            clientId: clientId!, shockerId, operation: 'e', intensity: 0, durationMs: 0,
+            end: true, agentName: 'Tap Release', shareCode: shareCode ?? undefined,
+          });
+          if (!ended) throw new Error('Failed to end canceled hold');
+          return { ok: true, via: 'broker', canceled: true };
+        }
         if (published) {
           if (hold) {
             scheduleHoldAutoEnd(creds, {
@@ -365,6 +584,9 @@ export const controlRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app, op
             ownerDiscordUserId: policy.ownerDiscordUserId,
             action: operation,
             shockerId,
+            shockerName: policy.shockerName,
+            hubClientId: policy.hubClientId,
+            hubName: policy.hubName,
             shareCode: policy.crossUser ? null : shareCode,
             intensity,
             durationMs,
@@ -387,6 +609,14 @@ export const controlRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app, op
           warning,
           shareCode: shareCode ?? undefined,
         });
+        if (pendingHold != null && shockerId != null && !isPendingHoldCurrent(policy.ownerDiscordUserId, shockerId, pendingHold)) {
+          const ended = await publishOperate(creds, {
+            clientId: clientId!, shockerId, operation: 'e', intensity: 0, durationMs: 0,
+            end: true, agentName: 'Tap Release', shareCode: shareCode ?? undefined,
+          });
+          if (!ended) throw new Error('Failed to end canceled hold');
+          return { ok: true, via: 'broker', canceled: true };
+        }
         if (published) {
           if (hold) {
             scheduleHoldAutoEnd(creds, {
@@ -402,6 +632,9 @@ export const controlRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app, op
             ownerDiscordUserId: policy.ownerDiscordUserId,
             action: operation,
             shockerId,
+            shockerName: policy.shockerName,
+            hubClientId: policy.hubClientId,
+            hubName: policy.hubName,
             shareCode: policy.crossUser ? null : shareCode,
             intensity,
             durationMs,
@@ -414,31 +647,26 @@ export const controlRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app, op
       }
 
       if (hold || warning) {
-        if (shockerId == null) {
-          return reply.code(400).send({ error: 'Hold/warning requires shockerId' });
-        }
-        const result = await clientOperate(creds, {
-          ShockerId: shockerId,
-          Intensity: Math.max(1, intensity),
-          Duration: Math.max(1, Math.round(durationMs / 1000)),
-          Op: op,
-          Hold: hold,
-          Warning: warning,
+        // Hold/warning require broker PUBLISH — no legacy do.pishock.com fallback.
+        await logOperateEvent({
+          executorDiscordUserId: req.discordUser.id,
+          ownerDiscordUserId: policy.ownerDiscordUserId,
+          action: operation,
+          shockerId,
+          shockerName: policy.shockerName,
+          hubClientId: policy.hubClientId,
+          hubName: policy.hubName,
+          shareCode: policy.crossUser ? null : shareCode,
+          intensity,
+          durationMs,
+          success: false,
+          detail: 'broker_failed',
+          location,
         });
-        if (result.status !== 404 && result.status !== 405) {
-          await logOperateEvent({
-            executorDiscordUserId: req.discordUser.id,
-            ownerDiscordUserId: policy.ownerDiscordUserId,
-            action: operation,
-            shockerId,
-            shareCode: policy.crossUser ? null : shareCode,
-            intensity,
-            durationMs,
-            success: true,
-            location,
-      });
-          return { ok: true, via: 'client-operate' };
-        }
+        return reply.code(502).send({
+          error: 'Hold/warning requires broker; publish failed',
+          code: 'BROKER_PUBLISH_FAILED',
+        });
       }
 
       if (shareCode) {
@@ -452,6 +680,9 @@ export const controlRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app, op
         ownerDiscordUserId: policy.ownerDiscordUserId,
         action: operation,
         shockerId,
+        shockerName: policy.shockerName,
+        hubClientId: policy.hubClientId,
+        hubName: policy.hubName,
         shareCode: policy.crossUser ? null : shareCode,
         intensity,
         durationMs,
@@ -465,13 +696,25 @@ export const controlRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app, op
         ownerDiscordUserId: policy.ownerDiscordUserId,
         action: operation,
         shockerId,
+        shockerName: policy.shockerName,
+        hubClientId: policy.hubClientId,
+        hubName: policy.hubName,
         shareCode: policy.crossUser ? null : shareCode,
         intensity,
         durationMs,
         success: false,
-        detail: err instanceof Error ? err.message : String(err),
+        detail: piShockLogError(err),
         location,
       });
+      if (err instanceof ShockWarningError) {
+        return reply.code(err.status).send(shockWarningBody(err));
+      }
+      if (err instanceof PiShockApiError && err.status === 503) {
+        rememberPiShockPaused(policy.ownerDiscordUserId, {
+          shockerId,
+          shareCode,
+        });
+      }
       return handlePiShockError(err, req.discordUser.id, reply);
     }
   });
@@ -481,76 +724,22 @@ export const controlRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app, op
     if (blocked) return blocked;
     const body = req.body as {
       shareId?: number;
-      linkId?: number;
       pauseState?: boolean | null;
     };
     try {
-      if (body.shareId != null) {
-        const result = await pauseShare(req.pishockCreds!, body.shareId, body.pauseState ?? null);
-        if (result.status === 404 || result.status === 405) {
-          return reply.code(result.status).send({ error: 'Pause share route unavailable' });
-        }
-        await logCommand({
-          discordUserId: req.discordUser.id,
-          action: 'pause_share',
-          success: true,
-          detail: `shareId=${body.shareId}`,
-        });
-        return { ok: true };
+      if (body.shareId == null) {
+        return reply.code(400).send({ error: 'shareId required' });
       }
-      if (body.linkId != null) {
-        const result = await pauseLink(req.pishockCreds!, body.linkId, body.pauseState ?? null);
-        if (result.status === 404 || result.status === 405) {
-          return reply.code(result.status).send({ error: 'Pause link route unavailable' });
-        }
-        await logCommand({
-          discordUserId: req.discordUser.id,
-          action: 'pause_link',
-          success: true,
-          detail: `linkId=${body.linkId}`,
-        });
-        return { ok: true };
-      }
-      return reply.code(400).send({ error: 'shareId or linkId required' });
-    } catch (err) {
-      return handlePiShockError(err, req.discordUser.id, reply);
-    }
-  });
-
-  app.get('/api/links', async (req, reply) => {
-    const blocked = requireSession(req, reply);
-    if (blocked) return blocked;
-    try {
-      const snapshot = await fetchControlSnapshot(req.pishockCreds!);
-      return { links: snapshot.links };
-    } catch (err) {
-      return handlePiShockError(err, req.discordUser.id, reply);
-    }
-  });
-
-  app.post('/api/links', async (req, reply) => {
-    const blocked = requireSession(req, reply);
-    if (blocked) return blocked;
-    try {
-      const result = await createLink(req.pishockCreds!, req.body as Record<string, unknown>);
+      const result = await pauseShare(req.pishockCreds!, body.shareId, body.pauseState ?? null);
       if (result.status === 404 || result.status === 405) {
-        return reply.code(result.status).send({ error: 'Create link unavailable' });
+        return reply.code(result.status).send({ error: 'Pause share route unavailable' });
       }
-      return { ok: true };
-    } catch (err) {
-      return handlePiShockError(err, req.discordUser.id, reply);
-    }
-  });
-
-  app.delete('/api/links/:linkId', async (req, reply) => {
-    const blocked = requireSession(req, reply);
-    if (blocked) return blocked;
-    const linkId = Number((req.params as { linkId: string }).linkId);
-    try {
-      const result = await deleteLink(req.pishockCreds!, linkId);
-      if (result.status === 404 || result.status === 405) {
-        return reply.code(result.status).send({ error: 'Delete link unavailable' });
-      }
+      await logCommand({
+        discordUserId: req.discordUser.id,
+        action: 'pause_share',
+        success: true,
+        detail: `shareId=${body.shareId}`,
+      });
       return { ok: true };
     } catch (err) {
       return handlePiShockError(err, req.discordUser.id, reply);
@@ -628,14 +817,7 @@ export const controlRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app, op
     const query = req.query as { limit?: string };
     const limit = Number(query.limit ?? 200);
 
-    // Import PiShock website/panel device logs into the shared feed when linked
-    if (req.pishockCreds) {
-      try {
-        await syncWebsiteDeviceLogs(req.discordUser.id, req.pishockCreds);
-      } catch {
-        // optional — public Discord feed still useful
-      }
-    }
+    // Website/device history is ephemeral — live broker `-log` ingest fills source=website rows.
 
     const [publicFeed, activity] = await Promise.all([
       listPublicCommandLogs(Number.isFinite(limit) ? limit : 200),
@@ -664,6 +846,7 @@ export const controlRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app, op
     const waitMs = Number(query.waitMs ?? 2500);
 
     try {
+      ensureLogCapture(req.discordUser.id, req.pishockCreds!, clientIds);
       const result = await probeOnlineStatus(
         req.discordUser.id,
         req.pishockCreds!,
@@ -676,4 +859,16 @@ export const controlRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app, op
     }
   });
 };
+
+function collectHubClientIds(hubs: unknown[]): string[] {
+  const ids: string[] = [];
+  for (const hub of hubs) {
+    if (!hub || typeof hub !== 'object') continue;
+    const row = hub as Record<string, unknown>;
+    const raw = row.HubId ?? row.hubId ?? row.ClientId ?? row.clientId ?? row.id ?? row.Id;
+    if (raw == null || raw === '') continue;
+    ids.push(String(raw));
+  }
+  return ids;
+}
 

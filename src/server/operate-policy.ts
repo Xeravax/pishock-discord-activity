@@ -9,11 +9,56 @@ import {
   isEmergencyStopped,
   isExecutorBanned,
 } from './session.js';
+import {
+  LIMIT_BAND_CONFLICT_MESSAGE,
+  nestBands,
+  personalBandsFromUser,
+  setLimitBandConflictFactory,
+  shareBandsFromRow,
+  type IntensityDurationBand,
+  type ModeLimitBands,
+} from './limit-bands.js';
+import {
+  atLeastWarning,
+  normalizeWarningLevel,
+  type WarningLevel,
+} from '../shared/warning.js';
+import { isPiShockRowPaused } from '../shared/pishock-pause.js';
 
-/** Absolute hardware ceilings used by every operate path. */
+/** Absolute hardware floors / ceilings used by every operate path. */
+export const ABS_MIN_INTENSITY = 1;
 export const ABS_MAX_INTENSITY = 100;
-export const ABS_MAX_DURATION_MS = 15_000;
 export const ABS_MIN_DURATION_MS = 16;
+export const ABS_MAX_DURATION_MS = 15_000;
+
+/** Nest activity floors/ceilings: max(mins) ∩ min(maxes). An empty intersection throws. */
+export function nestLimitBand(input: {
+  mins?: Array<number | null | undefined>;
+  maxes?: Array<number | null | undefined>;
+  absMin: number;
+  absMax: number;
+}): { min: number; max: number } {
+  const absMin = Math.min(input.absMin, input.absMax);
+  const absMax = Math.max(input.absMin, input.absMax);
+  const rawMaxes = (input.maxes ?? [])
+    .map((n) => Number(n))
+    .filter((n) => Number.isFinite(n));
+  const rawMins = (input.mins ?? [])
+    .map((n) => Number(n))
+    .filter((n) => Number.isFinite(n));
+  let max = rawMaxes.length
+    ? Math.min(absMax, ...rawMaxes.map((n) => Math.max(absMin, n)))
+    : absMax;
+  max = Math.max(absMin, Math.min(absMax, max));
+  let min = rawMins.length
+    ? Math.max(absMin, ...rawMins.map((n) => Math.min(absMax, n)))
+    : absMin;
+  min = Math.max(absMin, Math.min(absMax, min));
+  if (min > max) {
+    throw new OperatePolicyError(LIMIT_BAND_CONFLICT_MESSAGE, 400, 'LIMIT_CONFLICT');
+  }
+  return { min, max };
+}
 
 /** Hold frames without a client end are cut off after the clamped duration. */
 export const HOLD_AUTO_END_GRACE_MS = 250;
@@ -34,14 +79,47 @@ export type OperateModeFlags = {
 export type ResolvedOperatePolicy = {
   ownerDiscordUserId: string;
   shockerId: number | null;
+  /** PiShock device name, or the activity share name when that is what users see. */
+  shockerName: string | null;
   shareCode: string | null;
   hubClientId: string | null;
+  /** PiShock hub display name when resolvable from hubs/share. */
+  hubName: string | null;
+  /** Shock band (also mirrored as min/max* for older call sites). */
+  minIntensity: number;
   maxIntensity: number;
+  minDurationMs: number;
   maxDurationMs: number;
+  bands: ModeLimitBands;
+  requiredWarningLevel: WarningLevel;
   flags: OperateModeFlags;
   /** True when the caller is operating someone else's device via a registered share. */
   crossUser: boolean;
 };
+
+function policyFromBands(
+  base: Omit<
+    ResolvedOperatePolicy,
+    | 'minIntensity'
+    | 'maxIntensity'
+    | 'minDurationMs'
+    | 'maxDurationMs'
+    | 'bands'
+    | 'requiredWarningLevel'
+  >,
+  bands: ModeLimitBands,
+  requiredWarningLevel: WarningLevel,
+): ResolvedOperatePolicy {
+  return {
+    ...base,
+    minIntensity: bands.shock.minIntensity,
+    maxIntensity: bands.shock.maxIntensity,
+    minDurationMs: bands.shock.minDurationMs,
+    maxDurationMs: bands.shock.maxDurationMs,
+    bands,
+    requiredWarningLevel,
+  };
+}
 
 export class OperatePolicyError extends Error {
   status: number;
@@ -52,6 +130,10 @@ export class OperatePolicyError extends Error {
     this.code = code;
   }
 }
+
+setLimitBandConflictFactory(
+  (message) => new OperatePolicyError(message, 400, 'LIMIT_CONFLICT'),
+);
 
 export function assertOperateRateLimit(discordUserId: string): void {
   const now = Date.now();
@@ -68,15 +150,36 @@ export function assertOperateRateLimit(discordUserId: string): void {
   rateBuckets.set(discordUserId, recent);
 }
 
-export function clampIntensity(value: unknown, max: number): number {
-  return Math.max(0, Math.min(ABS_MAX_INTENSITY, Math.min(max, Number(value ?? 1))));
+export function clampIntensity(
+  value: unknown,
+  max: number,
+  min: number = ABS_MIN_INTENSITY,
+): number {
+  const band = nestLimitBand({
+    mins: [min],
+    maxes: [max],
+    absMin: ABS_MIN_INTENSITY,
+    absMax: ABS_MAX_INTENSITY,
+  });
+  const n = Number(value ?? band.min);
+  if (!Number.isFinite(n)) return band.min;
+  return Math.max(band.min, Math.min(band.max, n));
 }
 
-export function clampDurationMs(value: unknown, max: number): number {
-  return Math.max(
-    ABS_MIN_DURATION_MS,
-    Math.min(ABS_MAX_DURATION_MS, Math.min(max, Number(value ?? 300))),
-  );
+export function clampDurationMs(
+  value: unknown,
+  max: number,
+  min: number = ABS_MIN_DURATION_MS,
+): number {
+  const band = nestLimitBand({
+    mins: [min],
+    maxes: [max],
+    absMin: ABS_MIN_DURATION_MS,
+    absMax: ABS_MAX_DURATION_MS,
+  });
+  const n = Number(value ?? Math.max(band.min, 300));
+  if (!Number.isFinite(n)) return band.min;
+  return Math.max(band.min, Math.min(band.max, n));
 }
 
 export function assertModeAllowed(
@@ -98,17 +201,27 @@ export function assertModeAllowed(
   }
 }
 
-/** Reject raw body values that exceed the resolved policy ceilings (pre-clamp). */
+/** Reject raw body values outside the resolved policy band (pre-clamp). */
 export function assertWithinCeilings(
   intensity: unknown,
   durationMs: unknown,
   maxIntensity: number,
   maxDurationMs: number,
+  minIntensity: number = ABS_MIN_INTENSITY,
+  minDurationMs: number = ABS_MIN_DURATION_MS,
 ): void {
-  if (Number(intensity ?? 1) > maxIntensity) {
+  const inten = Number(intensity ?? minIntensity);
+  const dur = Number(durationMs ?? clampDurationMs(undefined, maxDurationMs, minDurationMs));
+  if (Number.isFinite(inten) && inten < minIntensity) {
+    throw new OperatePolicyError('Intensity below allowed minimum', 412, 'INTENSITY_FLOOR');
+  }
+  if (Number.isFinite(inten) && inten > maxIntensity) {
     throw new OperatePolicyError('Intensity exceeds allowed maximum', 412, 'INTENSITY_CEILING');
   }
-  if (Number(durationMs ?? 300) > maxDurationMs) {
+  if (Number.isFinite(dur) && dur < minDurationMs) {
+    throw new OperatePolicyError('Duration below allowed minimum', 416, 'DURATION_FLOOR');
+  }
+  if (Number.isFinite(dur) && dur > maxDurationMs) {
     throw new OperatePolicyError('Duration exceeds allowed maximum', 416, 'DURATION_CEILING');
   }
 }
@@ -117,25 +230,37 @@ export function assertWithinCeilings(
 export type ActivitySharePolicyRow = {
   discordUserId: string;
   shockerId: number;
+  shockerName?: string | null;
   shareCode: string | null;
   hubClientId: string | null;
+  hubName?: string | null;
   deviceMaxIntensity: number;
   deviceMaxDurationMs: number;
   enabled: boolean;
   paused: boolean;
+  minIntensity: number;
   maxIntensity: number;
+  minDurationMs: number;
   maxDurationMs: number;
+  vibMinIntensity?: number;
+  vibMaxIntensity?: number;
+  vibMinDurationMs?: number;
+  vibMaxDurationMs?: number;
+  beepMinIntensity?: number;
+  beepMaxIntensity?: number;
+  beepMinDurationMs?: number;
+  beepMaxDurationMs?: number;
+  requiredWarningLevel?: string | null;
   canShock: boolean;
   canVibrate: boolean;
   canBeep: boolean;
   canHold: boolean;
 };
 
+export type PersonalActivityLimits = Awaited<ReturnType<typeof getPersonalActivityLimits>>;
+
 export type OperatePolicyDeps = {
-  getPersonalActivityLimits: (discordUserId: string) => Promise<{
-    activityMaxIntensity: number;
-    activityMaxDurationMs: number;
-  }>;
+  getPersonalActivityLimits: (discordUserId: string) => Promise<PersonalActivityLimits>;
   fetchControlSnapshot: (creds: PiShockCreds) => Promise<ControlSnapshot>;
   findActivityShareByCode: (shareCode: string) => Promise<ActivitySharePolicyRow | null>;
   findActivityShareByShocker: (
@@ -148,6 +273,14 @@ export type OperatePolicyDeps = {
     executorDiscordUserId: string,
   ) => Promise<boolean>;
   isEmergencyStopped: (discordUserId: string, shockerId: number) => Promise<boolean>;
+  /** Owner PiShock credentials, when this process can load them. */
+  loadOwnerPiShockCreds?: (discordUserId: string) => Promise<PiShockCreds | null>;
+  /** Pause check that already has the owner's credentials. Do not call with the caller's key. */
+  ownerShockerPauseBlocks?: (
+    discordUserId: string,
+    creds: PiShockCreds,
+    shockerId: number,
+  ) => Promise<boolean>;
 };
 
 const defaultOperatePolicyDeps: OperatePolicyDeps = {
@@ -182,6 +315,15 @@ export function shockerIdOf(row: Record<string, unknown>): number | null {
   return id != null && id > 0 ? id : null;
 }
 
+export function cleanShockerName(value: string | null | undefined): string | null {
+  const name = value?.trim();
+  return name ? name.slice(0, 120) : null;
+}
+
+export function shockerNameOf(row: Record<string, unknown>): string | null {
+  return cleanShockerName(strField(row, 'Name', 'name', 'ShockerName', 'shockerName'));
+}
+
 export function shareCodeOf(row: Record<string, unknown>): string | null {
   return strField(row, 'ShareCode', 'shareCode', 'Code', 'code');
 }
@@ -205,6 +347,38 @@ export function deviceMaxDurationMsOf(row: Record<string, unknown>): number {
 
 export function hubClientIdOf(row: Record<string, unknown>): string | null {
   return strField(row, 'ClientId', 'clientId', 'HubId', 'hubId');
+}
+
+export function hubNameOf(row: Record<string, unknown>): string | null {
+  const name = strField(row, 'Name', 'name', 'HubName', 'hubName');
+  return name ? name.slice(0, 120) : null;
+}
+
+/** Match a hub client id against the live hubs list and return its display name. */
+export function findHubNameInSnapshot(
+  snapshot: ControlSnapshot,
+  clientId: string | null | undefined,
+): string | null {
+  if (clientId == null) return null;
+  const want = String(clientId).trim();
+  if (!want) return null;
+  for (const raw of snapshot.hubs) {
+    if (!raw || typeof raw !== 'object') continue;
+    const row = raw as Record<string, unknown>;
+    const id = hubClientIdOf(row);
+    if (id && id === want) return hubNameOf(row);
+  }
+  return null;
+}
+
+function resolveHubName(
+  snapshot: ControlSnapshot,
+  clientId: string | null | undefined,
+  storedName?: string | null,
+): string | null {
+  const fromShare = cleanShockerName(storedName);
+  if (fromShare) return fromShare;
+  return findHubNameInSnapshot(snapshot, clientId);
 }
 
 export function findShockerInSnapshot(
@@ -251,8 +425,9 @@ export async function resolveOwnOperatePolicy(
   callerDiscordUserId: string,
   creds: PiShockCreds,
   input: { shockerId?: number; shareCode?: string },
-  deps: OperatePolicyDeps = defaultOperatePolicyDeps,
+  depsInput: Partial<OperatePolicyDeps> = {},
 ): Promise<ResolvedOperatePolicy> {
+  const deps: OperatePolicyDeps = { ...defaultOperatePolicyDeps, ...depsInput };
   const personal = await deps.getPersonalActivityLimits(callerDiscordUserId);
   const snapshot = await deps.fetchControlSnapshot(creds);
 
@@ -278,21 +453,62 @@ export async function resolveOwnOperatePolicy(
         if (await deps.isEmergencyStopped(registered.discordUserId, registered.shockerId)) {
           throw new OperatePolicyError('Owner has emergency stop engaged', 423, 'EMERGENCY_STOP');
         }
-        return {
-          ownerDiscordUserId: registered.discordUserId,
-          shockerId: registered.shockerId,
-          shareCode: registered.shareCode,
-          hubClientId: registered.hubClientId,
-          maxIntensity: Math.min(registered.maxIntensity, registered.deviceMaxIntensity),
-          maxDurationMs: Math.min(registered.maxDurationMs, registered.deviceMaxDurationMs),
-          flags: {
-            canShock: registered.canShock,
-            canVibrate: registered.canVibrate,
-            canBeep: registered.canBeep,
-            canHold: registered.canHold,
+        if (deps.loadOwnerPiShockCreds && deps.ownerShockerPauseBlocks) {
+          const ownerCreds = await deps.loadOwnerPiShockCreds(registered.discordUserId);
+          if (
+            ownerCreds &&
+            (await deps.ownerShockerPauseBlocks(
+              registered.discordUserId,
+              ownerCreds,
+              registered.shockerId,
+            ))
+          ) {
+            throw new OperatePolicyError(
+              'This shocker or share is paused on PiShock',
+              503,
+              'PISHOCK_PAUSED',
+            );
+          }
+        }
+        const shareBands = shareBandsFromRow(registered);
+        const ownerPersonal = personalBandsFromUser(
+          await deps.getPersonalActivityLimits(registered.discordUserId),
+        );
+        return policyFromBands(
+          {
+            ownerDiscordUserId: registered.discordUserId,
+            shockerId: registered.shockerId,
+            shockerName: cleanShockerName(registered.shockerName),
+            shareCode: registered.shareCode,
+            hubClientId: registered.hubClientId,
+            hubName: resolveHubName(snapshot, registered.hubClientId, registered.hubName),
+            flags: {
+              canShock: registered.canShock,
+              canVibrate: registered.canVibrate,
+              canBeep: registered.canBeep,
+              canHold: registered.canHold,
+            },
+            crossUser: true,
           },
-          crossUser: true,
-        };
+          {
+            shock: nestBands(
+              [shareBands.shock, ownerPersonal.shock],
+              registered.deviceMaxIntensity,
+              registered.deviceMaxDurationMs,
+            ),
+            vibrate: nestBands(
+              [shareBands.vibrate, ownerPersonal.vibrate],
+              registered.deviceMaxIntensity,
+              registered.deviceMaxDurationMs,
+            ),
+            beep: nestBands(
+              [shareBands.beep, ownerPersonal.beep],
+              registered.deviceMaxIntensity,
+              registered.deviceMaxDurationMs,
+            ),
+          },
+          atLeastWarning(shareBands.requiredWarningLevel, ownerPersonal.requiredWarningLevel),
+        );
       }
 
       // Owner using their own activity share code — still honor e-stop + activity/share caps
@@ -303,29 +519,43 @@ export async function resolveOwnOperatePolicy(
           'EMERGENCY_STOP',
         );
       }
-      return {
-        ownerDiscordUserId: callerDiscordUserId,
-        shockerId: registered.shockerId,
-        shareCode: registered.shareCode,
-        hubClientId: registered.hubClientId,
-        maxIntensity: Math.min(
-          registered.maxIntensity,
-          registered.deviceMaxIntensity,
-          personal.activityMaxIntensity,
-        ),
-        maxDurationMs: Math.min(
-          registered.maxDurationMs,
-          registered.deviceMaxDurationMs,
-          personal.activityMaxDurationMs,
-        ),
-        flags: {
-          canShock: registered.canShock,
-          canVibrate: registered.canVibrate,
-          canBeep: registered.canBeep,
-          canHold: registered.canHold,
+      const shareBands = shareBandsFromRow(registered);
+      const personalBands = personalBandsFromUser(personal);
+      return policyFromBands(
+        {
+          ownerDiscordUserId: callerDiscordUserId,
+          shockerId: registered.shockerId,
+          shockerName: cleanShockerName(registered.shockerName),
+          shareCode: registered.shareCode,
+          hubClientId: registered.hubClientId,
+          hubName: resolveHubName(snapshot, registered.hubClientId, registered.hubName),
+          flags: {
+            canShock: registered.canShock,
+            canVibrate: registered.canVibrate,
+            canBeep: registered.canBeep,
+            canHold: registered.canHold,
+          },
+          crossUser: false,
         },
-        crossUser: false,
-      };
+        {
+          shock: nestBands(
+            [shareBands.shock, personalBands.shock],
+            registered.deviceMaxIntensity,
+            registered.deviceMaxDurationMs,
+          ),
+          vibrate: nestBands(
+            [shareBands.vibrate, personalBands.vibrate],
+            registered.deviceMaxIntensity,
+            registered.deviceMaxDurationMs,
+          ),
+          beep: nestBands(
+            [shareBands.beep, personalBands.beep],
+            registered.deviceMaxIntensity,
+            registered.deviceMaxDurationMs,
+          ),
+        },
+        atLeastWarning(shareBands.requiredWarningLevel, personalBands.requiredWarningLevel),
+      );
     }
 
     // Claimed website share on the caller's PiShock account — not a Discord ActivityShare
@@ -334,6 +564,13 @@ export async function resolveOwnOperatePolicy(
       throw new OperatePolicyError('Unknown or unauthorized share code', 404, 'SHARE_UNKNOWN');
     }
     const claimedShockerId = shockerIdOf(claimed) ?? (input.shockerId ? Number(input.shockerId) : null);
+    if (isPiShockRowPaused(claimed)) {
+      throw new OperatePolicyError(
+        'This shocker or share is paused on PiShock',
+        503,
+        'PISHOCK_PAUSED',
+      );
+    }
     if (claimedShockerId != null && (await deps.isEmergencyStopped(callerDiscordUserId, claimedShockerId))) {
       throw new OperatePolicyError(
         'Emergency stop is engaged — release STOP to allow commands',
@@ -343,16 +580,25 @@ export async function resolveOwnOperatePolicy(
     }
     const deviceMaxI = deviceMaxIntensityOf(claimed);
     const deviceMaxD = deviceMaxDurationMsOf(claimed);
-    return {
-      ownerDiscordUserId: callerDiscordUserId,
-      shockerId: claimedShockerId,
-      shareCode: code,
-      hubClientId: hubClientIdOf(claimed),
-      maxIntensity: Math.min(deviceMaxI, personal.activityMaxIntensity),
-      maxDurationMs: Math.min(deviceMaxD, personal.activityMaxDurationMs),
-      flags: { canShock: true, canVibrate: true, canBeep: true, canHold: true },
-      crossUser: false,
-    };
+    const personalBands = personalBandsFromUser(personal);
+    return policyFromBands(
+      {
+        ownerDiscordUserId: callerDiscordUserId,
+        shockerId: claimedShockerId,
+        shockerName: shockerNameOf(claimed),
+        shareCode: code,
+        hubClientId: hubClientIdOf(claimed),
+        hubName: resolveHubName(snapshot, hubClientIdOf(claimed)),
+        flags: { canShock: true, canVibrate: true, canBeep: true, canHold: true },
+        crossUser: false,
+      },
+      {
+        shock: nestBands([personalBands.shock], deviceMaxI, deviceMaxD),
+        vibrate: nestBands([personalBands.vibrate], deviceMaxI, deviceMaxD),
+        beep: nestBands([personalBands.beep], deviceMaxI, deviceMaxD),
+      },
+      personalBands.requiredWarningLevel,
+    );
   }
 
   const shockerId = Number(input.shockerId);
@@ -372,6 +618,13 @@ export async function resolveOwnOperatePolicy(
   if (!owned) {
     throw new OperatePolicyError('Shocker not found on this PiShock account', 404, 'SHOCKER_UNKNOWN');
   }
+  if (isPiShockRowPaused(owned)) {
+    throw new OperatePolicyError(
+      'This shocker or share is paused on PiShock',
+      503,
+      'PISHOCK_PAUSED',
+    );
+  }
 
   const activityShare = await deps.findActivityShareByShocker(callerDiscordUserId, shockerId);
   const deviceMaxI = activityShare
@@ -381,27 +634,65 @@ export async function resolveOwnOperatePolicy(
     ? Math.min(activityShare.deviceMaxDurationMs, deviceMaxDurationMsOf(owned))
     : deviceMaxDurationMsOf(owned);
 
-  return {
-    ownerDiscordUserId: callerDiscordUserId,
-    shockerId,
-    shareCode: null,
-    hubClientId: activityShare?.hubClientId ?? hubClientIdOf(owned),
-    maxIntensity: Math.min(deviceMaxI, personal.activityMaxIntensity),
-    maxDurationMs: Math.min(deviceMaxD, personal.activityMaxDurationMs),
-    flags: activityShare
-      ? {
-          canShock: activityShare.canShock,
-          canVibrate: activityShare.canVibrate,
-          canBeep: activityShare.canBeep,
-          canHold: activityShare.canHold,
-        }
-      : { canShock: true, canVibrate: true, canBeep: true, canHold: true },
-    crossUser: false,
-  };
+  const personalBands = personalBandsFromUser(personal);
+  // Own-by-id: personal bands ∩ device ceilings only (share guest caps do not limit the owner).
+  return policyFromBands(
+    {
+      ownerDiscordUserId: callerDiscordUserId,
+      shockerId,
+      shockerName: cleanShockerName(activityShare?.shockerName) ?? shockerNameOf(owned),
+      shareCode: null,
+      hubClientId: activityShare?.hubClientId ?? hubClientIdOf(owned),
+      hubName: resolveHubName(
+        snapshot,
+        activityShare?.hubClientId ?? hubClientIdOf(owned),
+        activityShare?.hubName,
+      ),
+      flags: activityShare
+        ? {
+            canShock: activityShare.canShock,
+            canVibrate: activityShare.canVibrate,
+            canBeep: activityShare.canBeep,
+            canHold: activityShare.canHold,
+          }
+        : { canShock: true, canVibrate: true, canBeep: true, canHold: true },
+      crossUser: false,
+    },
+    {
+      shock: nestBands([personalBands.shock], deviceMaxI, deviceMaxD),
+      vibrate: nestBands([personalBands.vibrate], deviceMaxI, deviceMaxD),
+      beep: nestBands([personalBands.beep], deviceMaxI, deviceMaxD),
+    },
+    personalBands.requiredWarningLevel,
+  );
 }
 
 export function holdTimerKey(ownerDiscordUserId: string, shockerId: number): string {
   return `${ownerDiscordUserId}:${shockerId}`;
+}
+
+/** Generation of a hold that is waiting out its warning before the shock starts. */
+const pendingHolds = new Map<string, number>();
+
+export function beginPendingHold(ownerDiscordUserId: string, shockerId: number): number {
+  const key = holdTimerKey(ownerDiscordUserId, shockerId);
+  const next = (pendingHolds.get(key) ?? 0) + 1;
+  pendingHolds.set(key, next);
+  return next;
+}
+
+/** A release during the warning wait invalidates the hold that has not started yet. */
+export function cancelPendingHold(ownerDiscordUserId: string, shockerId: number): void {
+  const key = holdTimerKey(ownerDiscordUserId, shockerId);
+  pendingHolds.set(key, (pendingHolds.get(key) ?? 0) + 1);
+}
+
+export function isPendingHoldCurrent(
+  ownerDiscordUserId: string,
+  shockerId: number,
+  token: number,
+): boolean {
+  return pendingHolds.get(holdTimerKey(ownerDiscordUserId, shockerId)) === token;
 }
 
 export function clearHoldAutoEnd(ownerDiscordUserId: string, shockerId: number): void {
@@ -452,6 +743,7 @@ export async function resolveDeviceCeilingsFromPiShock(
   deviceMaxIntensity: number;
   deviceMaxDurationMs: number;
   hubClientId: string | null;
+  hubName: string | null;
   found: boolean;
 }> {
   const snapshot = await fetchControlSnapshot(creds);
@@ -461,13 +753,16 @@ export async function resolveDeviceCeilingsFromPiShock(
       deviceMaxIntensity: ABS_MAX_INTENSITY,
       deviceMaxDurationMs: ABS_MAX_DURATION_MS,
       hubClientId: null,
+      hubName: null,
       found: false,
     };
   }
+  const hubClientId = hubClientIdOf(owned);
   return {
     deviceMaxIntensity: deviceMaxIntensityOf(owned),
     deviceMaxDurationMs: deviceMaxDurationMsOf(owned),
-    hubClientId: hubClientIdOf(owned),
+    hubClientId,
+    hubName: findHubNameInSnapshot(snapshot, hubClientId),
     found: true,
   };
 }

@@ -48,6 +48,7 @@ function makeHarness(opts?: {
   validate?: (item: QueueItemInternal) => boolean | Promise<boolean>;
   progressMs?: number;
   maxPerSender?: number;
+  endActive?: (item: QueueItemInternal) => Promise<boolean | void>;
 }): Harness {
   let now = 1_000_000;
   const timers: Array<{ at: number; resolve: () => void }> = [];
@@ -91,9 +92,11 @@ function makeHarness(opts?: {
     execute: async (item) => {
       executed.push(item.id);
     },
-    endActive: async (item) => {
-      ended.push(item.id);
-    },
+    endActive:
+      opts?.endActive ??
+      (async (item) => {
+        ended.push(item.id);
+      }),
     onStateChange: () => undefined,
     onTicket: (t) => tickets.push(t),
   });
@@ -220,6 +223,43 @@ describe('command queue', () => {
     assert.equal(h.executed[1], second.itemId);
   });
 
+  it('skipActive does not clear a newer active item after a raced end', async () => {
+    let releaseEnd!: () => void;
+    const endGate = new Promise<void>((resolve) => {
+      releaseEnd = resolve;
+    });
+    const endedIds: string[] = [];
+    const h = makeHarness({
+      endActive: async (item) => {
+        endedIds.push(item.id);
+        await endGate;
+      },
+    });
+    const first = await h.queue.enqueue(
+      baseInput({ ownerDiscordUserId: 'owner', executorDiscordUserId: 'a', durationMs: 5_000 }),
+    );
+    const second = await h.queue.enqueue(
+      baseInput({ ownerDiscordUserId: 'owner', executorDiscordUserId: 'b', durationMs: 40 }),
+    );
+    await h.flush();
+    assert.equal(h.executed[0], first.itemId);
+
+    const skip1 = h.queue.skipActive('owner');
+    const skip2 = h.queue.skipActive('owner');
+    releaseEnd();
+    const [r1, r2] = await Promise.all([skip1, skip2]);
+    assert.equal(r1.ended, true);
+    assert.equal(r2.ended, true);
+    assert.ok(endedIds.includes(first.itemId));
+    await h.flush();
+    await h.advance(0);
+    await h.flush();
+
+    assert.ok(h.executed.includes(second.itemId));
+    const state = await h.queue.snapshot('owner');
+    assert.equal(state.active?.id, second.itemId);
+  });
+
   it('clear drops waiting only', async () => {
     const h = makeHarness();
     const first = await h.queue.enqueue(
@@ -335,7 +375,29 @@ describe('command queue', () => {
     await h.flush();
     const result = await h.queue.handleSenderEnd('owner', 'a', 7);
     assert.equal(result.handled, true);
+    assert.equal(result.ended, true);
     assert.deepEqual(h.ended, [first.itemId]);
+    assert.equal((await h.queue.snapshot('owner')).active, null);
+  });
+
+  it('keeps the active command when the device end fails', async () => {
+    const h = makeHarness({
+      endActive: async () => false,
+    });
+    const first = await h.queue.enqueue(
+      baseInput({
+        ownerDiscordUserId: 'owner',
+        executorDiscordUserId: 'a',
+        operation: 'hold',
+        hold: true,
+        durationMs: 5_000,
+      }),
+    );
+    await h.flush();
+    const result = await h.queue.handleSenderEnd('owner', 'a', 7);
+    assert.equal(result.handled, true);
+    assert.equal(result.ended, false);
+    assert.equal((await h.queue.snapshot('owner')).active?.id, first.itemId);
   });
 
   it('hardClear removes waiting and active', async () => {
@@ -370,4 +432,148 @@ describe('command queue', () => {
     await h.flush();
     assert.deepEqual(h.executed, [good.itemId]);
   });
+
+  it('does not advance to the next item while advance is held', async () => {
+    const h = makeHarness();
+    const first = await h.queue.enqueue(
+      baseInput({ ownerDiscordUserId: 'owner', executorDiscordUserId: 'a', durationMs: 40 }),
+    );
+    await h.queue.enqueue(
+      baseInput({ ownerDiscordUserId: 'owner', executorDiscordUserId: 'b', durationMs: 40 }),
+    );
+    await h.flush();
+    h.queue.holdAdvance('owner');
+    await h.queue.skipActive('owner');
+    await h.advance(10_000);
+    await h.flush();
+    assert.deepEqual(h.executed, [first.itemId]);
+    const held = await h.queue.snapshot('owner');
+    assert.equal(held.waiting.length, 1);
+    h.queue.releaseAdvance('owner');
+    await h.flush();
+    assert.equal(h.executed.length, 2);
+  });
+
+  it('requeues an item when advance is held during validation', async () => {
+    let releaseValidate: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => {
+      releaseValidate = resolve;
+    });
+    const h = makeHarness({
+      validate: async () => {
+        await gate;
+        return true;
+      },
+    });
+    const item = await h.queue.enqueue(
+      baseInput({ ownerDiscordUserId: 'owner', executorDiscordUserId: 'a', durationMs: 40 }),
+    );
+    await h.flush();
+    h.queue.holdAdvance('owner');
+    releaseValidate();
+    await h.flush();
+    assert.deepEqual(h.executed, []);
+    const held = await h.queue.snapshot('owner');
+    assert.equal(held.active, null);
+    assert.equal(held.waiting.length, 1);
+    h.queue.releaseAdvance('owner');
+    await h.flush();
+    assert.deepEqual(h.executed, [item.itemId]);
+  });
+
+  it('discards selection cleared while priority lookup is pending, even when advancement is held', async () => {
+    let releaseLookup!: () => void;
+    let lookupStarted!: () => void;
+    const started = new Promise<void>((resolve) => { lookupStarted = resolve; });
+    const gate = new Promise<void>((resolve) => { releaseLookup = resolve; });
+    let blockSelection = false;
+    const executed: string[] = [];
+    const queue = createCommandQueue({
+      isStarred: async () => {
+        if (blockSelection) { lookupStarted(); await gate; }
+        return false;
+      },
+      getLimits: () => ({ progressMs: 0, maxPerSender: 3 }),
+      validateBeforeRun: async () => true,
+      execute: async (item) => { executed.push(item.id); },
+      endActive: async () => true,
+      onStateChange: () => undefined,
+      onTicket: () => undefined,
+    });
+    await queue.setPaused('owner', true);
+    await queue.enqueue(baseInput({ ownerDiscordUserId: 'owner', executorDiscordUserId: 'a' }));
+    blockSelection = true;
+    const resume = queue.setPaused('owner', false);
+    await started;
+    queue.holdAdvance('owner');
+    await queue.hardClear('owner', { endActiveDevice: false });
+    releaseLookup();
+    await resume;
+    for (let i = 0; i < 30; i++) await Promise.resolve();
+    const state = await queue.snapshot('owner');
+    assert.equal(state.active, null);
+    assert.equal(state.waiting.length, 0);
+    assert.deepEqual(executed, []);
+    queue.resetAll();
+  });
+
+  it('does not run an item cleared while validation is in flight', async () => {
+    let releaseValidate: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => {
+      releaseValidate = resolve;
+    });
+    const h = makeHarness({
+      validate: async () => {
+        await gate;
+        return true;
+      },
+    });
+    await h.queue.enqueue(
+      baseInput({ ownerDiscordUserId: 'owner', executorDiscordUserId: 'a', durationMs: 40 }),
+    );
+    await h.flush();
+    await h.queue.hardClear('owner', { endActiveDevice: false });
+    releaseValidate();
+    await h.flush();
+    assert.deepEqual(h.executed, []);
+    const state = await h.queue.snapshot('owner');
+    assert.equal(state.active, null);
+    assert.equal(state.waiting.length, 0);
+  });
+
+  it('invalidateInFlight is visible to the running execute', async () => {
+    let canceled: (() => boolean) | undefined;
+    let releaseStarted: () => void = () => undefined;
+    const started = new Promise<void>((resolve) => {
+      releaseStarted = resolve;
+    });
+    let releaseDone: () => void = () => undefined;
+    const done = new Promise<void>((resolve) => {
+      releaseDone = resolve;
+    });
+    const queue = createCommandQueue({
+      isStarred: () => false,
+      getLimits: () => ({ progressMs: 0, maxPerSender: 3 }),
+      validateBeforeRun: async () => true,
+      execute: async (_item, isCanceled) => {
+        canceled = isCanceled;
+        releaseStarted();
+        await done;
+      },
+      endActive: async () => true,
+      onStateChange: () => undefined,
+      onTicket: () => undefined,
+    });
+    await queue.enqueue(baseInput({ ownerDiscordUserId: 'owner', executorDiscordUserId: 'a' }));
+    await started;
+    assert.equal(canceled?.(), false);
+    queue.invalidateInFlight('owner');
+    assert.equal(canceled?.(), true);
+    releaseDone();
+    await hFlush();
+  });
 });
+
+async function hFlush() {
+  for (let i = 0; i < 20; i++) await Promise.resolve();
+}

@@ -2,11 +2,13 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ApiError, apiBase, apiFetch, isEmbedded } from './api';
 import {
   bootstrapDiscord,
+  buildPresenceSnapshot,
   fetchInstanceParticipants,
   getActivityInstanceId,
   openExternal,
   resolveActivityLocationHint,
   subscribeParticipants,
+  updateRichPresence,
   type AuthState,
 } from './discord';
 import { SafetyWarning } from './components/SafetyWarning';
@@ -36,6 +38,10 @@ import {
 } from './components/ActivityLimitsSettings';
 import { FriendsParticipantList } from './components/FriendsParticipantList';
 import {
+  isPiShockRowExplicitlyUnpaused,
+  isPiShockRowPaused,
+} from '../shared/pishock-pause';
+import {
   QueueFab,
   QueuePanel,
   type QueuePanelItem,
@@ -43,7 +49,14 @@ import {
 } from './components/QueuePanel';
 import { PsDialog } from './components/PsDialog';
 import { LinkConfirmPanel } from './components/LinkConfirmPanel';
+import { ApiKeyRevealPanel } from './components/ApiKeyRevealPanel';
 import { AuthLoadingScreen } from './components/AuthLoadingScreen';
+import { DefaultMenuPrompt } from './components/DefaultMenuPrompt';
+import {
+  loadDefaultStartMenu,
+  saveDefaultStartMenu,
+  type DefaultStartMenu,
+} from './defaultMenuPrefs';
 import {
   SetupWizard,
   loadSetupPrefs,
@@ -67,6 +80,7 @@ type MeResponse = {
 
 type QueueState = QueuePanelSettings & {
   paused: boolean;
+  halted: boolean;
   active: QueuePanelItem | null;
   waiting: QueuePanelItem[];
 };
@@ -96,7 +110,6 @@ type DevicesResponse = {
   hubs: Array<Record<string, unknown>>;
   shockers: Array<Record<string, unknown>>;
   shared: Array<Record<string, unknown>>;
-  links: Array<Record<string, unknown>>;
   online: Record<string, boolean>;
 };
 
@@ -106,7 +119,15 @@ type LegalView = null | 'terms' | 'privacy';
 
 type PendingLinkConfirm = {
   pishockUserId: number;
+  pishockUsername?: string | null;
   hubNames: string[];
+};
+
+type PendingApiKeyReveal = {
+  apiKey: string;
+  apiKeyName: string;
+  expiresAt?: string | null;
+  pishockUsername?: string | null;
 };
 
 const PARTICIPANT_STATUS_TTL_MS = 3 * 60 * 1000;
@@ -137,14 +158,21 @@ export function App() {
   const [linking, setLinking] = useState(false);
   const [linkError, setLinkError] = useState<string | null>(null);
   const [linkConfirm, setLinkConfirm] = useState<PendingLinkConfirm | null>(null);
+  const [apiKeyReveal, setApiKeyReveal] = useState<PendingApiKeyReveal | null>(null);
   const [confirmBusy, setConfirmBusy] = useState(false);
+  const [manualLinkBusy, setManualLinkBusy] = useState(false);
+  const [manualLinkError, setManualLinkError] = useState<string | null>(null);
   const [setupPhase, setSetupPhase] = useState(false);
   const [setupSharePhase, setSetupSharePhase] = useState(false);
   const [setupDevicesReady, setSetupDevicesReady] = useState(false);
   const [setupShareBusy, setSetupShareBusy] = useState(false);
+  const [setupShareKey, setSetupShareKey] = useState(0);
+  const [defaultMenuPrompt, setDefaultMenuPrompt] = useState(false);
+  const defaultMenuAppliedRef = useRef(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [legalView, setLegalView] = useState<LegalView>(null);
   const [friendsMode, setFriendsMode] = useState(true);
+  const [participantRosterLoaded, setParticipantRosterLoaded] = useState(false);
   const [participants, setParticipants] = useState<DiscordParticipant[]>([]);
   const [participantStatus, setParticipantStatus] = useState<Record<string, ParticipantStatus>>({});
   const [selectedTargetIds, setSelectedTargetIds] = useState<string[]>([]);
@@ -154,24 +182,24 @@ export function App() {
   const [pairDialog, setPairDialog] = useState<ShockerView | null>(null);
   const [lastIncoming, setLastIncoming] = useState<IncomingShockHit | null>(null);
   /** Per-shocker Discord share caps (what guests are limited to) */
-  const [discordShareLimits, setDiscordShareLimits] = useState<
-    Record<
-      number,
-      { enabled: boolean; maxIntensity: number; maxDurationMs: number }
-    >
-  >({});
+  const [discordShareLimits, setDiscordShareLimits] = useState<Record<number, ShareLimitRow>>(
+    {},
+  );
   const [queueState, setQueueState] = useState<QueueState>({
     enabled: false,
     progressMs: 0,
     maxPerSender: 3,
     starOnly: false,
     paused: false,
+    halted: false,
     active: null,
     waiting: [],
   });
   const [queueBusy, setQueueBusy] = useState(false);
   const [queueOpen, setQueueOpen] = useState(false);
   const [myQueueTicket, setMyQueueTicket] = useState<SenderQueueTicket | null>(null);
+  /** Shocker ids PiShock just rejected with 503, until a device list says otherwise. */
+  const [livePausedIds, setLivePausedIds] = useState<Set<number>>(() => new Set());
 
   const token = auth?.accessToken ?? null;
   const participantsRef = useRef(participants);
@@ -180,7 +208,13 @@ export function App() {
   selfIdRef.current = me?.user?.id ?? null;
   const operateInflightRef = useRef(0);
   const linkPollGenRef = useRef(0);
-
+  const presenceStartedAtRef = useRef<number | null>(null);
+  const friendsAutoSelectDoneRef = useRef(false);
+  /** User cleared the friends selection; do not auto-select when people join later. */
+  const friendsSelectionClearedRef = useRef(false);
+  const deviceFetchGenRef = useRef(0);
+  const emergencyStopWriteGenRef = useRef(0);
+  const loadSettingsRef = useRef<(() => Promise<unknown>) | null>(null);
   const refreshQueue = useCallback(async (accessToken: string) => {
     const data = await apiFetch<QueueState & { stars?: string[] }>('/queue', accessToken);
     setQueueState({
@@ -189,6 +223,7 @@ export function App() {
       maxPerSender: Number(data.maxPerSender) || 3,
       starOnly: Boolean(data.starOnly),
       paused: Boolean(data.paused),
+      halted: Boolean(data.halted),
       active: data.active ?? null,
       waiting: data.waiting ?? [],
     });
@@ -202,9 +237,55 @@ export function App() {
     return data;
   }, []);
 
+  const unlinkRejectedPiShock = useCallback(() => {
+    setMe((prev) => (prev ? { ...prev, pishockLinked: false, pishockUserId: null } : prev));
+    setDevices(null);
+    setLoginUrl(null);
+  }, []);
+
   const refreshDevices = useCallback(async (accessToken: string) => {
-    const data = await apiFetch<DevicesResponse>('/devices', accessToken);
+    const fetchGen = ++deviceFetchGenRef.current;
+    const emergencyStopGen = emergencyStopWriteGenRef.current;
+    let data: DevicesResponse & {
+      emergencyStopShockerIds?: number[];
+      pausedShockerIds?: number[];
+    };
+    try {
+      data = await apiFetch<
+        DevicesResponse & {
+          emergencyStopShockerIds?: number[];
+          pausedShockerIds?: number[];
+        }
+      >('/devices', accessToken);
+    } catch (err) {
+      if (err instanceof ApiError && err.code === 'PISHOCK_RELOGIN') unlinkRejectedPiShock();
+      throw err;
+    }
     setDevices(data);
+    setLivePausedIds((prev) => {
+      const next = new Set(prev);
+      for (const id of data.pausedShockerIds ?? []) {
+        if (Number.isFinite(id) && id > 0) next.add(Math.floor(id));
+      }
+      for (const row of pauseRowsFromDevices(data)) {
+        const id = Number(row.ShockerId ?? row.shockerId ?? row.Id ?? row.id);
+        if (!Number.isFinite(id) || id <= 0) continue;
+        if (isPiShockRowPaused(row)) next.add(Math.floor(id));
+        else if (isPiShockRowExplicitlyUnpaused(row)) next.delete(Math.floor(id));
+      }
+      return next;
+    });
+    if (
+      Array.isArray(data.emergencyStopShockerIds) &&
+      fetchGen === deviceFetchGenRef.current &&
+      emergencyStopGen === emergencyStopWriteGenRef.current
+    ) {
+      setMe((prev) =>
+        prev
+          ? { ...prev, emergencyStopShockerIds: data.emergencyStopShockerIds }
+          : prev,
+      );
+    }
     const nextOnline: Record<string, boolean> = {};
     for (const [k, v] of Object.entries(data.online ?? {})) {
       const key = normalizeClientKey(k);
@@ -212,7 +293,7 @@ export function App() {
     }
     setOnline((prev) => ({ ...prev, ...nextOnline }));
     return data;
-  }, []);
+  }, [unlinkRejectedPiShock]);
 
   const refreshLogs = useCallback(async (accessToken: string) => {
     const data = await apiFetch<{
@@ -248,6 +329,7 @@ export function App() {
       const instanceId = getActivityInstanceId();
       if (!instanceId || roster.length === 0) {
         setParticipantStatus({});
+        if (instanceId && roster.length === 0) setParticipantRosterLoaded(true);
         return;
       }
       const idsKey = roster
@@ -261,6 +343,7 @@ export function App() {
         now - participantStatusCache.fetchedAt < PARTICIPANT_STATUS_TTL_MS
       ) {
         setParticipantStatus(participantStatusCache.map);
+        setParticipantRosterLoaded(true);
         return;
       }
       const data = await apiFetch<{ participants: ParticipantStatus[] }>(
@@ -280,6 +363,17 @@ export function App() {
       }
       participantStatusCache = { key: idsKey, fetchedAt: now, map };
       setParticipantStatus(map);
+      setParticipantRosterLoaded(true);
+      setLivePausedIds((prev) => {
+        if (prev.size === 0) return prev;
+        const next = new Set(prev);
+        for (const row of data.participants ?? []) {
+          for (const shocker of row.shockers ?? []) {
+            if (!shocker.paused) next.delete(shocker.shockerId);
+          }
+        }
+        return next.size === prev.size ? prev : next;
+      });
     },
     [],
   );
@@ -339,11 +433,13 @@ export function App() {
             const loginStatus = await apiFetch<{
               status: string;
               pishockUserId?: number;
+              pishockUsername?: string | null;
               hubNames?: string[];
             }>('/pishock/login/status', authState.accessToken);
             if (loginStatus.status === 'confirm' && loginStatus.pishockUserId != null) {
               setLinkConfirm({
                 pishockUserId: loginStatus.pishockUserId,
+                pishockUsername: loginStatus.pishockUsername ?? null,
                 hubNames: loginStatus.hubNames ?? [],
               });
               report(100, 'Ready');
@@ -386,6 +482,38 @@ export function App() {
     };
   }, [refreshDevices, refreshLogs, refreshMe, refreshParticipants]);
 
+  // Discord Rich Presence — privacy-safe automatic status + party/Join.
+  useEffect(() => {
+    if (!isEmbedded || !bootReady || !auth) return;
+    if (presenceStartedAtRef.current == null) {
+      presenceStartedAtRef.current = Date.now();
+    }
+    const sharingDevices = Object.values(discordShareLimits).some((row) => row.enabled);
+    const selfEStop = (me?.emergencyStopShockerIds?.length ?? 0) > 0;
+    const snapshot = buildPresenceSnapshot({
+      linked: Boolean(me?.pishockLinked),
+      friendsMode,
+      participantCount: Math.max(1, participants.length),
+      sharingDevices,
+      emergencyStop: selfEStop,
+      queueHalted: Boolean(queueState.halted),
+      queuePaused: Boolean(queueState.paused),
+      instanceId: getActivityInstanceId(),
+      startedAt: presenceStartedAtRef.current,
+    });
+    updateRichPresence(snapshot);
+  }, [
+    bootReady,
+    auth,
+    me?.pishockLinked,
+    me?.emergencyStopShockerIds,
+    friendsMode,
+    participants.length,
+    discordShareLimits,
+    queueState.halted,
+    queueState.paused,
+  ]);
+
   useEffect(() => {
     if (!isEmbedded || !token) return;
     return subscribeParticipants((roster) => {
@@ -394,12 +522,55 @@ export function App() {
     });
   }, [token, refreshParticipantStatus]);
 
+  // Auto-select once per friends-mode entry, after a usable roster/status loads.
+  useEffect(() => {
+    if (!friendsMode) {
+      friendsAutoSelectDoneRef.current = false;
+      friendsSelectionClearedRef.current = false;
+      return;
+    }
+    if (
+      friendsAutoSelectDoneRef.current ||
+      friendsSelectionClearedRef.current ||
+      !participantRosterLoaded
+    ) {
+      return;
+    }
+    // Don't override a selection, and don't consume the one-shot until we pick someone.
+    if (selectedTargetIds.length > 0) return;
+    if (participants.length === 0) return;
+    const selfId = me?.user?.id;
+    const firstAvailable = participants.find((p) => {
+      if (selfId && p.id === selfId) return false;
+      const status = participantStatus[p.id];
+      return Boolean(status?.available && status.shockers?.length);
+    });
+    // Wait until status for at least one non-self participant is known.
+    const hasEvaluableStatus = participants.some((p) => {
+      if (selfId && p.id === selfId) return false;
+      return participantStatus[p.id] != null;
+    });
+    if (!hasEvaluableStatus || !firstAvailable) return;
+    friendsAutoSelectDoneRef.current = true;
+    setSelectedTargetIds([firstAvailable.id]);
+  }, [
+    friendsMode,
+    participantRosterLoaded,
+    selectedTargetIds.length,
+    participants,
+    participantStatus,
+    me?.user?.id,
+  ]);
+
   useEffect(() => {
     if (!isEmbedded || !token || !bootReady || !me?.consent) return;
+
+    let invalidateTimer: number | null = null;
 
     const applyEmergencyStop = (event: Extract<RealtimeEvent, { type: 'emergency_stop' }>) => {
       const selfId = selfIdRef.current;
       if (selfId && event.ownerDiscordUserId === selfId) {
+        emergencyStopWriteGenRef.current += 1;
         setMe((prev) =>
           prev ? { ...prev, emergencyStopShockerIds: event.emergencyStopShockerIds } : prev,
         );
@@ -490,6 +661,7 @@ export function App() {
             maxPerSender: Number(event.maxPerSender) || 3,
             starOnly: Boolean(event.starOnly),
             paused: Boolean(event.paused),
+            halted: Boolean(event.halted),
             active: event.active ?? null,
             waiting: event.waiting ?? [],
           });
@@ -525,7 +697,13 @@ export function App() {
       }
       if (event.type === 'activity_share_changed' || event.type === 'participants_invalidate') {
         participantStatusCache = { key: '', fetchedAt: 0, map: {} };
-        void refreshParticipantStatus(token, participantsRef.current, true).catch(() => undefined);
+        if (invalidateTimer != null) window.clearTimeout(invalidateTimer);
+        invalidateTimer = window.setTimeout(() => {
+          invalidateTimer = null;
+          void refreshParticipantStatus(token, participantsRef.current, true).catch(() => undefined);
+          void refreshLogs(token).catch(() => undefined);
+          void refreshQueue(token).catch(() => undefined);
+        }, 150);
         if (
           event.type === 'activity_share_changed' &&
           selfIdRef.current === event.ownerDiscordUserId
@@ -535,9 +713,26 @@ export function App() {
       }
     };
 
-    const handle = connectRealtime(token, handleEvent);
-    return () => handle.close();
-  }, [token, bootReady, me?.consent, refreshMe, refreshParticipantStatus, refreshLogs]);
+    const handle = connectRealtime(token, (event) => {
+      try {
+        handleEvent(event);
+      } catch (err) {
+        console.warn('[realtime] handler failed', event.type, err);
+      }
+    });
+    return () => {
+      if (invalidateTimer != null) window.clearTimeout(invalidateTimer);
+      handle.close();
+    };
+  }, [
+    token,
+    bootReady,
+    me?.consent,
+    refreshMe,
+    refreshParticipantStatus,
+    refreshLogs,
+    refreshQueue,
+  ]);
 
   const refreshOnlineStatus = useCallback(
     async (accessToken: string, clientIds: string[], waitMs = 2500) => {
@@ -578,8 +773,8 @@ export function App() {
     const run = async (waitMs: number) => {
       try {
         await refreshOnlineStatus(token, clientIds, waitMs);
-      } catch {
-        // transient; next poll retries
+      } catch (err) {
+        if (err instanceof ApiError && err.code === 'PISHOCK_RELOGIN') unlinkRejectedPiShock();
       }
     };
 
@@ -592,16 +787,59 @@ export function App() {
       cancelled = true;
       window.clearInterval(timer);
     };
-  }, [token, me?.pishockLinked, devices, refreshOnlineStatus]);
+  }, [token, me?.pishockLinked, devices, refreshOnlineStatus, unlinkRejectedPiShock]);
 
-  const personalLimits = useMemo<PersonalLimits>(
-    () =>
-      me?.personal ?? {
-        activityMaxIntensity: 100,
-        activityMaxDurationMs: 15_000,
-      },
-    [me?.personal?.activityMaxIntensity, me?.personal?.activityMaxDurationMs],
-  );
+  useEffect(() => {
+    if (!token || !me?.pishockLinked) return;
+    const id = window.setInterval(() => {
+      void refreshDevices(token).catch(() => undefined);
+    }, 20_000);
+    return () => window.clearInterval(id);
+  }, [token, me?.pishockLinked, refreshDevices]);
+
+  useEffect(() => {
+    if (!token || !isEmbedded) return;
+    const id = window.setInterval(() => {
+      const roster = participantsRef.current;
+      if (roster.length === 0) return;
+      void refreshParticipantStatus(token, roster, true).catch(() => undefined);
+    }, 20_000);
+    return () => window.clearInterval(id);
+  }, [token, refreshParticipantStatus]);
+
+  const personalLimits = useMemo<PersonalLimits>(() => {
+    const p = me?.personal;
+    const maxI = Math.max(1, Math.min(100, p?.activityMaxIntensity ?? 100));
+    const maxD = Math.max(16, Math.min(15_000, p?.activityMaxDurationMs ?? 15_000));
+    const vibMaxI = Math.max(1, Math.min(100, p?.activityVibMaxIntensity ?? maxI));
+    const vibMaxD = Math.max(16, Math.min(15_000, p?.activityVibMaxDurationMs ?? maxD));
+    const beepMaxI = Math.max(1, Math.min(100, p?.activityBeepMaxIntensity ?? maxI));
+    const beepMaxD = Math.max(16, Math.min(15_000, p?.activityBeepMaxDurationMs ?? maxD));
+    return {
+      activityMinIntensity: Math.max(1, Math.min(maxI, p?.activityMinIntensity ?? 1)),
+      activityMaxIntensity: maxI,
+      activityMinDurationMs: Math.max(16, Math.min(maxD, p?.activityMinDurationMs ?? 16)),
+      activityMaxDurationMs: maxD,
+      activityVibMinIntensity: Math.max(1, Math.min(vibMaxI, p?.activityVibMinIntensity ?? 1)),
+      activityVibMaxIntensity: vibMaxI,
+      activityVibMinDurationMs: Math.max(16, Math.min(vibMaxD, p?.activityVibMinDurationMs ?? 16)),
+      activityVibMaxDurationMs: vibMaxD,
+      activityBeepMinIntensity: Math.max(1, Math.min(beepMaxI, p?.activityBeepMinIntensity ?? 1)),
+      activityBeepMaxIntensity: beepMaxI,
+      activityBeepMinDurationMs: Math.max(16, Math.min(beepMaxD, p?.activityBeepMinDurationMs ?? 16)),
+      activityBeepMaxDurationMs: beepMaxD,
+      activityCanShock: true,
+      activityCanVibrate: true,
+      activityCanBeep: true,
+      activityCanHold: true,
+      activityRequiredWarningLevel:
+        p?.activityRequiredWarningLevel === 'small' ||
+        p?.activityRequiredWarningLevel === 'mid' ||
+        p?.activityRequiredWarningLevel === 'long'
+          ? p.activityRequiredWarningLevel
+          : 'none',
+    };
+  }, [me?.personal]);
 
   const emergencyStopIds = useMemo(
     () => new Set(me?.emergencyStopShockerIds ?? []),
@@ -609,7 +847,7 @@ export function App() {
   );
 
   const ownedAndShared = useMemo(() => {
-    const rows = normalizeShockers(devices, online, personalLimits, emergencyStopIds);
+    const rows = normalizeShockers(devices, online, personalLimits, emergencyStopIds, livePausedIds);
     return rows.map((s) => {
       if (!s.owned) return s;
       const share = discordShareLimits[s.id];
@@ -617,11 +855,13 @@ export function App() {
       return {
         ...s,
         discordShareEnabled: share.enabled,
+        discordShareMinIntensity: share.minIntensity ?? 1,
         discordShareMaxIntensity: share.maxIntensity,
+        discordShareMinDuration: share.minDurationMs ?? 16,
         discordShareMaxDuration: share.maxDurationMs,
       };
     });
-  }, [devices, online, personalLimits, emergencyStopIds, discordShareLimits]);
+  }, [devices, online, personalLimits, emergencyStopIds, discordShareLimits, livePausedIds]);
 
   const hubOptions = useMemo(() => {
     const hubs = devices?.hubs ?? [];
@@ -667,10 +907,6 @@ export function App() {
     }
   }, [hubOptions, selectedHubId]);
 
-  const selectedFriendStatus = selectedTargetId
-    ? participantStatus[selectedTargetId]
-    : undefined;
-
   const friendShockers = useMemo(() => {
     if (!selectedTargetIds.length) return [] as ShockerView[];
     const rows: ShockerView[] = [];
@@ -686,26 +922,90 @@ export function App() {
         const deviceMaxDuration = Math.min(15_000, s.deviceMaxDurationMs ?? s.maxDurationMs);
         const activityMaxIntensity = Math.min(deviceMaxIntensity, s.maxIntensity);
         const activityMaxDuration = Math.min(deviceMaxDuration, s.maxDurationMs);
+        const activityMinIntensity = Math.max(
+          1,
+          Math.min(activityMaxIntensity, s.minIntensity ?? 1),
+        );
+        const activityMinDuration = Math.max(
+          16,
+          Math.min(activityMaxDuration, s.minDurationMs ?? 16),
+        );
+        const vibMaxIntensity = Math.min(
+          deviceMaxIntensity,
+          s.vibMaxIntensity ?? activityMaxIntensity,
+        );
+        const vibMinIntensity = Math.max(
+          1,
+          Math.min(vibMaxIntensity, s.vibMinIntensity ?? activityMinIntensity),
+        );
+        const vibMaxDuration = Math.min(
+          deviceMaxDuration,
+          s.vibMaxDurationMs ?? activityMaxDuration,
+        );
+        const vibMinDuration = Math.max(
+          16,
+          Math.min(vibMaxDuration, s.vibMinDurationMs ?? activityMinDuration),
+        );
+        const beepMaxIntensity = Math.min(
+          deviceMaxIntensity,
+          s.beepMaxIntensity ?? activityMaxIntensity,
+        );
+        const beepMinIntensity = Math.max(
+          1,
+          Math.min(beepMaxIntensity, s.beepMinIntensity ?? activityMinIntensity),
+        );
+        const beepMaxDuration = Math.min(
+          deviceMaxDuration,
+          s.beepMaxDurationMs ?? activityMaxDuration,
+        );
+        const beepMinDuration = Math.max(
+          16,
+          Math.min(beepMaxDuration, s.beepMinDurationMs ?? activityMinDuration),
+        );
         const stopped = Boolean(s.emergencyStop);
+        const devicePaused = Boolean(s.paused) || livePausedIds.has(s.shockerId);
         rows.push({
           id: s.shockerId,
           name: s.shockerName,
-          hubName: participant?.displayName ?? status.globalName ?? status.username ?? 'Friend',
+          hubName:
+            s.hubName?.trim() ||
+            participant?.displayName ||
+            status.globalName ||
+            status.username ||
+            'Friend',
           clientId: s.hubClientId ?? undefined,
           owned: false,
           targetDiscordUserId: targetId,
-          paused: s.paused,
-          canShock: !stopped && s.canShock,
-          canVibrate: !stopped && s.canVibrate,
-          canBeep: !stopped && s.canBeep,
-          canHold: !stopped && s.canHold,
+          paused: devicePaused,
+          canShock: !stopped && !devicePaused && s.canShock,
+          canVibrate: !stopped && !devicePaused && s.canVibrate,
+          canBeep: !stopped && !devicePaused && s.canBeep,
+          canHold: !stopped && !devicePaused && s.canHold,
           canPause: false,
           deviceMaxIntensity,
           deviceMaxDuration,
+          activityMinIntensity,
           activityMaxIntensity,
+          activityMinDuration,
           activityMaxDuration,
+          minIntensity: activityMinIntensity,
           maxIntensity: activityMaxIntensity,
+          minDuration: activityMinDuration,
           maxDuration: activityMaxDuration,
+          vibMinIntensity,
+          vibMaxIntensity,
+          vibMinDuration,
+          vibMaxDuration,
+          beepMinIntensity,
+          beepMaxIntensity,
+          beepMinDuration,
+          beepMaxDuration,
+          requiredWarningLevel:
+            s.requiredWarningLevel === 'small' ||
+            s.requiredWarningLevel === 'mid' ||
+            s.requiredWarningLevel === 'long'
+              ? s.requiredWarningLevel
+              : 'none',
           emergencyStop: stopped,
           isV3: true,
           online: true,
@@ -713,7 +1013,7 @@ export function App() {
       }
     }
     return rows;
-  }, [selectedTargetIds, participantStatus, participants]);
+  }, [selectedTargetIds, participantStatus, participants, livePausedIds]);
 
   const ownShockers = useMemo(() => {
     if (!selectedHubId) return ownedAndShared;
@@ -829,20 +1129,125 @@ export function App() {
       selectedTargetIds.length > 0 &&
       selectedTargetIds.every((id) => participantStatus[id]?.bannedYou),
   );
-  const friendEStop = Boolean(
+  const friendAllEStop = Boolean(
     friendsMode &&
-      selectedTargetIds.length > 0 &&
       !friendBlocked &&
-      (selectedFriendStatus?.emergencyStop || friendShockers.some((s) => s.emergencyStop)),
+      friendShockers.length > 0 &&
+      friendShockers.every((s) => s.emergencyStop),
   );
+  const friendAllPaused = Boolean(
+    friendsMode &&
+      !friendBlocked &&
+      !friendAllEStop &&
+      friendShockers.length > 0 &&
+      friendShockers.every((s) => s.paused || s.emergencyStop),
+  );
+  const selectedQueueAccess = selectedTargetIds.map((id) => {
+    const queue = participantStatus[id]?.queue;
+    if (queue?.starOnly && !queue.starredByThem) return 'star' as const;
+    if (queue?.enabled && queue.halted) return 'halt' as const;
+    return 'open' as const;
+  });
+  const friendStarBlocked = Boolean(
+    friendsMode &&
+      !friendBlocked &&
+      !friendAllEStop &&
+      !friendAllPaused &&
+      selectedQueueAccess.length > 0 &&
+      selectedQueueAccess.every((access) => access === 'star'),
+  );
+  const friendQueueHalted = Boolean(
+    friendsMode &&
+      !friendBlocked &&
+      !friendAllEStop &&
+      !friendAllPaused &&
+      !friendStarBlocked &&
+      selectedQueueAccess.length > 0 &&
+      selectedQueueAccess.every((access) => access === 'halt'),
+  );
+  const friendQueueAccessLocked = Boolean(
+    friendsMode &&
+      !friendBlocked &&
+      !friendAllEStop &&
+      !friendAllPaused &&
+      selectedQueueAccess.length > 0 &&
+      selectedQueueAccess.every((access) => access !== 'open'),
+  );
+  const friendStarred = Boolean(
+    friendsMode &&
+      !friendBlocked &&
+      selectedTargetIds.length > 0 &&
+      selectedTargetIds.every((id) => participantStatus[id]?.queue?.starredByThem),
+  );
+  const friendQueuePaused = Boolean(
+    friendsMode &&
+      !friendBlocked &&
+      !friendAllEStop &&
+      !friendAllPaused &&
+      !friendQueueAccessLocked &&
+      selectedTargetIds.length > 0 &&
+      selectedTargetIds.every((id) => {
+        const queue = participantStatus[id]?.queue;
+        return Boolean(queue?.enabled && queue.paused && !queue.halted);
+      }),
+  );
+  const friendControlsLocked =
+    friendBlocked || friendAllEStop || friendAllPaused || friendQueueAccessLocked;
 
   useEffect(() => {
     // Unlinked users only use Discord Shockers — Claim / My Shockers stay hidden
     if (me && !me.pishockLinked) {
       setFriendsMode(true);
       setSelectedHubId(null);
+      setDefaultMenuPrompt(false);
+      defaultMenuAppliedRef.current = false;
     }
   }, [me?.pishockLinked, me]);
+
+  // Linked users: apply saved default menu, or ask once if unset.
+  useEffect(() => {
+    if (!bootReady || !me?.consent || !me.pishockLinked || !me.user?.id) return;
+    if (setupSharePhase || setupPhase || linking || linkConfirm || apiKeyReveal) return;
+    if (defaultMenuAppliedRef.current) return;
+    const pref = loadDefaultStartMenu(me.user.id);
+    if (pref == null) {
+      setDefaultMenuPrompt(true);
+      return;
+    }
+    defaultMenuAppliedRef.current = true;
+    setDefaultMenuPrompt(false);
+    setFriendsMode(pref === 'friends');
+    if (pref === 'own') setSelectedTargetIds([]);
+  }, [
+    bootReady,
+    me?.consent,
+    me?.pishockLinked,
+    me?.user?.id,
+    setupSharePhase,
+    setupPhase,
+    linking,
+    linkConfirm,
+    apiKeyReveal,
+  ]);
+
+  const applyDefaultStartMenu = useCallback(
+    (menu: DefaultStartMenu) => {
+      if (!me?.user?.id) return;
+      try {
+        saveDefaultStartMenu(me.user.id, menu);
+      } catch {
+        // Storage may be blocked; still apply for this session.
+      }
+      defaultMenuAppliedRef.current = true;
+      setDefaultMenuPrompt(false);
+      setFriendsMode(menu === 'friends');
+      if (menu === 'own') {
+        setSelectedTargetIds([]);
+        setSelectedHubId(null);
+      }
+    },
+    [me?.user?.id],
+  );
 
   const acceptConsent = async (payload: {
     acknowledged: true;
@@ -912,6 +1317,7 @@ export function App() {
           status: string;
           error?: string;
           pishockUserId?: number;
+          pishockUsername?: string | null;
           hubNames?: string[];
         }>('/pishock/login/status', accessToken);
         if (linkPollGenRef.current !== gen) return;
@@ -923,6 +1329,7 @@ export function App() {
           setActionError(null);
           setLinkConfirm({
             pishockUserId: status.pishockUserId,
+            pishockUsername: status.pishockUsername ?? null,
             hubNames: status.hubNames ?? [],
           });
           return;
@@ -982,15 +1389,43 @@ export function App() {
     setConfirmBusy(true);
     setLinkError(null);
     try {
-      await apiFetch('/pishock/login/confirm', token, { method: 'POST', body: '{}' });
-      // Enter setup before clearing confirm so we never flash the control panel.
-      setSetupDevicesReady(false);
-      setSetupSharePhase(true);
+      const result = await apiFetch<{
+        ok: boolean;
+        apiKey?: string;
+        apiKeyName?: string;
+        expiresAt?: string;
+        pishockUsername?: string | null;
+      }>('/pishock/login/confirm', token, { method: 'POST', body: '{}' });
       setLinkConfirm(null);
-      const meData = await refreshMe(token);
+      if (result.apiKey) {
+        setApiKeyReveal({
+          apiKey: result.apiKey,
+          apiKeyName: result.apiKeyName || 'Discord Activity',
+          expiresAt: result.expiresAt ?? null,
+          pishockUsername: result.pishockUsername ?? linkConfirm.pishockUsername ?? null,
+        });
+      } else {
+        await continueAfterApiKeyReveal(token);
+      }
+    } catch (err) {
+      setLinkError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setConfirmBusy(false);
+    }
+  };
+
+  const continueAfterApiKeyReveal = async (accessToken: string) => {
+    setLinkError(null);
+    setSetupDevicesReady(false);
+    setSetupSharePhase(true);
+    try {
+      const meData = await refreshMe(accessToken);
       if (meData.pishockLinked) {
-        await refreshDevices(token);
-        await refreshLogs(token).catch(() => undefined);
+        await refreshDevices(accessToken);
+        await refreshLogs(accessToken).catch(() => undefined);
+        await loadSettingsRef.current?.();
+        await refreshQueue(accessToken);
+        setApiKeyReveal(null);
         setSetupDevicesReady(true);
       } else {
         setSetupSharePhase(false);
@@ -1000,14 +1435,13 @@ export function App() {
       setSetupSharePhase(false);
       setSetupDevicesReady(false);
       setLinkError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setConfirmBusy(false);
     }
   };
 
   const openLinkFlow = () => {
     if (!me) return;
     setLinkError(null);
+    setManualLinkError(null);
     const prefs = loadSetupPrefs(me.user.id);
     if (!prefs.seen) {
       setSetupPhase(true);
@@ -1047,10 +1481,31 @@ export function App() {
     }
   };
 
+  const submitManualApiKey = async (input: { username: string; apiKey: string }) => {
+    if (!token) return;
+    abortLinkPoll();
+    setManualLinkBusy(true);
+    setManualLinkError(null);
+    setLinkError(null);
+    try {
+      await apiFetch('/pishock/session/api-key', token, {
+        method: 'POST',
+        body: JSON.stringify(input),
+      });
+      setOverlay(null);
+      setLoginUrl(null);
+      setLinking(false);
+      setLinkConfirm(null);
+      await continueAfterApiKeyReveal(token);
+    } catch (err) {
+      setManualLinkError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setManualLinkBusy(false);
+    }
+  };
+
   const handleReloginNeeded = async () => {
-    setMe((prev) => (prev ? { ...prev, pishockLinked: false, pishockUserId: null } : prev));
-    setDevices(null);
-    setLoginUrl(null);
+    unlinkRejectedPiShock();
   };
 
   const requirePiShockLink = (reason: string) => {
@@ -1109,21 +1564,49 @@ export function App() {
         });
       }
       await refreshLogs(token).catch(() => undefined);
+      const sentId = Number(input.shockerId);
+      if (Number.isFinite(sentId) && sentId > 0) {
+        setLivePausedIds((prev) => {
+          if (!prev.has(sentId)) return prev;
+          const next = new Set(prev);
+          next.delete(sentId);
+          return next;
+        });
+      }
     } catch (err) {
       if (err instanceof ApiError && err.code === 'PISHOCK_RELOGIN') {
         await handleReloginNeeded();
-        requirePiShockLink('PiShock session expired — link again to control your own devices.');
+        requirePiShockLink('PiShock API key expired — link again to control your own devices.');
       } else if (err instanceof ApiError && err.code === 'EMERGENCY_STOP') {
         setActionError('Emergency stop is engaged — owner must release STOP');
         if (token) void refreshParticipantStatus(token, participants, true).catch(() => undefined);
       } else if (err instanceof ApiError && err.code === 'STAR_ONLY') {
         setActionError('They only accept commands from starred people');
         if (token) void refreshParticipantStatus(token, participants, true).catch(() => undefined);
+      } else if (err instanceof ApiError && err.code === 'QUEUE_HALTED') {
+        setActionError('Their queue is closed to new commands');
+        if (token) void refreshParticipantStatus(token, participants, true).catch(() => undefined);
       } else if (
         err instanceof ApiError &&
         (err.code === 'QUEUE_SENDER_FULL' || err.code === 'QUEUE_FULL')
       ) {
         setActionError(err.message);
+      } else if (err instanceof ApiError && err.code === 'PISHOCK_PAUSED') {
+        const pausedId = Number(input.shockerId);
+        if (Number.isFinite(pausedId) && pausedId > 0) {
+          setLivePausedIds((prev) => {
+            const next = new Set(prev);
+            next.add(pausedId);
+            return next;
+          });
+        }
+        setActionError(
+          'This shocker is paused on PiShock. Controls stay off until it is unpaused there.',
+        );
+        void refreshDevices(token).catch(() => undefined);
+        if (participantsRef.current.length) {
+          void refreshParticipantStatus(token, participantsRef.current, true).catch(() => undefined);
+        }
       } else {
         setActionError(err instanceof Error ? err.message : String(err));
       }
@@ -1146,6 +1629,7 @@ export function App() {
           : prev.maxPerSender,
       starOnly: typeof result.starOnly === 'boolean' ? result.starOnly : prev.starOnly,
       paused: typeof result.paused === 'boolean' ? result.paused : prev.paused,
+      halted: typeof result.halted === 'boolean' ? result.halted : prev.halted,
       active: result.active !== undefined ? result.active : prev.active,
       waiting: result.waiting !== undefined ? result.waiting : prev.waiting,
     }));
@@ -1179,6 +1663,23 @@ export function App() {
       const result = await apiFetch<QueueState & { ok: boolean }>('/queue/pause', token, {
         method: 'POST',
         body: JSON.stringify({ paused }),
+      });
+      applyQueueState({ ...result, enabled: true });
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setQueueBusy(false);
+    }
+  };
+
+  const setQueueHalted = async (halted: boolean) => {
+    if (!token) return;
+    setQueueBusy(true);
+    setActionError(null);
+    try {
+      const result = await apiFetch<QueueState & { ok: boolean }>('/queue/halt', token, {
+        method: 'POST',
+        body: JSON.stringify({ halted }),
       });
       applyQueueState({ ...result, enabled: true });
     } catch (err) {
@@ -1273,6 +1774,7 @@ export function App() {
 
   const setEmergencyStop = async (input: {
     shockerId: number;
+    shockerIds?: number[];
     clientId?: number | string;
     engaged: boolean;
   }) => {
@@ -1284,18 +1786,23 @@ export function App() {
     setBusy(true);
     setActionError(null);
     try {
-      const result = await apiFetch<{ emergencyStopShockerIds: number[] }>(
-        '/emergency-stop',
-        token,
-        {
-          method: 'PUT',
-          body: JSON.stringify(input),
-        },
-      );
+      const result = await apiFetch<{
+        emergencyStopShockerIds: number[];
+      }>('/emergency-stop', token, {
+        method: 'PUT',
+        body: JSON.stringify({
+          shockerId: input.shockerId,
+          shockerIds: input.shockerIds,
+          clientId: input.clientId,
+          engaged: input.engaged,
+        }),
+      });
+      emergencyStopWriteGenRef.current += 1;
       setMe((prev) =>
         prev ? { ...prev, emergencyStopShockerIds: result.emergencyStopShockerIds } : prev,
       );
       participantStatusCache = { key: '', fetchedAt: 0, map: {} };
+      await refreshDevices(token).catch(() => undefined);
       await refreshLogs(token).catch(() => undefined);
       if (participants.length) {
         await refreshParticipantStatus(token, participants, true).catch(() => undefined);
@@ -1303,7 +1810,7 @@ export function App() {
     } catch (err) {
       if (err instanceof ApiError && err.code === 'PISHOCK_RELOGIN') {
         await handleReloginNeeded();
-        requirePiShockLink('PiShock session expired — link again to control your own devices.');
+        requirePiShockLink('PiShock API key expired — link again to control your own devices.');
       } else {
         setActionError(err instanceof Error ? err.message : String(err));
       }
@@ -1315,21 +1822,7 @@ export function App() {
   const loadAvailability = useCallback(async () => {
     if (!token) throw new Error('Not authenticated');
     return apiFetch<{
-      shares: Array<{
-        shockerId: number;
-        shockerName: string;
-        hubClientId?: string | null;
-        enabled: boolean;
-        paused: boolean;
-        deviceMaxIntensity?: number;
-        deviceMaxDurationMs?: number;
-        maxIntensity: number;
-        maxDurationMs: number;
-        canShock: boolean;
-        canVibrate: boolean;
-        canBeep: boolean;
-        canHold: boolean;
-      }>;
+      shares: ActivityShareConfig[];
       bannedDiscordUserIds: string[];
       available: boolean;
       personal?: PersonalLimits;
@@ -1338,21 +1831,7 @@ export function App() {
 
   const saveAvailability = useCallback(
     async (payload: {
-      shares: Array<{
-        shockerId: number;
-        shockerName: string;
-        hubClientId?: string | null;
-        enabled: boolean;
-        paused: boolean;
-        deviceMaxIntensity?: number;
-        deviceMaxDurationMs?: number;
-        maxIntensity: number;
-        maxDurationMs: number;
-        canShock: boolean;
-        canVibrate: boolean;
-        canBeep: boolean;
-        canHold: boolean;
-      }>;
+      shares: ActivityShareConfig[];
       bannedDiscordUserIds: string[];
     }) => {
       if (!token) throw new Error('Not authenticated');
@@ -1375,16 +1854,28 @@ export function App() {
     setLinkError(null);
   }, []);
 
-  const applyDiscordShareLimits = useCallback((shares: ShareLimitRow[]) => {
-    const next: Record<number, { enabled: boolean; maxIntensity: number; maxDurationMs: number }> =
-      {};
-    for (const row of shares) {
-      next[row.shockerId] = {
-        enabled: row.enabled,
-        maxIntensity: row.maxIntensity,
-        maxDurationMs: row.maxDurationMs,
-      };
+  const startDiscordSetupRedo = useCallback(async () => {
+    if (!token || !me?.pishockLinked) return;
+    setOverlay(null);
+    setLinkError(null);
+    setSetupShareBusy(false);
+    setSetupDevicesReady(false);
+    setSetupShareKey((k) => k + 1);
+    setSetupSharePhase(true);
+    try {
+      await refreshDevices(token);
+      await loadSettingsRef.current?.();
+      await refreshQueue(token);
+      setSetupDevicesReady(true);
+    } catch (err) {
+      setLinkError(err instanceof Error ? err.message : String(err));
+      setSetupDevicesReady(false);
     }
+  }, [token, me?.pishockLinked, refreshDevices, refreshQueue]);
+
+  const applyDiscordShareLimits = useCallback((shares: ShareLimitRow[]) => {
+    const next: Record<number, ShareLimitRow> = {};
+    for (const row of shares) next[row.shockerId] = row;
     setDiscordShareLimits(next);
   }, []);
 
@@ -1397,6 +1888,7 @@ export function App() {
     applyDiscordShareLimits(data.shares);
     return data;
   }, [token, applyDiscordShareLimits]);
+  loadSettingsRef.current = loadSettings;
 
   const saveSettings = useCallback(
     async (payload: { personal: PersonalLimits; shares: ShareLimitRow[] }) => {
@@ -1429,16 +1921,28 @@ export function App() {
           shockerId: s.shockerId,
           shockerName: s.shockerName,
           hubClientId: s.hubClientId ?? null,
+          hubName: s.hubName ?? null,
           enabled: s.enabled,
           paused: s.paused,
           deviceMaxIntensity: s.deviceMaxIntensity ?? s.maxIntensity,
           deviceMaxDurationMs: s.deviceMaxDurationMs ?? s.maxDurationMs,
+          minIntensity: s.minIntensity ?? 1,
           maxIntensity: s.maxIntensity,
+          minDurationMs: s.minDurationMs ?? 16,
           maxDurationMs: s.maxDurationMs,
+          vibMinIntensity: s.vibMinIntensity ?? s.minIntensity ?? 1,
+          vibMaxIntensity: s.vibMaxIntensity ?? s.maxIntensity,
+          vibMinDurationMs: s.vibMinDurationMs ?? s.minDurationMs ?? 16,
+          vibMaxDurationMs: s.vibMaxDurationMs ?? s.maxDurationMs,
+          beepMinIntensity: s.beepMinIntensity ?? s.minIntensity ?? 1,
+          beepMaxIntensity: s.beepMaxIntensity ?? s.maxIntensity,
+          beepMinDurationMs: s.beepMinDurationMs ?? s.minDurationMs ?? 16,
+          beepMaxDurationMs: s.beepMaxDurationMs ?? s.maxDurationMs,
           canShock: s.canShock,
           canVibrate: s.canVibrate,
           canBeep: s.canBeep,
           canHold: s.canHold,
+          requiredWarningLevel: s.requiredWarningLevel ?? 'none',
         }));
         await saveSettings({ personal: result.personal, shares });
         if (result.queue && token) {
@@ -1479,13 +1983,25 @@ export function App() {
         online: friendShockers.length > 0 && !friendBlocked,
         lastSeen: friendBlocked
           ? 'You are blocked'
-          : friendEStop
+          : friendAllEStop
             ? 'Emergency stop armed'
-            : friendShockers.length > 0
-              ? 'Activity share'
-              : selectedTargetId
-                ? 'No shockers shared'
-                : 'Select a participant',
+            : friendAllPaused
+              ? 'Paused on PiShock'
+            : friendStarBlocked
+              ? 'Stars only — ask them to star you'
+              : friendQueueHalted
+                ? 'Queue closed to new commands'
+                : friendQueueAccessLocked
+                  ? 'Every selected person is restricted'
+                  : friendQueuePaused
+                    ? 'Queue paused — you can still join'
+                  : friendStarred
+                    ? 'You are starred'
+                    : friendShockers.length > 0
+                      ? 'Activity share'
+                      : selectedTargetId
+                        ? 'No shockers shared'
+                        : 'Select a participant',
       };
     }
     if (!me?.pishockLinked) {
@@ -1552,10 +2068,34 @@ export function App() {
     );
   }
 
+  if (apiKeyReveal) {
+    return (
+      <ApiKeyRevealPanel
+        apiKey={apiKeyReveal.apiKey}
+        apiKeyName={apiKeyReveal.apiKeyName}
+        expiresAt={apiKeyReveal.expiresAt}
+        pishockUsername={apiKeyReveal.pishockUsername}
+        error={linkError}
+        onExit={() => {
+          setApiKeyReveal(null);
+          finishSetupShare();
+        }}
+        onContinue={() => {
+          if (!token) {
+            setApiKeyReveal(null);
+            return;
+          }
+          void continueAfterApiKeyReveal(token);
+        }}
+      />
+    );
+  }
+
   if (linkConfirm) {
     return (
       <LinkConfirmPanel
         pishockUserId={linkConfirm.pishockUserId}
+        pishockUsername={linkConfirm.pishockUsername}
         hubNames={linkConfirm.hubNames}
         discordName={me.user.global_name || me.user.username}
         busy={confirmBusy}
@@ -1568,15 +2108,41 @@ export function App() {
 
   if (setupSharePhase) {
     const ownedForSetup = ownedAndShared.filter((s) => s.owned);
+    const savedShareRows = Object.values(discordShareLimits);
+    const initialSelectedIds =
+      savedShareRows.length === 0
+        ? undefined
+        : savedShareRows.filter((row) => row.enabled).map((row) => row.shockerId);
     return (
       <SetupDiscordShareScreen
+        key={setupShareKey}
         shockers={ownedForSetup}
         initialPersonal={personalLimits}
+        initialSelectedIds={initialSelectedIds}
+        initialShares={savedShareRows}
+        initialQueue={{
+          enabled: queueState.enabled,
+          progressMs: queueState.progressMs,
+          maxPerSender: queueState.maxPerSender,
+          starOnly: queueState.starOnly,
+        }}
         devicesReady={setupDevicesReady}
         busy={setupShareBusy}
         error={linkError}
         onComplete={saveSetupDiscordShares}
         onSkip={finishSetupShare}
+      />
+    );
+  }
+
+  if (me.pishockLinked && defaultMenuPrompt) {
+    const canDismissDefaultMenu =
+      Boolean(me.user?.id) && loadDefaultStartMenu(me.user.id) != null;
+    return (
+      <DefaultMenuPrompt
+        discordName={me.user.global_name || me.user.username}
+        onChoose={applyDefaultStartMenu}
+        onDismiss={canDismissDefaultMenu ? () => setDefaultMenuPrompt(false) : undefined}
       />
     );
   }
@@ -1615,7 +2181,7 @@ export function App() {
             ? 'Link PiShock to make your shockers available in this Discord activity.'
             : next === 'settings'
               ? 'Link PiShock to configure Activity Limits for your devices.'
-              : 'Link PiShock to manage your website shares and links.',
+              : 'Link PiShock to manage your share codes.',
         );
         return;
       }
@@ -1678,7 +2244,7 @@ export function App() {
                   This user blocked you. You cannot view or use any of their shockers.
                 </div>
               </div>
-            ) : friendEStop ? (
+            ) : friendAllEStop ? (
               <div className="access-banner access-banner--estop q-mt-sm q-pa-sm">
                 <div className="text-negative text-subtitle2">Emergency stop armed</div>
                 <div className="text-grey-4 text-body2">
@@ -1686,8 +2252,54 @@ export function App() {
                   disabled until they release it.
                 </div>
               </div>
+            ) : friendAllPaused ? (
+              <div className="access-banner access-banner--estop q-mt-sm q-pa-sm">
+                <div className="text-negative text-subtitle2">Paused on PiShock</div>
+                <div className="text-grey-4 text-body2">
+                  These shockers are paused on pishock.com. Controls stay off until they are
+                  unpaused there.
+                </div>
+              </div>
+            ) : friendStarBlocked ? (
+              <div className="access-banner access-banner--star-blocked q-mt-sm q-pa-sm">
+                <div className="text-warning text-subtitle2">Stars only</div>
+                <div className="text-grey-4 text-body2">
+                  They only accept commands from starred people. Ask them to star you — controls
+                  stay locked until then.
+                </div>
+              </div>
+            ) : friendQueueHalted ? (
+              <div className="access-banner access-banner--queue-halted q-mt-sm q-pa-sm">
+                <div className="text-warning text-subtitle2">Queue closed</div>
+                <div className="text-grey-4 text-body2">
+                  They halted new queue entries. Existing waiting commands are kept, but you
+                  cannot send anything new until they open the queue again.
+                </div>
+              </div>
+            ) : friendQueueAccessLocked ? (
+              <div className="access-banner access-banner--queue-halted q-mt-sm q-pa-sm">
+                <div className="text-warning text-subtitle2">Selection restricted</div>
+                <div className="text-grey-4 text-body2">
+                  Every selected person has a closed queue or only accepts starred people.
+                  Controls stay locked until the selection includes someone you can operate.
+                </div>
+              </div>
+            ) : friendQueuePaused ? (
+              <div className="access-banner access-banner--queue-paused q-mt-sm q-pa-sm">
+                <div className="text-warning text-subtitle2">Queue paused</div>
+                <div className="text-grey-4 text-body2">
+                  Processing is paused, but you can still send commands into their queue. They’ll
+                  run when the owner resumes.
+                </div>
+              </div>
             ) : null
           }
+          starredPanel={friendStarred}
+          starredPanelStarOnly={
+            selectedTargetIds.length > 0 &&
+            selectedTargetIds.every((id) => Boolean(participantStatus[id]?.queue?.starOnly))
+          }
+          forceControlsLocked={friendControlsLocked}
           safetyBanner={!pip ? <SafetyNoticeBar /> : null}
           friendsPanel={({
             multiShock,
@@ -1707,18 +2319,23 @@ export function App() {
               onToggleIndividualIntensity={onToggleIndividualIntensity}
               onSelect={(id) => {
                 if (!id) {
+                  friendsSelectionClearedRef.current = true;
                   setSelectedTargetIds([]);
                   return;
                 }
                 if (multiShock) {
-                  setSelectedTargetIds((prev) =>
-                    prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id],
-                  );
+                  setSelectedTargetIds((prev) => {
+                    const next = prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id];
+                    if (next.length === 0) friendsSelectionClearedRef.current = true;
+                    return next;
+                  });
                   return;
                 }
-                setSelectedTargetIds((prev) =>
-                  prev.length === 1 && prev[0] === id ? [] : [id],
-                );
+                setSelectedTargetIds((prev) => {
+                  const next = prev.length === 1 && prev[0] === id ? [] : [id];
+                  if (next.length === 0) friendsSelectionClearedRef.current = true;
+                  return next;
+                });
               }}
               onRefresh={() => token && refreshParticipants(token, true)}
               onTogglePriority={
@@ -1728,17 +2345,25 @@ export function App() {
               }
             />
           )}
-          onOperate={(input) =>
+          onOperate={(input) => {
+            const targetId =
+              typeof input.targetDiscordUserId === 'string'
+                ? input.targetDiscordUserId
+                : friendsMode
+                  ? selectedTargetId ?? undefined
+                  : undefined;
+            if (friendsMode && targetId) {
+              const queue = participantStatus[targetId]?.queue;
+              const starBlocked = Boolean(queue?.starOnly && !queue.starredByThem);
+              const queueHalted = Boolean(queue?.enabled && queue.halted);
+              if (starBlocked || queueHalted) return;
+            }
             operate({
               ...input,
-              targetDiscordUserId:
-                typeof input.targetDiscordUserId === 'string'
-                  ? input.targetDiscordUserId
-                  : friendsMode
-                    ? selectedTargetId
-                    : undefined,
-            })
-          }
+              targetDiscordUserId: targetId,
+            });
+          }}
+          estopShockers={ownedAndShared.filter((s) => s.owned)}
           onEmergencyStop={setEmergencyStop}
           onSelectHub={(hubId) => {
             if (!me.pishockLinked) return;
@@ -1857,7 +2482,7 @@ export function App() {
               [
                 ['availability', 'Available in Discord', 'mdi-account-check'],
                 ['settings', 'Activity Limits', 'mdi-tune'],
-                ['shares', 'Shares & links', 'mdi-share-variant'],
+                ['shares', 'Shares', 'mdi-share-variant'],
                 ['logs', 'Logs', 'mdi-message-text-clock'],
               ] as const
             )
@@ -1888,6 +2513,51 @@ export function App() {
                 </div>
               </button>
             ))}
+            {me.pishockLinked ? (
+              <button
+                type="button"
+                className="q-item q-item-type row no-wrap q-item--dark q-item--clickable cursor-pointer full-width bg-transparent text-left"
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  setOverlay(null);
+                  setDefaultMenuPrompt(true);
+                }}
+              >
+                <div className="q-item__section column q-item__section--avatar q-item__section--side justify-center">
+                  <i className="q-icon mdi mdi-view-dashboard-outline text-secondary" aria-hidden />
+                </div>
+                <div className="q-item__section column q-item__section--main justify-center">
+                  <div className="q-item__label text-grey-3">Default start menu</div>
+                  <div className="q-item__label q-item__label--caption text-grey-5">
+                    Discord Shockers or My Shockers on launch
+                  </div>
+                </div>
+              </button>
+            ) : null}
+            {me.pishockLinked ? (
+              <button
+                type="button"
+                className="q-item q-item-type row no-wrap q-item--dark q-item--clickable cursor-pointer full-width bg-transparent text-left"
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  void startDiscordSetupRedo();
+                }}
+              >
+                <div className="q-item__section column q-item__section--avatar q-item__section--side justify-center">
+                  <i className="q-icon mdi mdi-replay text-secondary" aria-hidden />
+                </div>
+                <div className="q-item__section column q-item__section--main justify-center">
+                  <div className="q-item__label text-grey-3">Redo Discord setup</div>
+                  <div className="q-item__label q-item__label--caption text-grey-5">
+                    Start again from shocker select
+                  </div>
+                </div>
+              </button>
+            ) : null}
             {me.pishockLinked ? (
               <button
                 type="button"
@@ -1949,6 +2619,10 @@ export function App() {
             onStart={startPiShockLogin}
             onOpen={() => undefined}
             onRefresh={() => undefined}
+            onManualSubmit={submitManualApiKey}
+            onClearManualError={() => setManualLinkError(null)}
+            manualBusy={manualLinkBusy}
+            manualError={manualLinkError}
           />
         </PsDialog>
 
@@ -1978,7 +2652,7 @@ export function App() {
             setOverlay(null);
             setSettingsFocusShockerId(null);
           }}
-          wide
+          fill
         >
           <ActivityLimitsSettings
             ownedShockers={ownedShockers}
@@ -1994,9 +2668,8 @@ export function App() {
           />
         </PsDialog>
 
-        <PsDialog open={overlay === 'shares'} title="Shares & links" onClose={() => setOverlay(null)} wide>
+        <PsDialog open={overlay === 'shares'} title="Shares" onClose={() => setOverlay(null)} wide>
           <SharesPanel
-            links={(devices?.links as Array<Record<string, unknown>>) ?? []}
             shared={
               Array.isArray(devices?.shared)
                 ? (devices?.shared as Array<Record<string, unknown>>)
@@ -2004,45 +2677,6 @@ export function App() {
             }
             shockers={ownedShockers.map((s) => ({ id: s.id, name: s.name }))}
             busy={busy}
-            onCreate={async (payload) => {
-              if (!token) return;
-              setBusy(true);
-              try {
-                await apiFetch('/links', token, { method: 'POST', body: JSON.stringify(payload) });
-                await refreshDevices(token);
-              } catch (err) {
-                setActionError(err instanceof Error ? err.message : String(err));
-              } finally {
-                setBusy(false);
-              }
-            }}
-            onPause={async (linkId, pauseState) => {
-              if (!token) return;
-              setBusy(true);
-              try {
-                await apiFetch('/pause', token, {
-                  method: 'POST',
-                  body: JSON.stringify({ linkId, pauseState }),
-                });
-                await refreshDevices(token);
-              } catch (err) {
-                setActionError(err instanceof Error ? err.message : String(err));
-              } finally {
-                setBusy(false);
-              }
-            }}
-            onDelete={async (linkId) => {
-              if (!token) return;
-              setBusy(true);
-              try {
-                await apiFetch(`/links/${linkId}`, token, { method: 'DELETE' });
-                await refreshDevices(token);
-              } catch (err) {
-                setActionError(err instanceof Error ? err.message : String(err));
-              } finally {
-                setBusy(false);
-              }
-            }}
             onCreateShare={async (shockerId) => {
               if (!token) return;
               setBusy(true);
@@ -2093,12 +2727,14 @@ export function App() {
                 starOnly: queueState.starOnly,
               }}
               paused={queueState.paused}
+              halted={queueState.halted}
               active={queueState.active}
               waiting={queueState.waiting}
               busy={queueBusy}
               onClose={() => setQueueOpen(false)}
               onSettingsChange={(patch) => void patchQueueSettings(patch)}
               onTogglePaused={(paused) => void setQueuePaused(paused)}
+              onToggleHalted={(halted) => void setQueueHalted(halted)}
               onSkip={() => void skipQueue()}
               onClear={() => void clearQueue()}
               onRemove={(itemId) => void removeQueueItem(itemId)}
@@ -2157,6 +2793,7 @@ export function App() {
                 count={queueState.waiting.length}
                 enabled={queueState.enabled}
                 paused={queueState.paused}
+                halted={queueState.halted}
                 active={Boolean(queueState.active)}
                 onClick={() => setQueueOpen((open) => !open)}
               />
@@ -2265,11 +2902,46 @@ function collectClientIds(devices: DevicesResponse): string[] {
   return [...ids];
 }
 
+function pauseRowsFromDevices(devices: DevicesResponse): Array<Record<string, unknown>> {
+  const shared = Array.isArray(devices.shared)
+    ? devices.shared
+    : devices.shared && typeof devices.shared === 'object'
+      ? Object.values(devices.shared as Record<string, unknown>).flatMap((v) =>
+          Array.isArray(v) ? v : [v],
+        )
+      : [];
+  return [...(devices.shockers ?? []), ...(shared as Array<Record<string, unknown>>)];
+}
+
+function dropResolvedPause(
+  live: Set<number>,
+  rows: Array<Record<string, unknown>>,
+): Set<number> {
+  if (live.size === 0) return live;
+  const next = new Set(live);
+  for (const row of rows) {
+    const id = Number(row.ShockerId ?? row.shockerId ?? row.Id ?? row.id);
+    if (!Number.isFinite(id)) continue;
+    if (isPiShockRowPaused(row) || isPiShockRowExplicitlyUnpaused(row)) next.delete(id);
+  }
+  return next.size === live.size ? live : next;
+}
+
+function rowIsPaused(
+  row: Record<string, unknown>,
+  id: number,
+  livePausedIds: Set<number>,
+): boolean {
+  if (livePausedIds.has(id)) return true;
+  return isPiShockRowPaused(row);
+}
+
 function normalizeShockers(
   devices: DevicesResponse | null,
   online: Record<string, boolean>,
   personal: PersonalLimits,
   emergencyStopIds: Set<number>,
+  livePausedIds: Set<number>,
 ): ShockerView[] {
   if (!devices) return [];
   const hubNameByClient = new Map<string, string>();
@@ -2291,13 +2963,41 @@ function normalizeShockers(
     const deviceMaxDuration = maxDurationMs(s);
     const activityMaxIntensity = Math.min(deviceMaxIntensity, personal.activityMaxIntensity);
     const activityMaxDuration = Math.min(deviceMaxDuration, personal.activityMaxDurationMs);
+    const activityMinIntensity = Math.max(
+      1,
+      Math.min(activityMaxIntensity, personal.activityMinIntensity),
+    );
+    const activityMinDuration = Math.max(
+      16,
+      Math.min(activityMaxDuration, personal.activityMinDurationMs),
+    );
+    const vibMaxIntensity = Math.min(deviceMaxIntensity, personal.activityVibMaxIntensity);
+    const vibMinIntensity = Math.max(
+      1,
+      Math.min(vibMaxIntensity, personal.activityVibMinIntensity),
+    );
+    const vibMaxDuration = Math.min(deviceMaxDuration, personal.activityVibMaxDurationMs);
+    const vibMinDuration = Math.max(
+      16,
+      Math.min(vibMaxDuration, personal.activityVibMinDurationMs),
+    );
+    const beepMaxIntensity = Math.min(deviceMaxIntensity, personal.activityBeepMaxIntensity);
+    const beepMinIntensity = Math.max(
+      1,
+      Math.min(beepMaxIntensity, personal.activityBeepMinIntensity),
+    );
+    const beepMaxDuration = Math.min(deviceMaxDuration, personal.activityBeepMaxDurationMs);
+    const beepMinDuration = Math.max(
+      16,
+      Math.min(beepMaxDuration, personal.activityBeepMinDurationMs),
+    );
     return {
       id,
       name: String(s.Name ?? s.name ?? `Shocker ${id}`),
       hubName: clientKey ? hubNameByClient.get(clientKey) : undefined,
       clientId: clientKey || undefined,
       owned: true,
-      paused: Boolean(s.Paused ?? s.paused),
+      paused: rowIsPaused(s, id, livePausedIds),
       canShock: true,
       canVibrate: true,
       canBeep: true,
@@ -2305,10 +3005,23 @@ function normalizeShockers(
       canPause: Boolean(s.CanPause ?? s.canPause ?? false),
       deviceMaxIntensity,
       deviceMaxDuration,
+      activityMinIntensity,
       activityMaxIntensity,
+      activityMinDuration,
       activityMaxDuration,
+      minIntensity: activityMinIntensity,
       maxIntensity: activityMaxIntensity,
+      minDuration: activityMinDuration,
       maxDuration: activityMaxDuration,
+      vibMinIntensity,
+      vibMaxIntensity,
+      vibMinDuration,
+      vibMaxDuration,
+      beepMinIntensity,
+      beepMaxIntensity,
+      beepMinDuration,
+      beepMaxDuration,
+      requiredWarningLevel: personal.activityRequiredWarningLevel,
       emergencyStop: emergencyStopIds.has(id),
       isV3: Boolean(s.IsV3 ?? s.isV3 ?? true),
       online: clientKey ? online[clientKey] === true : undefined,
@@ -2337,7 +3050,7 @@ function normalizeShockers(
       hubName: String(s.OwnedBy ?? s.ownedBy ?? ''),
       clientId: clientKey || undefined,
       owned: false,
-      paused: Boolean(s.Paused ?? s.paused ?? s.SharePaused ?? s.sharePaused),
+      paused: rowIsPaused(s, id, livePausedIds),
       shareCode: s.ShareCode != null ? String(s.ShareCode) : s.shareCode != null ? String(s.shareCode) : undefined,
       shareId: s.ShareId != null ? Number(s.ShareId) : s.shareId != null ? Number(s.shareId) : undefined,
       canShock: Boolean(s.CanShock ?? s.canShock ?? true),
@@ -2347,9 +3060,13 @@ function normalizeShockers(
       canPause: Boolean(s.CanPause ?? s.canPause ?? false),
       deviceMaxIntensity,
       deviceMaxDuration,
+      activityMinIntensity: 1,
       activityMaxIntensity: deviceMaxIntensity,
+      activityMinDuration: 16,
       activityMaxDuration: deviceMaxDuration,
+      minIntensity: 1,
       maxIntensity: deviceMaxIntensity,
+      minDuration: 16,
       maxDuration: deviceMaxDuration,
       isV3: Boolean(s.IsV3 ?? s.isV3 ?? true),
       online: clientKey ? online[clientKey] === true : undefined,

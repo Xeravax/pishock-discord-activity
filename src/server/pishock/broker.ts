@@ -1,6 +1,7 @@
 import WebSocket from 'ws';
 import { AGENT_NAME, PISHOCK_BROKER, ShockerOp } from '../../shared/constants.js';
-import type { PiShockCreds } from './client.js';
+import { ingestBrokerDeviceLog } from './broker-log-ingest.js';
+import { isPiShockApiKeyRejected, redactPiShockSecrets, type PiShockCreds } from './client.js';
 
 export type BrokerEvent =
   | { type: 'online'; clientId: string; online: boolean; at: number }
@@ -18,10 +19,39 @@ type BrokerSession = {
   lastSeenAt: Map<string, number>;
   reconnectTimer?: NodeJS.Timeout;
   idleTimer?: NodeJS.Timeout;
+  logCapture?: Subscriber;
+  logCaptureTouchAt?: number;
+  logCaptureIdleTimer?: NodeJS.Timeout;
 };
 
 const sessions = new Map<string, BrokerSession>();
 const IDLE_TEARDOWN_MS = 90_000;
+/** Keep `-log` capture warm between Discord activity polls without holding forever. */
+const LOG_CAPTURE_IDLE_MS = 15 * 60 * 1000;
+
+/** PiShock's broker accepts credentials only on this query string. */
+function brokerUrl(creds: PiShockCreds): string {
+  return `${PISHOCK_BROKER}?Username=${encodeURIComponent(creds.username)}&ApiKey=${encodeURIComponent(creds.token)}`;
+}
+
+/** Swap credentials. A new token closes the old socket without letting its close clear a replacement. */
+function replaceSessionCreds(session: BrokerSession, creds: PiShockCreds): void {
+  const tokenChanged = session.creds.token !== creds.token;
+  session.creds = creds;
+  if (!tokenChanged) return;
+  if (session.reconnectTimer) {
+    clearTimeout(session.reconnectTimer);
+    session.reconnectTimer = undefined;
+  }
+  const old = session.ws;
+  session.ws = null;
+  if (!old) return;
+  try {
+    old.close();
+  } catch {
+    // ignore
+  }
+}
 
 export function subscribeBroker(
   discordUserId: string,
@@ -29,6 +59,10 @@ export function subscribeBroker(
   clientIds: string[],
   subscriber: Subscriber,
 ): () => void {
+  if (isPiShockApiKeyRejected(creds.token)) {
+    disconnectBroker(discordUserId);
+    return () => {};
+  }
   let session = sessions.get(discordUserId);
   if (!session) {
     session = {
@@ -41,7 +75,7 @@ export function subscribeBroker(
     };
     sessions.set(discordUserId, session);
   } else {
-    session.creds = creds;
+    replaceSessionCreds(session, creds);
   }
   clearIdleTimer(session);
   session.subscribers.add(subscriber);
@@ -87,6 +121,13 @@ function clearIdleTimer(session: BrokerSession) {
   }
 }
 
+function clearLogCaptureIdleTimer(session: BrokerSession) {
+  if (session.logCaptureIdleTimer) {
+    clearTimeout(session.logCaptureIdleTimer);
+    session.logCaptureIdleTimer = undefined;
+  }
+}
+
 function scheduleIdleTeardown(discordUserId: string) {
   const session = sessions.get(discordUserId);
   if (!session) return;
@@ -97,6 +138,85 @@ function scheduleIdleTeardown(discordUserId: string) {
     if (current.subscribers.size === 0) teardown(discordUserId);
   }, IDLE_TEARDOWN_MS);
   session.idleTimer.unref?.();
+}
+
+function scheduleLogCaptureIdle(discordUserId: string) {
+  const session = sessions.get(discordUserId);
+  if (!session?.logCapture) return;
+  clearLogCaptureIdleTimer(session);
+  session.logCaptureIdleTimer = setTimeout(() => {
+    stopLogCapture(discordUserId);
+  }, LOG_CAPTURE_IDLE_MS);
+  session.logCaptureIdleTimer.unref?.();
+}
+
+/**
+ * Keep a sticky broker subscriber that persists live `{clientId}-log` frames.
+ * PiShock website history is ephemeral — this is the maintained capture path.
+ */
+export function ensureLogCapture(
+  discordUserId: string,
+  creds: PiShockCreds,
+  clientIds: string[],
+) {
+  if (isPiShockApiKeyRejected(creds.token)) {
+    disconnectBroker(discordUserId);
+    return;
+  }
+  let session = sessions.get(discordUserId);
+  if (!session) {
+    session = {
+      ws: null,
+      creds,
+      clientIds: new Set(),
+      subscribers: new Set(),
+      online: new Map(),
+      lastSeenAt: new Map(),
+    };
+    sessions.set(discordUserId, session);
+  } else {
+    replaceSessionCreds(session, creds);
+  }
+
+  session.logCaptureTouchAt = Date.now();
+  clearIdleTimer(session);
+  addClientIds(session, clientIds);
+
+  if (!session.logCapture) {
+    const capture: Subscriber = (event) => {
+      if (event.type !== 'log') return;
+      void ingestBrokerDeviceLog(discordUserId, {
+        clientId: event.clientId,
+        payload: event.payload,
+        at: event.at,
+      }).catch((err) => {
+        console.warn(
+          '[broker] log ingest failed',
+          redactPiShockSecrets(err instanceof Error ? err.message : String(err)),
+        );
+      });
+    };
+    session.logCapture = capture;
+    session.subscribers.add(capture);
+  }
+
+  ensureConnected(discordUserId);
+  if (session.ws?.readyState === WebSocket.OPEN) {
+    subscribeTargets(session, [...session.clientIds]);
+  }
+  scheduleLogCaptureIdle(discordUserId);
+}
+
+export function stopLogCapture(discordUserId: string) {
+  const session = sessions.get(discordUserId);
+  if (!session?.logCapture) return;
+  clearLogCaptureIdleTimer(session);
+  session.subscribers.delete(session.logCapture);
+  session.logCapture = undefined;
+  session.logCaptureTouchAt = undefined;
+  if (session.subscribers.size === 0) {
+    scheduleIdleTeardown(discordUserId);
+  }
 }
 
 /**
@@ -265,6 +385,7 @@ function isPublishError(text: string): boolean {
 }
 
 function publishPayload(creds: PiShockCreds, payload: string): Promise<boolean> {
+  if (isPiShockApiKeyRejected(creds.token)) return Promise.resolve(false);
   return new Promise((resolve) => {
     let settled = false;
     const done = (ok: boolean) => {
@@ -279,7 +400,7 @@ function publishPayload(creds: PiShockCreds, payload: string): Promise<boolean> 
       resolve(ok);
     };
 
-    const url = `${PISHOCK_BROKER}?UserId=${encodeURIComponent(String(creds.userId))}&Token=${encodeURIComponent(creds.token)}`;
+    const url = brokerUrl(creds);
     const ws = new WebSocket(url);
     const timer = setTimeout(() => done(false), 8000);
 
@@ -298,7 +419,10 @@ function publishPayload(creds: PiShockCreds, payload: string): Promise<boolean> 
       }
     });
     ws.on('error', (err) => {
-      console.warn('[broker] publish socket error', err instanceof Error ? err.message : err);
+      console.warn(
+        '[broker] publish socket error',
+        redactPiShockSecrets(err instanceof Error ? err.message : String(err)),
+      );
       done(false);
     });
     ws.on('close', () => {
@@ -310,11 +434,15 @@ function publishPayload(creds: PiShockCreds, payload: string): Promise<boolean> 
 function ensureConnected(discordUserId: string) {
   const session = sessions.get(discordUserId);
   if (!session) return;
+  if (isPiShockApiKeyRejected(session.creds.token)) {
+    disconnectBroker(discordUserId);
+    return;
+  }
   if (session.ws && (session.ws.readyState === WebSocket.OPEN || session.ws.readyState === WebSocket.CONNECTING)) {
     return;
   }
 
-  const url = `${PISHOCK_BROKER}?UserId=${encodeURIComponent(String(session.creds.userId))}&Token=${encodeURIComponent(session.creds.token)}`;
+  const url = brokerUrl(session.creds);
   const ws = new WebSocket(url);
   session.ws = ws;
 
@@ -325,6 +453,8 @@ function ensureConnected(discordUserId: string) {
   });
 
   ws.on('message', (data) => {
+    // replaceSessionCreds detaches this socket before close; ignore its late frames.
+    if (session.ws !== ws) return;
     const text = data.toString();
     try {
       const parsed = JSON.parse(text) as Record<string, unknown>;
@@ -335,9 +465,10 @@ function ensureConnected(discordUserId: string) {
   });
 
   ws.on('close', () => {
+    if (session.ws !== ws) return;
     session.ws = null;
     broadcast(session, { type: 'status', message: 'broker disconnected', at: Date.now() });
-    if (session.subscribers.size > 0) {
+    if (session.subscribers.size > 0 && !isPiShockApiKeyRejected(session.creds.token)) {
       session.reconnectTimer = setTimeout(() => ensureConnected(discordUserId), 3000);
     }
   });
@@ -405,7 +536,10 @@ function handleBrokerMessage(session: BrokerSession, parsed: Record<string, unkn
       session.online.set(bare, true);
       session.lastSeenAt.set(bare, Date.now());
       broadcast(session, { type: 'online', clientId: bare, online: true, at: Date.now() });
-      broadcast(session, { type: 'log', clientId: bare, payload: parsed, at: Date.now() });
+      // Prefer unwrapped command body for ingest/UI; fall back to full frame.
+      const logPayload =
+        Object.keys(payload).length > 0 ? payload : (parsed as unknown);
+      broadcast(session, { type: 'log', clientId: bare, payload: logPayload, at: Date.now() });
       return;
     }
   }
@@ -463,12 +597,26 @@ function teardown(discordUserId: string) {
   if (!session) return;
   if (session.reconnectTimer) clearTimeout(session.reconnectTimer);
   clearIdleTimer(session);
+  clearLogCaptureIdleTimer(session);
+  session.logCapture = undefined;
+  session.subscribers.clear();
   try {
     session.ws?.close();
   } catch {
     // ignore
   }
   sessions.delete(discordUserId);
+}
+
+/** Drop the broker socket now. Used when the stored API key is rejected or unlinked. */
+export function disconnectBroker(discordUserId: string) {
+  teardown(discordUserId);
+}
+
+export function disconnectBrokerSessionsForToken(token: string) {
+  for (const [id, session] of [...sessions.entries()]) {
+    if (session.creds.token === token) teardown(id);
+  }
 }
 
 /** Close every PiShock broker socket so the process can exit on SIGTERM. */

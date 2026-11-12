@@ -42,6 +42,7 @@ export type RealtimeEvent =
       maxPerSender: number;
       starOnly: boolean;
       paused: boolean;
+      halted: boolean;
       active: {
         id: string;
         executorDiscordUserId: string;
@@ -106,7 +107,7 @@ export type RealtimeEvent =
 
 function wsUrl(): string {
   const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-  const api = apiBase(); // e.g. /.proxy/api
+  const api = apiBase(); // /api — Discord maps this and signs the upgrade
   const path = `${api}/ws`;
   return `${proto}//${window.location.host}${path}`;
 }

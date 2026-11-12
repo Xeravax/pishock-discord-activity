@@ -47,9 +47,10 @@ export function PiShockLinkingScreen({
               <span className="auth-boot__label">{label}</span>
             </div>
             <p className="auth-boot__hint">
-              This requests a PiShock <strong>authentication token</strong> (not an API key). Tokens
-              are encrypted in the database. Finish signing in in your browser, then return here —
-              we&apos;ll detect it automatically.
+              Finish signing in in your browser, then return here — we&apos;ll detect it
+              automatically. After you confirm the account, we create a <strong>named API key</strong>{' '}
+              (shown once) and store it encrypted. Unlinking removes the key from this app. The key
+              stays valid at PiShock until you revoke it there or PiShock rejects it.
             </p>
           </>
         )}

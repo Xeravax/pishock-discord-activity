@@ -6,27 +6,33 @@ export function QueueFab({
   count,
   enabled,
   paused,
+  halted,
   active,
   onClick,
 }: {
   count: number;
   enabled: boolean;
   paused: boolean;
+  halted?: boolean;
   active: boolean;
   onClick: () => void;
 }) {
   const badge = count > 99 ? '99+' : count > 0 ? String(count) : active ? '•' : null;
   const title = enabled
-    ? paused
-      ? 'Command queue (paused)'
-      : active || count > 0
-        ? `Command queue (${count} waiting)`
-        : 'Command queue'
+    ? halted
+      ? 'Command queue (closed)'
+      : paused
+        ? 'Command queue (paused)'
+        : active || count > 0
+          ? `Command queue (${count} waiting)`
+          : 'Command queue'
     : 'Command queue (off)';
   return (
     <button
       type="button"
-      className={`official-logs-fab queue-fab${enabled ? ' is-enabled' : ''}${paused ? ' is-paused' : ''}`}
+      className={`official-logs-fab queue-fab${enabled ? ' is-enabled' : ''}${paused ? ' is-paused' : ''}${
+        halted ? ' is-halted' : ''
+      }`}
       onClick={onClick}
       aria-label={title}
       title={title}
@@ -63,12 +69,14 @@ export type QueuePanelSettings = {
 type Props = {
   settings: QueuePanelSettings;
   paused: boolean;
+  halted: boolean;
   active: QueuePanelItem | null;
   waiting: QueuePanelItem[];
   busy?: boolean;
   onClose?: () => void;
   onSettingsChange: (patch: Partial<QueuePanelSettings>) => void;
   onTogglePaused: (paused: boolean) => void;
+  onToggleHalted: (halted: boolean) => void;
   onSkip: () => void;
   onClear: () => void;
   onRemove: (itemId: string) => void;
@@ -108,12 +116,14 @@ type PersonRow = {
 export function QueuePanel({
   settings,
   paused,
+  halted,
   active,
   waiting,
   busy = false,
   onClose,
   onSettingsChange,
   onTogglePaused,
+  onToggleHalted,
   onSkip,
   onClear,
   onRemove,
@@ -230,9 +240,25 @@ export function QueuePanel({
                 type="button"
                 className="q-btn q-btn-item non-selectable no-outline q-btn--outline q-btn--rectangle q-btn--dense"
                 disabled={busy}
+                title="Stop running the next item — people can still join the queue"
                 onClick={() => onTogglePaused(!paused)}
               >
                 {paused ? 'Resume' : 'Pause'}
+              </button>
+              <button
+                type="button"
+                className={`q-btn q-btn-item non-selectable no-outline q-btn--outline q-btn--rectangle q-btn--dense${
+                  halted ? ' text-warning' : ''
+                }`}
+                disabled={busy}
+                title={
+                  halted
+                    ? 'Open the queue to new commands'
+                    : 'Close the queue to new commands. Waiting operations continue.'
+                }
+                onClick={() => onToggleHalted(!halted)}
+              >
+                {halted ? 'Open queue' : 'Close queue'}
               </button>
               <button
                 type="button"
@@ -250,8 +276,24 @@ export function QueuePanel({
               >
                 Clear
               </button>
-              {paused ? <span className="text-warning text-caption">Paused</span> : null}
             </div>
+            {!halted && !paused ? (
+              <div className="text-caption text-grey-5 queue-panel-status-row">
+                Waiting operations continue.
+              </div>
+            ) : null}
+            {!halted && paused ? (
+              <div className="text-caption text-grey-5 queue-panel-status-row">
+                Waiting entries stay queued until you resume.
+              </div>
+            ) : null}
+            {paused || halted ? (
+              <div className="text-caption queue-panel-status-row">
+                {paused ? <span className="text-warning">Paused · processing stopped</span> : null}
+                {paused && halted ? <span className="text-grey-5"> · </span> : null}
+                {halted ? <span className="text-warning">Halted · no new entries</span> : null}
+              </div>
+            ) : null}
 
             <label className="queue-panel-progress">
               <span className="text-caption text-grey-5">Advance after</span>

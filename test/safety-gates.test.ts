@@ -17,6 +17,7 @@ import {
   clampDurationMs,
   clampIntensity,
   deviceMaxDurationMsOf,
+  nestLimitBand,
   OperatePolicyError,
   resolveOwnOperatePolicy,
   shareCodeOf,
@@ -26,6 +27,11 @@ import {
   type OperatePolicyDeps,
 } from '../src/server/operate-policy.js';
 import {
+  LIMIT_BAND_CONFLICT_MESSAGE,
+  nestBands,
+  personalBandsFromUser,
+} from '../src/server/limit-bands.js';
+import {
   assertProxyPayloadMatchesUser,
   ProxyAuthError,
   validateDiscordProxyHeaders,
@@ -33,14 +39,13 @@ import {
 import type { AppEnv } from '../src/server/env.js';
 import type { ControlSnapshot, PiShockCreds } from '../src/server/pishock/client.js';
 
-const CREDS: PiShockCreds = { userId: 1, token: 'test-token' };
+const CREDS: PiShockCreds = { userId: 1, username: 'test-user', token: 'test-token' };
 
 function emptySnapshot(overrides: Partial<ControlSnapshot> = {}): ControlSnapshot {
   return {
     hubs: [],
     shockers: [],
     shared: [],
-    links: [],
     ...overrides,
   };
 }
@@ -55,7 +60,9 @@ function shareRow(overrides: Partial<ActivitySharePolicyRow> = {}): ActivityShar
     deviceMaxDurationMs: 10_000,
     enabled: true,
     paused: false,
+    minIntensity: 1,
     maxIntensity: 50,
+    minDurationMs: 16,
     maxDurationMs: 5_000,
     canShock: true,
     canVibrate: true,
@@ -68,7 +75,9 @@ function shareRow(overrides: Partial<ActivitySharePolicyRow> = {}): ActivityShar
 function baseDeps(overrides: Partial<OperatePolicyDeps> = {}): OperatePolicyDeps {
   return {
     getPersonalActivityLimits: async () => ({
+      activityMinIntensity: 1,
       activityMaxIntensity: 100,
+      activityMinDurationMs: 16,
       activityMaxDurationMs: 15_000,
     }),
     fetchControlSnapshot: async () => emptySnapshot(),
@@ -290,18 +299,23 @@ describe('expects to happen — happy paths', () => {
   it('resolveOwnOperatePolicy returns own-shocker caps as the tighter of device and personal max', async () => {
     const deps = baseDeps({
       getPersonalActivityLimits: async () => ({
+        activityMinIntensity: 1,
         activityMaxIntensity: 60,
+        activityMinDurationMs: 16,
         activityMaxDurationMs: 8_000,
       }),
       fetchControlSnapshot: async () =>
         emptySnapshot({
-          shockers: [{ Id: 7, ClientId: 'hub-1', MaxIntensity: 80, MaxDuration: 10 }],
+          hubs: [{ ClientId: 'hub-1', Name: 'LivingRoom' }],
+          shockers: [{ Id: 7, Name: 'Collar', ClientId: 'hub-1', MaxIntensity: 80, MaxDuration: 10 }],
         }),
     });
     const policy = await resolveOwnOperatePolicy('caller-1', CREDS, { shockerId: 7 }, deps);
     assert.equal(policy.shockerId, 7);
+    assert.equal(policy.shockerName, 'Collar');
     assert.equal(policy.crossUser, false);
     assert.equal(policy.hubClientId, 'hub-1');
+    assert.equal(policy.hubName, 'LivingRoom');
     assert.equal(policy.maxIntensity, 60);
     assert.equal(policy.maxDurationMs, 8_000);
   });
@@ -346,6 +360,43 @@ describe('should refuse — must not proceed', () => {
       (err: unknown) =>
         err instanceof OperatePolicyError && err.status === 403 && err.code === 'BANNED',
     );
+  });
+
+  it('refuses cross-user operate when the owner shocker is paused and creds are available', async () => {
+    const deps = baseDeps({
+      findActivityShareByCode: async () => shareRow({ discordUserId: 'owner-1' }),
+      getConsent: async () => true,
+      loadOwnerPiShockCreds: async () => CREDS,
+      ownerShockerPauseBlocks: async (ownerId, creds, shockerId) => {
+        assert.equal(ownerId, 'owner-1');
+        assert.equal(creds, CREDS);
+        assert.equal(shockerId, 7);
+        return true;
+      },
+    });
+    await assert.rejects(
+      () => resolveOwnOperatePolicy('caller-2', CREDS, { shareCode: 'SHARECODE' }, deps),
+      (err: unknown) =>
+        err instanceof OperatePolicyError &&
+        err.status === 503 &&
+        err.code === 'PISHOCK_PAUSED',
+    );
+  });
+
+  it('does not query owner pause without owner credentials', async () => {
+    let checked = false;
+    const deps = baseDeps({
+      findActivityShareByCode: async () => shareRow({ discordUserId: 'owner-1' }),
+      getConsent: async () => true,
+      loadOwnerPiShockCreds: async () => null,
+      ownerShockerPauseBlocks: async () => {
+        checked = true;
+        return true;
+      },
+    });
+    const policy = await resolveOwnOperatePolicy('caller-2', CREDS, { shareCode: 'SHARECODE' }, deps);
+    assert.equal(checked, false);
+    assert.equal(policy.crossUser, true);
   });
 
   it('refuses own shocker when emergency stop is latched', async () => {
@@ -451,6 +502,99 @@ describe('should refuse — must not proceed', () => {
         err.message === 'Duration exceeds allowed maximum',
     );
     assert.doesNotThrow(() => assertWithinCeilings(40, 1000, 50, 5000));
+  });
+
+  it('assertWithinCeilings omitted intensity/duration use band min and band-bounded duration default', () => {
+    assert.doesNotThrow(() =>
+      assertWithinCeilings(undefined, undefined, 50, 5_000, 10, 16),
+    );
+    assert.doesNotThrow(() => assertWithinCeilings(undefined, undefined, 50, 200, 10, 16));
+    assert.throws(
+      () => assertWithinCeilings(5, 1_000, 50, 5_000, 10, 16),
+      (err: unknown) =>
+        err instanceof OperatePolicyError &&
+        err.status === 412 &&
+        err.code === 'INTENSITY_FLOOR',
+    );
+  });
+
+  it('nestLimitBand throws on empty intersection instead of collapsing min to max', () => {
+    assert.throws(
+      () =>
+        nestLimitBand({
+          mins: [40],
+          maxes: [20],
+          absMin: 1,
+          absMax: 100,
+        }),
+      (err: unknown) =>
+        err instanceof OperatePolicyError &&
+        err.code === 'LIMIT_CONFLICT' &&
+        err.status === 400 &&
+        err.message === LIMIT_BAND_CONFLICT_MESSAGE,
+    );
+    assert.deepEqual(
+      nestLimitBand({ mins: [10], maxes: [40], absMin: 1, absMax: 100 }),
+      { min: 10, max: 40 },
+    );
+  });
+
+  it('nestBands throws when stacked personal and share floors leave no range', () => {
+    assert.throws(
+      () =>
+        nestBands([
+          { minIntensity: 50, maxIntensity: 80, minDurationMs: 16, maxDurationMs: 5_000 },
+          { minIntensity: 1, maxIntensity: 30, minDurationMs: 16, maxDurationMs: 5_000 },
+        ]),
+      (err: unknown) =>
+        err instanceof OperatePolicyError && err.code === 'LIMIT_CONFLICT',
+    );
+  });
+
+  it('partial personal-limit overlay keeps omitted stored fields', () => {
+    // Mirrors setPersonalActivityLimits: only present input fields replace stored values.
+    const stored = {
+      activityMinIntensity: 10,
+      activityMaxIntensity: 80,
+      activityMinDurationMs: 100,
+      activityMaxDurationMs: 8_000,
+      activityVibMinIntensity: 5,
+      activityVibMaxIntensity: 60,
+      activityVibMinDurationMs: 50,
+      activityVibMaxDurationMs: 4_000,
+      activityBeepMinIntensity: 1,
+      activityBeepMaxIntensity: 40,
+      activityBeepMinDurationMs: 16,
+      activityBeepMaxDurationMs: 2_000,
+      activityRequiredWarningLevel: 'small',
+    };
+    const input: Partial<typeof stored> = { activityMaxIntensity: 55 };
+    const bands = personalBandsFromUser({
+      activityMinIntensity: input.activityMinIntensity ?? stored.activityMinIntensity,
+      activityMaxIntensity: input.activityMaxIntensity ?? stored.activityMaxIntensity,
+      activityMinDurationMs: input.activityMinDurationMs ?? stored.activityMinDurationMs,
+      activityMaxDurationMs: input.activityMaxDurationMs ?? stored.activityMaxDurationMs,
+      activityVibMinIntensity: input.activityVibMinIntensity ?? stored.activityVibMinIntensity,
+      activityVibMaxIntensity: input.activityVibMaxIntensity ?? stored.activityVibMaxIntensity,
+      activityVibMinDurationMs:
+        input.activityVibMinDurationMs ?? stored.activityVibMinDurationMs,
+      activityVibMaxDurationMs:
+        input.activityVibMaxDurationMs ?? stored.activityVibMaxDurationMs,
+      activityBeepMinIntensity:
+        input.activityBeepMinIntensity ?? stored.activityBeepMinIntensity,
+      activityBeepMaxIntensity:
+        input.activityBeepMaxIntensity ?? stored.activityBeepMaxIntensity,
+      activityBeepMinDurationMs:
+        input.activityBeepMinDurationMs ?? stored.activityBeepMinDurationMs,
+      activityBeepMaxDurationMs:
+        input.activityBeepMaxDurationMs ?? stored.activityBeepMaxDurationMs,
+      activityRequiredWarningLevel: stored.activityRequiredWarningLevel,
+    });
+    assert.equal(bands.shock.minIntensity, 10);
+    assert.equal(bands.shock.maxIntensity, 55);
+    assert.equal(bands.vibrate.maxIntensity, 60);
+    assert.equal(bands.beep.maxDurationMs, 2_000);
+    assert.equal(bands.requiredWarningLevel, 'small');
   });
 
   it('verifyOwnedClientId returns null for hubs not on the account', () => {

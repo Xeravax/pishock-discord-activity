@@ -55,10 +55,10 @@ import {
 import type { AppEnv } from '../src/server/env.js';
 import type { ControlSnapshot, PiShockCreds } from '../src/server/pishock/client.js';
 
-const CREDS: PiShockCreds = { userId: 1, token: 'test-token' };
+const CREDS: PiShockCreds = { userId: 1, username: 'test-user', token: 'test-token' };
 
 function emptySnapshot(overrides: Partial<ControlSnapshot> = {}): ControlSnapshot {
-  return { hubs: [], shockers: [], shared: [], links: [], ...overrides };
+  return { hubs: [], shockers: [], shared: [], ...overrides };
 }
 
 function shareRow(overrides: Partial<ActivitySharePolicyRow> = {}): ActivitySharePolicyRow {
@@ -71,7 +71,9 @@ function shareRow(overrides: Partial<ActivitySharePolicyRow> = {}): ActivityShar
     deviceMaxDurationMs: 10_000,
     enabled: true,
     paused: false,
+    minIntensity: 1,
     maxIntensity: 50,
+    minDurationMs: 16,
     maxDurationMs: 5_000,
     canShock: true,
     canVibrate: true,
@@ -84,7 +86,9 @@ function shareRow(overrides: Partial<ActivitySharePolicyRow> = {}): ActivityShar
 function baseDeps(overrides: Partial<OperatePolicyDeps> = {}): OperatePolicyDeps {
   return {
     getPersonalActivityLimits: async () => ({
+      activityMinIntensity: 1,
       activityMaxIntensity: 100,
+      activityMinDurationMs: 16,
       activityMaxDurationMs: 15_000,
     }),
     fetchControlSnapshot: async () => emptySnapshot(),
@@ -192,11 +196,22 @@ describe('refuse — operate policy bypasses', () => {
 
   it('cross-user caps ignore the executor personal activity limits', async () => {
     // Executor must not raise (or redefine) someone else's share ceiling via their own settings.
+    // Owner personal floors still nest into guest operate.
     const deps = baseDeps({
-      getPersonalActivityLimits: async () => ({
-        activityMaxIntensity: 1,
-        activityMaxDurationMs: 16,
-      }),
+      getPersonalActivityLimits: async (discordUserId) =>
+        discordUserId === 'caller-2'
+          ? {
+              activityMinIntensity: 1,
+              activityMaxIntensity: 1,
+              activityMinDurationMs: 16,
+              activityMaxDurationMs: 16,
+            }
+          : {
+              activityMinIntensity: 1,
+              activityMaxIntensity: 100,
+              activityMinDurationMs: 16,
+              activityMaxDurationMs: 15_000,
+            },
       findActivityShareByCode: async () =>
         shareRow({ maxIntensity: 50, maxDurationMs: 5_000, deviceMaxIntensity: 80 }),
     });
@@ -281,7 +296,9 @@ describe('refuse — operate policy bypasses', () => {
       { shockerId: 7 },
       baseDeps({
         getPersonalActivityLimits: async () => ({
+          activityMinIntensity: 1,
           activityMaxIntensity: 30,
+          activityMinDurationMs: 16,
           activityMaxDurationMs: 2_000,
         }),
         fetchControlSnapshot: async () =>
@@ -299,7 +316,9 @@ describe('refuse — operate policy bypasses', () => {
       { shockerId: 7 },
       baseDeps({
         getPersonalActivityLimits: async () => ({
+          activityMinIntensity: 1,
           activityMaxIntensity: 100,
+          activityMinDurationMs: 16,
           activityMaxDurationMs: 15_000,
         }),
         fetchControlSnapshot: async () =>
@@ -320,7 +339,9 @@ describe('refuse — operate policy bypasses', () => {
       { shockerId: 7 },
       baseDeps({
         getPersonalActivityLimits: async () => ({
+          activityMinIntensity: 1,
           activityMaxIntensity: 100,
+          activityMinDurationMs: 16,
           activityMaxDurationMs: 15_000,
         }),
         fetchControlSnapshot: async () =>
@@ -348,7 +369,9 @@ describe('refuse — operate policy bypasses', () => {
       { shareCode: 'SHARECODE' },
       baseDeps({
         getPersonalActivityLimits: async () => ({
+          activityMinIntensity: 1,
           activityMaxIntensity: 25,
+          activityMinDurationMs: 16,
           activityMaxDurationMs: 1_000,
         }),
         findActivityShareByCode: async () =>
@@ -429,6 +452,7 @@ describe('refuse — operate policy bypasses', () => {
         findActivityShareByCode: async () =>
           shareRow({
             hubClientId: 'trusted-hub',
+            hubName: 'Trusted Hub',
             maxIntensity: 33,
             canShock: false,
             canHold: false,
@@ -436,6 +460,7 @@ describe('refuse — operate policy bypasses', () => {
       }),
     );
     assert.equal(policy.hubClientId, 'trusted-hub');
+    assert.equal(policy.hubName, 'Trusted Hub');
     assert.equal(policy.maxIntensity, 33);
     assert.equal(policy.flags.canShock, false);
     assert.equal(policy.flags.canHold, false);
@@ -913,7 +938,9 @@ describe('refuse — share save / API disclosure', () => {
       deviceMaxDurationMs: 10_000,
       enabled: true,
       paused: false,
+      minIntensity: 1,
       maxIntensity: 40,
+      minDurationMs: 16,
       maxDurationMs: 2_000,
       canShock: true,
       canVibrate: true,
@@ -922,5 +949,20 @@ describe('refuse — share save / API disclosure', () => {
     });
     assert.equal(out.hasShareCode, true);
     assert.equal('shareCode' in out, false);
+  });
+
+  it('clampShareLimits nests mins under maxes and device ceilings', () => {
+    const caps = clampShareLimits({
+      deviceMaxIntensity: 40,
+      deviceMaxDurationMs: 2_000,
+      requestedMinIntensity: 20,
+      requestedMaxIntensity: 100,
+      requestedMinDurationMs: 500,
+      requestedMaxDurationMs: 15_000,
+    });
+    assert.equal(caps.minIntensity, 20);
+    assert.equal(caps.maxIntensity, 40);
+    assert.equal(caps.minDurationMs, 500);
+    assert.equal(caps.maxDurationMs, 2_000);
   });
 });

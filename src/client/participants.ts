@@ -11,12 +11,24 @@ export type ParticipantShockerStatus = {
   shockerId: number;
   shockerName: string;
   hubClientId?: string | null;
+  hubName?: string | null;
   /** PiShock device/API ceiling (red zone above this) */
   deviceMaxIntensity: number;
   deviceMaxDurationMs: number;
-  /** Discord Activity Limit (usable ceiling) */
+  /** Discord Activity Limit usable band (shock) */
+  minIntensity: number;
   maxIntensity: number;
+  minDurationMs: number;
   maxDurationMs: number;
+  vibMinIntensity?: number;
+  vibMaxIntensity?: number;
+  vibMinDurationMs?: number;
+  vibMaxDurationMs?: number;
+  beepMinIntensity?: number;
+  beepMaxIntensity?: number;
+  beepMinDurationMs?: number;
+  beepMaxDurationMs?: number;
+  requiredWarningLevel?: 'none' | 'small' | 'mid' | 'long';
   canShock: boolean;
   canVibrate: boolean;
   canBeep: boolean;
@@ -46,6 +58,10 @@ export type ParticipantStatus = {
     starOnly: boolean;
     starredByThem: boolean;
     canOperate: boolean;
+    /** Processing paused — you can still join the queue */
+    paused: boolean;
+    /** Closed to new entries — waiting items are kept */
+    halted: boolean;
     maxPerSender: number;
     progressMs: number;
   };
