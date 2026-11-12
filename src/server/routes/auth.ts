@@ -6,6 +6,7 @@ import {
   SAFETY_ACK_VERSION,
   validateConsentAcknowledgements,
 } from '../consent.js';
+import { softApiKeyProfile } from '../pishock/auth-api.js';
 import {
   clearConsent,
   getCommandQueueEnabled,
@@ -13,6 +14,12 @@ import {
   getPersonalActivityLimits,
   setConsent,
 } from '../session.js';
+
+const profileCache = new Map<
+  string,
+  { at: number; username: string | null; avatarUrl: string | null; bannerUrl: string | null }
+>();
+const PROFILE_CACHE_TTL_MS = 5 * 60 * 1000;
 
 export const authRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app, opts) => {
   app.post('/api/auth/discord', async (req, reply) => {
@@ -47,6 +54,38 @@ export const authRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app, opts)
       getEmergencyStopShockerIds(req.discordUser.id),
       getCommandQueueEnabled(req.discordUser.id),
     ]);
+
+    let pishockUsername: string | null = req.pishockCreds?.username ?? null;
+    let pishockAvatarUrl: string | null = null;
+    let pishockBannerUrl: string | null = null;
+
+    if (req.pishockCreds) {
+      const cacheKey = `${req.discordUser.id}:${req.pishockCreds.token.slice(0, 12)}`;
+      const hit = profileCache.get(cacheKey);
+      if (hit && Date.now() - hit.at < PROFILE_CACHE_TTL_MS) {
+        pishockUsername = hit.username ?? pishockUsername;
+        pishockAvatarUrl = hit.avatarUrl;
+        pishockBannerUrl = hit.bannerUrl;
+      } else {
+        try {
+          const profile = await softApiKeyProfile(req.pishockCreds.token, req.pishockCreds.userId);
+          if (profile) {
+            pishockUsername = profile.username || pishockUsername;
+            pishockAvatarUrl = profile.avatarUrl;
+            pishockBannerUrl = profile.bannerUrl;
+            profileCache.set(cacheKey, {
+              at: Date.now(),
+              username: pishockUsername,
+              avatarUrl: pishockAvatarUrl,
+              bannerUrl: pishockBannerUrl,
+            });
+          }
+        } catch {
+          // API key may not be allowed to read Images — omit avatar/banner.
+        }
+      }
+    }
+
     return {
       user: {
         id: req.discordUser.id,
@@ -59,6 +98,9 @@ export const authRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app, opts)
       safetyItems: SAFETY_ACK_ITEMS,
       pishockLinked: Boolean(req.pishockCreds),
       pishockUserId: req.pishockCreds?.userId ?? null,
+      pishockUsername,
+      pishockAvatarUrl,
+      pishockBannerUrl,
       personal,
       emergencyStopShockerIds,
       commandQueueEnabled,

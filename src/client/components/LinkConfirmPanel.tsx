@@ -4,6 +4,8 @@ import { PiShockAuthDisclaimer } from './PiShockAuthDisclaimer';
 type Props = {
   pishockUserId: number;
   pishockUsername?: string | null;
+  avatarUrl?: string | null;
+  bannerUrl?: string | null;
   hubNames: string[];
   discordName: string;
   busy?: boolean;
@@ -15,6 +17,8 @@ type Props = {
 export function LinkConfirmPanel({
   pishockUserId,
   pishockUsername,
+  avatarUrl,
+  bannerUrl,
   hubNames,
   discordName,
   busy,
@@ -22,6 +26,8 @@ export function LinkConfirmPanel({
   onConfirm,
   onCancel,
 }: Props) {
+  const hasShowcase = Boolean(avatarUrl || bannerUrl);
+
   return (
     <div className="auth-boot" role="dialog" aria-modal="true" aria-labelledby="link-confirm-title">
       <div className="auth-boot__glow" aria-hidden />
@@ -43,9 +49,8 @@ export function LinkConfirmPanel({
         <p className="auth-boot__hint">
           PiShock confirmed a successful login. Link it to{' '}
           <strong className="text-grey-3">{discordName}</strong> only if this is you. Confirming
-          creates a <strong>named API key</strong> (<strong>Discord Activity</strong>) used for
-          device control. Unlinking removes the key from this app. The key stays valid at PiShock
-          until you revoke it there or PiShock rejects it.
+          creates a <strong>7-day named API key</strong> used for device control. Unlinking removes
+          the key from this app. The key expires after 7 days or when you revoke it at PiShock.
         </p>
 
         {error ? (
@@ -55,7 +60,30 @@ export function LinkConfirmPanel({
           </div>
         ) : null}
 
-        <div className="auth-boot__account">
+        <div className={`auth-boot__account${hasShowcase ? ' auth-boot__account--profile' : ''}`}>
+          {hasShowcase ? (
+            <div className="auth-boot__profile-showcase" aria-hidden={!avatarUrl && !bannerUrl}>
+              <div
+                className="auth-boot__profile-banner"
+                style={bannerUrl ? { backgroundImage: `url(${bannerUrl})` } : undefined}
+              />
+              {avatarUrl ? (
+                <img
+                  className="auth-boot__profile-avatar"
+                  src={avatarUrl}
+                  alt=""
+                  width={72}
+                  height={72}
+                  decoding="async"
+                  referrerPolicy="no-referrer"
+                />
+              ) : (
+                <div className="auth-boot__profile-avatar auth-boot__profile-avatar--placeholder">
+                  <i className="q-icon mdi mdi-account" aria-hidden />
+                </div>
+              )}
+            </div>
+          ) : null}
           <div className="auth-boot__account-label">PiShock account</div>
           {pishockUsername ? (
             <div className="auth-boot__account-id">{pishockUsername}</div>

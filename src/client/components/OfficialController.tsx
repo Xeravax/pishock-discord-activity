@@ -83,6 +83,11 @@ type Props = {
   showLinkAccount?: boolean;
   /** Own hubs require a linked PiShock session */
   showOwnMode?: boolean;
+  /** Linked PiShock profile (from /Account when the API key can read Images) */
+  linkedAccount?: {
+    username?: string | null;
+    avatarUrl?: string | null;
+  } | null;
   onOperate: (input: OfficialOperateInput) => void;
   /** Owned shockers used by the All emergency-stop scope (not hub-filtered). */
   estopShockers?: ShockerView[];
@@ -99,6 +104,8 @@ type Props = {
   onOpenOwnShockers?: () => void;
   onOpenMenu?: () => void;
   onOpenLinkAccount?: () => void;
+  /** Opens account / menu when the linked-avatar button is pressed */
+  onOpenLinkedAccount?: () => void;
   /** Cog / SO control — open Activity Limits focused on this shocker */
   onOpenShockerSettings?: (shocker: ShockerView) => void;
   onShareShocker?: (shocker: ShockerView) => void;
@@ -362,6 +369,7 @@ export function OfficialController({
   emptyMessage = 'No shockers',
   showLinkAccount = false,
   showOwnMode = true,
+  linkedAccount = null,
   onOperate,
   estopShockers,
   onEmergencyStop,
@@ -370,6 +378,7 @@ export function OfficialController({
   onOpenOwnShockers,
   onOpenMenu,
   onOpenLinkAccount,
+  onOpenLinkedAccount,
   onOpenShockerSettings,
   onShareShocker,
   onPair,
@@ -989,6 +998,36 @@ export function OfficialController({
                   <span className="q-btn__content text-center col items-center q-anchor--skip justify-center row no-wrap">
                     <i className="q-icon on-left mdi mdi-link-variant" aria-hidden />
                     <span className="block">Link</span>
+                  </span>
+                </span>
+              </button>
+            ) : linkedAccount?.avatarUrl ? (
+              <button
+                type="button"
+                className="q-btn q-btn-item non-selectable no-outline q-ml-sm q-btn--standard q-btn--rectangle bg-dark text-secondary q-btn--actionable q-focusable q-hoverable q-btn--wrap q-btn--dense official-account-btn"
+                onClick={onOpenLinkedAccount ?? onOpenMenu}
+                title={
+                  linkedAccount.username
+                    ? `Linked as ${linkedAccount.username}`
+                    : 'Linked PiShock account'
+                }
+                aria-label={
+                  linkedAccount.username
+                    ? `Linked PiShock account ${linkedAccount.username}`
+                    : 'Linked PiShock account'
+                }
+              >
+                <span className="q-btn__wrapper col row q-anchor--skip">
+                  <span className="q-btn__content text-center col items-center q-anchor--skip justify-center row">
+                    <img
+                      className="official-account-btn__avatar"
+                      src={linkedAccount.avatarUrl}
+                      alt=""
+                      width={28}
+                      height={28}
+                      decoding="async"
+                      referrerPolicy="no-referrer"
+                    />
                   </span>
                 </span>
               </button>

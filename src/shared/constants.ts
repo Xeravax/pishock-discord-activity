@@ -21,5 +21,26 @@ export enum ShockerOp {
 
 export const RELAY_LOGIN_TIMEOUT_MS = 5 * 60 * 1000;
 
-/** Named PiShock API key created for this activity (does not replace other named keys). */
-export const PISHOCK_API_KEY_NAME = 'Discord Activity';
+/** Suffix for named PiShock API keys created by this activity. */
+export const PISHOCK_API_KEY_NAME_SUFFIX = 'Discord PiShock Controller';
+
+/** Created activity keys expire after 7 days (PiShock Expiry). */
+export const PISHOCK_API_KEY_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+
+/** @deprecated Use formatPiShockApiKeyName() — kept for older copy/tests. */
+export const PISHOCK_API_KEY_NAME = PISHOCK_API_KEY_NAME_SUFFIX;
+
+/** UTC stamp + controller suffix, e.g. `2026-11-12 14:16:32 UTC - Discord PiShock Controller`. */
+export function formatPiShockApiKeyName(at = new Date()): string {
+  const y = at.getUTCFullYear();
+  const mo = String(at.getUTCMonth() + 1).padStart(2, '0');
+  const d = String(at.getUTCDate()).padStart(2, '0');
+  const h = String(at.getUTCHours()).padStart(2, '0');
+  const mi = String(at.getUTCMinutes()).padStart(2, '0');
+  const s = String(at.getUTCSeconds()).padStart(2, '0');
+  return `${y}-${mo}-${d} ${h}:${mi}:${s} UTC - ${PISHOCK_API_KEY_NAME_SUFFIX}`;
+}
+
+export function defaultPiShockApiKeyExpiry(at = new Date()): Date {
+  return new Date(at.getTime() + PISHOCK_API_KEY_TTL_MS);
+}

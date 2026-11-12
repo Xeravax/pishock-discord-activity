@@ -22,13 +22,14 @@ export function PiShockAuthDisclaimer({ compact }: Props) {
       <ul className="pishock-auth-disclaimer__list">
         <li>
           After you sign in on PiShock&apos;s login page, confirming the link creates a{' '}
-          <strong>named API key</strong> (<strong>Discord Activity</strong>) and stores it
-          encrypted for control. You can also paste an existing username + API key instead.
+          <strong>7-day named API key</strong> (<strong>Discord PiShock Controller</strong>) and
+          stores it encrypted for control. You can also paste an existing username + API key
+          instead.
         </li>
         <li>
           The short-lived login session token is used only to create that key and is{' '}
-          <strong>not</strong> persisted. Unlinking removes the key from this app. The key stays
-          valid at PiShock until you revoke it there or PiShock rejects it.
+          <strong>not</strong> persisted. Unlinking removes the key from this app. Created keys
+          expire after 7 days, or sooner if you revoke them at PiShock or PiShock rejects them.
         </li>
         <li>
           Other people&apos;s devices are only controllable when{' '}

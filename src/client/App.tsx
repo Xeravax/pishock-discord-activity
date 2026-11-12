@@ -73,6 +73,9 @@ type MeResponse = {
   consent: boolean;
   pishockLinked: boolean;
   pishockUserId: number | null;
+  pishockUsername?: string | null;
+  pishockAvatarUrl?: string | null;
+  pishockBannerUrl?: string | null;
   personal?: PersonalLimits;
   emergencyStopShockerIds?: number[];
   commandQueueEnabled?: boolean;
@@ -120,6 +123,8 @@ type LegalView = null | 'terms' | 'privacy';
 type PendingLinkConfirm = {
   pishockUserId: number;
   pishockUsername?: string | null;
+  avatarUrl?: string | null;
+  bannerUrl?: string | null;
   hubNames: string[];
 };
 
@@ -434,12 +439,16 @@ export function App() {
               status: string;
               pishockUserId?: number;
               pishockUsername?: string | null;
+              avatarUrl?: string | null;
+              bannerUrl?: string | null;
               hubNames?: string[];
             }>('/pishock/login/status', authState.accessToken);
             if (loginStatus.status === 'confirm' && loginStatus.pishockUserId != null) {
               setLinkConfirm({
                 pishockUserId: loginStatus.pishockUserId,
                 pishockUsername: loginStatus.pishockUsername ?? null,
+                avatarUrl: loginStatus.avatarUrl ?? null,
+                bannerUrl: loginStatus.bannerUrl ?? null,
                 hubNames: loginStatus.hubNames ?? [],
               });
               report(100, 'Ready');
@@ -1318,6 +1327,8 @@ export function App() {
           error?: string;
           pishockUserId?: number;
           pishockUsername?: string | null;
+          avatarUrl?: string | null;
+          bannerUrl?: string | null;
           hubNames?: string[];
         }>('/pishock/login/status', accessToken);
         if (linkPollGenRef.current !== gen) return;
@@ -1330,6 +1341,8 @@ export function App() {
           setLinkConfirm({
             pishockUserId: status.pishockUserId,
             pishockUsername: status.pishockUsername ?? null,
+            avatarUrl: status.avatarUrl ?? null,
+            bannerUrl: status.bannerUrl ?? null,
             hubNames: status.hubNames ?? [],
           });
           return;
@@ -1400,7 +1413,7 @@ export function App() {
       if (result.apiKey) {
         setApiKeyReveal({
           apiKey: result.apiKey,
-          apiKeyName: result.apiKeyName || 'Discord Activity',
+          apiKeyName: result.apiKeyName || 'Discord PiShock Controller',
           expiresAt: result.expiresAt ?? null,
           pishockUsername: result.pishockUsername ?? linkConfirm.pishockUsername ?? null,
         });
@@ -2096,6 +2109,8 @@ export function App() {
       <LinkConfirmPanel
         pishockUserId={linkConfirm.pishockUserId}
         pishockUsername={linkConfirm.pishockUsername}
+        avatarUrl={linkConfirm.avatarUrl}
+        bannerUrl={linkConfirm.bannerUrl}
         hubNames={linkConfirm.hubNames}
         discordName={me.user.global_name || me.user.username}
         busy={confirmBusy}
@@ -2225,6 +2240,14 @@ export function App() {
           pinging={pinging}
           showLinkAccount={!me.pishockLinked}
           showOwnMode={me.pishockLinked}
+          linkedAccount={
+            me.pishockLinked
+              ? {
+                  username: me.pishockUsername ?? null,
+                  avatarUrl: me.pishockAvatarUrl ?? null,
+                }
+              : null
+          }
           emptyMessage={
             friendBlocked
               ? 'You are blocked by this user. You cannot view or use any of their shockers.'
@@ -2382,6 +2405,7 @@ export function App() {
           }}
           onOpenMenu={() => setOverlay('menu')}
           onOpenLinkAccount={openLinkFlow}
+          onOpenLinkedAccount={() => setOverlay('menu')}
           onOpenShockerSettings={(s) => {
             if (!me.pishockLinked || !s.owned) {
               requirePiShockLink(
@@ -2578,10 +2602,24 @@ export function App() {
                 }}
               >
                 <div className="q-item__section column q-item__section--avatar q-item__section--side justify-center">
-                  <i className="q-icon mdi mdi-link-off text-negative" aria-hidden />
+                  {me.pishockAvatarUrl ? (
+                    <img
+                      className="official-account-btn__avatar"
+                      src={me.pishockAvatarUrl}
+                      alt=""
+                      width={28}
+                      height={28}
+                      decoding="async"
+                      referrerPolicy="no-referrer"
+                    />
+                  ) : (
+                    <i className="q-icon mdi mdi-link-off text-negative" aria-hidden />
+                  )}
                 </div>
                 <div className="q-item__section column q-item__section--main justify-center">
-                  <div className="q-item__label text-negative">Unlink PiShock</div>
+                  <div className="q-item__label text-negative">
+                    Unlink{me.pishockUsername ? ` ${me.pishockUsername}` : ' PiShock'}
+                  </div>
                 </div>
               </button>
             ) : (

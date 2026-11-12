@@ -1,6 +1,7 @@
 import {
+  defaultPiShockApiKeyExpiry,
+  formatPiShockApiKeyName,
   PISHOCK_API,
-  PISHOCK_API_KEY_NAME,
   PISHOCK_AUTH,
 } from '../../shared/constants.js';
 import { PiShockApiError, type PiShockCreds } from './client.js';
@@ -14,11 +15,48 @@ export type PiShockAccountApiKey = {
   Generated: string;
 };
 
+/** ImageType 0 = profile, 1 = banner. ImageBase64 is often a CDN URL. */
+export type PiShockAccountImage = {
+  ImageId?: number;
+  ImageBase64?: string | null;
+  ImageType?: number;
+};
+
 export type PiShockAccount = {
   UserId: number;
   Username: string;
   APIKeys?: PiShockAccountApiKey[];
+  Images?: PiShockAccountImage[];
 };
+
+export type PiShockAccountProfile = {
+  username: string;
+  avatarUrl: string | null;
+  bannerUrl: string | null;
+};
+
+function normalizeAccountImageUrl(raw: string | null | undefined): string | null {
+  const value = String(raw ?? '').trim();
+  if (!value) return null;
+  if (/^https?:\/\//i.test(value)) return value;
+  if (value.startsWith('data:')) return value;
+  // Raw base64 payload — assume PNG when type is unknown.
+  if (/^[A-Za-z0-9+/=\s]+$/.test(value) && value.replace(/\s+/g, '').length > 64) {
+    return `data:image/png;base64,${value.replace(/\s+/g, '')}`;
+  }
+  return null;
+}
+
+export function profileFromAccount(account: PiShockAccount): PiShockAccountProfile {
+  const images = Array.isArray(account.Images) ? account.Images : [];
+  const avatar = images.find((img) => Number(img.ImageType) === 0);
+  const banner = images.find((img) => Number(img.ImageType) === 1);
+  return {
+    username: String(account.Username ?? '').trim(),
+    avatarUrl: normalizeAccountImageUrl(avatar?.ImageBase64),
+    bannerUrl: normalizeAccountImageUrl(banner?.ImageBase64),
+  };
+}
 
 function sessionHeaders(creds: SessionCreds, hasJsonBody: boolean): HeadersInit {
   const h: Record<string, string> = {
@@ -61,6 +99,62 @@ async function authRequest<T>(
 
 export async function getAccount(creds: SessionCreds): Promise<PiShockAccount> {
   return authRequest<PiShockAccount>(creds, 'GET', '/Account');
+}
+
+/** Soft profile for session login confirm (auth.pishock.com /Account). */
+export async function softAccountProfile(creds: SessionCreds): Promise<PiShockAccountProfile> {
+  try {
+    return profileFromAccount(await getAccount(creds));
+  } catch {
+    return { username: '', avatarUrl: null, bannerUrl: null };
+  }
+}
+
+/**
+ * Account fetch with a stored API key (api.pishock.com).
+ * Returns null when the key cannot read /Account (no images available).
+ */
+export async function getAccountWithApiKey(
+  apiKey: string,
+  userId?: number,
+): Promise<PiShockAccount | null> {
+  const key = apiKey.trim();
+  if (!key) return null;
+  const headerRes = await readAccount({
+    Accept: 'application/json',
+    'X-PiShock-Api-Key': key,
+  });
+  if (headerRes.ok) {
+    try {
+      return JSON.parse(headerRes.raw) as PiShockAccount;
+    } catch {
+      return null;
+    }
+  }
+  if (userId && Number.isFinite(userId) && userId > 0) {
+    const tokenRes = await readAccount({
+      Accept: 'application/json',
+      'X-PiShock-UserId': String(userId),
+      'X-PiShock-Token': key,
+    });
+    if (tokenRes.ok) {
+      try {
+        return JSON.parse(tokenRes.raw) as PiShockAccount;
+      } catch {
+        return null;
+      }
+    }
+  }
+  return null;
+}
+
+export async function softApiKeyProfile(
+  apiKey: string,
+  userId?: number,
+): Promise<PiShockAccountProfile | null> {
+  const account = await getAccountWithApiKey(apiKey, userId);
+  if (!account) return null;
+  return profileFromAccount(account);
 }
 
 function parseAccountJson(raw: string): { userId: number; username: string } | null {
@@ -201,15 +295,18 @@ export async function validateApiKey(input: {
 }
 
 /**
- * Create a named API key with no forced Expiry (lasts until revoked / rejected).
- * Optional expiry is only sent when the caller explicitly requests it.
+ * Create a named 7-day API key for this activity.
+ * Pass `expiry: null` only when intentionally creating a permanent key.
  */
 export async function createApiKey(
   creds: SessionCreds,
   opts: { name?: string; expiry?: Date | null } = {},
-): Promise<{ apiKey: string; apiKeyId: number | null; expiry: Date | null }> {
-  const name = opts.name?.trim() || PISHOCK_API_KEY_NAME;
-  const expiryIso = opts.expiry ? opts.expiry.toISOString() : null;
+): Promise<{ apiKey: string; apiKeyId: number | null; expiry: Date | null; name: string }> {
+  const mintedAt = new Date();
+  const name = opts.name?.trim() || formatPiShockApiKeyName(mintedAt);
+  const expiry =
+    opts.expiry === undefined ? defaultPiShockApiKeyExpiry(mintedAt) : opts.expiry;
+  const expiryIso = expiry ? expiry.toISOString() : null;
 
   const created = await authRequest<{ ApiKey?: string }>(creds, 'POST', '/Api', {
     ApiKeyName: name,
@@ -222,7 +319,7 @@ export async function createApiKey(
   }
 
   let apiKeyId: number | null = null;
-  let expiry: Date | null = opts.expiry ?? null;
+  let resolvedExpiry: Date | null = expiry;
   try {
     const account = await getAccount(creds);
     const match = (account.APIKeys ?? [])
@@ -232,7 +329,7 @@ export async function createApiKey(
       apiKeyId = match.ApiKeyId;
       if (match.Expiry) {
         const parsed = new Date(match.Expiry);
-        if (Number.isFinite(parsed.getTime())) expiry = parsed;
+        if (Number.isFinite(parsed.getTime())) resolvedExpiry = parsed;
       }
       console.info(
         `[pishock] created API key id=${apiKeyId} name=${name} expiry=${match.Expiry ?? 'null'}`,
@@ -242,7 +339,7 @@ export async function createApiKey(
     // Non-fatal — we still have the plaintext key to store.
   }
 
-  return { apiKey, apiKeyId, expiry };
+  return { apiKey, apiKeyId, expiry: resolvedExpiry, name };
 }
 
 export function apiKeyCreds(

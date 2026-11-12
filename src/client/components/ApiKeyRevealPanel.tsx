@@ -76,9 +76,9 @@ export function ApiKeyRevealPanel({
           ) : null}{' '}
           was created and stored encrypted for this activity. It stays hidden until you click it.
           Copy it now if you want a backup — we will not show it again. Unlinking removes the key
-          from this app. The key stays valid at PiShock until you revoke it there or PiShock
-          rejects it
-          {expiryLabel ? <> (PiShock reports expiry {expiryLabel})</> : null}.
+          from this app. This key expires after 7 days
+          {expiryLabel ? <> (PiShock reports {expiryLabel})</> : null}, or sooner if you revoke it
+          at PiShock or PiShock rejects it.
         </p>
 
         <div className="auth-boot__account auth-boot__api-key-box">

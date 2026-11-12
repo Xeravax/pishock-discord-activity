@@ -4,6 +4,7 @@ export type CreatedApiKeyDraft = {
   apiKey: string;
   apiKeyId: number | null;
   expiry: Date | null;
+  name: string | null;
 };
 
 export type PendingPiShockConfirm = {
@@ -11,12 +12,15 @@ export type PendingPiShockConfirm = {
   /** Short-lived website session token — never persisted. */
   token: string;
   username: string;
+  avatarUrl: string | null;
+  bannerUrl: string | null;
   createdAt: number;
   hubNames: string[];
   /** Key already minted for this confirm. Retries must reuse it. */
   createdApiKey: string | null;
   createdApiKeyId: number | null;
   createdExpiry: Date | null;
+  createdApiKeyName: string | null;
 };
 
 const pendingConfirmByDiscordUser = new Map<string, PendingPiShockConfirm>();
@@ -38,7 +42,7 @@ function writePendingConfirm(
   discordUserId: string,
   creds: RelayCredentials,
   hubNames: string[],
-  username: string,
+  profile: { username: string; avatarUrl?: string | null; bannerUrl?: string | null },
   created: CreatedApiKeyDraft | null | undefined,
 ) {
   const prev = pendingConfirmByDiscordUser.get(discordUserId);
@@ -50,18 +54,22 @@ function writePendingConfirm(
             apiKey: prev.createdApiKey,
             apiKeyId: prev.createdApiKeyId,
             expiry: prev.createdExpiry,
+            name: prev.createdApiKeyName,
           }
         : null
       : created;
   pendingConfirmByDiscordUser.set(discordUserId, {
     userId: creds.UserId,
     token: creds.Token,
-    username,
+    username: profile.username,
+    avatarUrl: profile.avatarUrl ?? (sameUser ? prev?.avatarUrl ?? null : null),
+    bannerUrl: profile.bannerUrl ?? (sameUser ? prev?.bannerUrl ?? null : null),
     createdAt: Date.now(),
     hubNames,
     createdApiKey: drafted?.apiKey ?? null,
     createdApiKeyId: drafted?.apiKeyId ?? null,
     createdExpiry: drafted?.expiry ?? null,
+    createdApiKeyName: drafted?.name ?? null,
   });
 }
 
@@ -69,11 +77,15 @@ export function setPendingConfirm(
   discordUserId: string,
   creds: RelayCredentials,
   hubNames: string[] = [],
-  username = '',
+  profile: string | { username: string; avatarUrl?: string | null; bannerUrl?: string | null } = '',
   created?: CreatedApiKeyDraft | null,
 ) {
   if (confirmFlights.has(discordUserId)) return;
-  writePendingConfirm(discordUserId, creds, hubNames, username, created);
+  const normalized =
+    typeof profile === 'string'
+      ? { username: profile, avatarUrl: null, bannerUrl: null }
+      : profile;
+  writePendingConfirm(discordUserId, creds, hubNames, normalized, created);
 }
 
 export function getPendingConfirm(discordUserId: string): PendingPiShockConfirm | null {
@@ -139,11 +151,15 @@ export function restoreOwnedPendingConfirm(
   generation: number,
   creds: RelayCredentials,
   hubNames: string[],
-  username: string,
+  profile: string | { username: string; avatarUrl?: string | null; bannerUrl?: string | null },
   created: CreatedApiKeyDraft | null,
 ): boolean {
   if (!confirmAttemptOwns(discordUserId, generation)) return false;
-  writePendingConfirm(discordUserId, creds, hubNames, username, created);
+  const normalized =
+    typeof profile === 'string'
+      ? { username: profile, avatarUrl: null, bannerUrl: null }
+      : profile;
+  writePendingConfirm(discordUserId, creds, hubNames, normalized, created);
   const flight = confirmFlights.get(discordUserId);
   const written = pendingConfirmByDiscordUser.get(discordUserId);
   if (flight && written) flight.pending = written;

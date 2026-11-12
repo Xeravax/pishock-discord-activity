@@ -2295,12 +2295,76 @@ html.pip-mode .app-restart-overlay:not(.app-restart-overlay--outdated) {
   background: rgba(18, 28, 32, 0.85);
 }
 
+.auth-boot__account--profile {
+  padding-top: 0;
+  overflow: hidden;
+}
+
+.auth-boot__profile-showcase {
+  position: relative;
+  margin: 0 -16px 14px;
+  min-height: 88px;
+}
+
+.auth-boot__profile-banner {
+  height: 88px;
+  background-color: rgba(121, 198, 219, 0.12);
+  background-position: center;
+  background-size: cover;
+  background-repeat: no-repeat;
+}
+
+.auth-boot__profile-avatar {
+  position: absolute;
+  left: 16px;
+  bottom: -28px;
+  width: 72px;
+  height: 72px;
+  border-radius: 50%;
+  object-fit: cover;
+  border: 3px solid rgba(18, 28, 32, 0.95);
+  background: rgba(18, 28, 32, 0.95);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+}
+
+.auth-boot__profile-avatar--placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #79c6db;
+  font-size: 1.8rem;
+}
+
+.auth-boot__account--profile .auth-boot__account-label {
+  margin-top: 34px;
+}
+
 .auth-boot__account-label {
   font-size: 0.72rem;
   letter-spacing: 0.08em;
   text-transform: uppercase;
   color: #79c6db;
   margin-bottom: 4px;
+}
+
+.official-account-btn {
+  min-width: 36px;
+  min-height: 36px;
+  padding: 0 !important;
+  overflow: hidden;
+}
+
+.official-account-btn__avatar {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  object-fit: cover;
+  display: block;
+}
+
+.official-account-btn__fallback {
+  font-size: 1.15rem;
+  color: #79c6db;
 }
 
 .auth-boot__account-id {

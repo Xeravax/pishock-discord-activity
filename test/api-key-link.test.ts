@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict';
 import { afterEach, describe, it } from 'node:test';
-import { validateApiKey } from '../src/server/pishock/auth-api.js';
+import {
+  profileFromAccount,
+  validateApiKey,
+} from '../src/server/pishock/auth-api.js';
 import { PiShockApiError } from '../src/server/pishock/client.js';
 import {
   assertManualApiKeyRateLimit,
@@ -11,12 +14,53 @@ import {
   getPendingConfirm,
   setPendingConfirm,
 } from '../src/server/pishock/pending-confirm.js';
+import {
+  defaultPiShockApiKeyExpiry,
+  formatPiShockApiKeyName,
+  PISHOCK_API_KEY_TTL_MS,
+} from '../src/shared/constants.js';
 
 const originalFetch = globalThis.fetch;
 
 afterEach(() => {
   globalThis.fetch = originalFetch;
   resetManualApiKeyRateLimitForTests();
+});
+
+describe('formatPiShockApiKeyName', () => {
+  it('uses UTC stamp and Discord PiShock Controller suffix', () => {
+    const at = new Date('2026-11-12T15:16:32.000Z');
+    assert.equal(
+      formatPiShockApiKeyName(at),
+      '2026-11-12 15:16:32 UTC - Discord PiShock Controller',
+    );
+    assert.equal(defaultPiShockApiKeyExpiry(at).getTime(), at.getTime() + PISHOCK_API_KEY_TTL_MS);
+    assert.equal(PISHOCK_API_KEY_TTL_MS, 7 * 24 * 60 * 60 * 1000);
+  });
+});
+
+describe('profileFromAccount', () => {
+  it('maps ImageType 0/1 to avatar and banner URLs', () => {
+    const profile = profileFromAccount({
+      UserId: 33675,
+      Username: 'Xeravax',
+      Images: [
+        {
+          ImageId: 1,
+          ImageType: 0,
+          ImageBase64: 'https://cdn.example/Profile.png',
+        },
+        {
+          ImageId: 2,
+          ImageType: 1,
+          ImageBase64: 'https://cdn.example/Banner.gif',
+        },
+      ],
+    });
+    assert.equal(profile.username, 'Xeravax');
+    assert.equal(profile.avatarUrl, 'https://cdn.example/Profile.png');
+    assert.equal(profile.bannerUrl, 'https://cdn.example/Banner.gif');
+  });
 });
 
 describe('validateApiKey', () => {
@@ -110,10 +154,36 @@ describe('pending confirm API key reuse', () => {
       apiKey: 'minted-key',
       apiKeyId: 3,
       expiry: null,
+      name: '2026-11-12 12:00:00 UTC - Discord PiShock Controller',
     });
     setPendingConfirm('discord-1', { UserId: 4, Token: 'session' }, ['Hub'], 'wearer');
     const pending = getPendingConfirm('discord-1');
     assert.equal(pending?.createdApiKey, 'minted-key');
     assert.equal(pending?.createdApiKeyId, 3);
+    assert.equal(
+      pending?.createdApiKeyName,
+      '2026-11-12 12:00:00 UTC - Discord PiShock Controller',
+    );
+  });
+
+  it('keeps avatar and banner URLs across status refreshes', () => {
+    setPendingConfirm(
+      'discord-2',
+      { UserId: 9, Token: 'session' },
+      ['Hub'],
+      {
+        username: 'wearer',
+        avatarUrl: 'https://cdn.example/profile.png',
+        bannerUrl: 'https://cdn.example/banner.gif',
+      },
+    );
+    setPendingConfirm('discord-2', { UserId: 9, Token: 'session' }, ['Hub'], {
+      username: 'wearer',
+      avatarUrl: null,
+      bannerUrl: null,
+    });
+    const pending = getPendingConfirm('discord-2');
+    assert.equal(pending?.avatarUrl, 'https://cdn.example/profile.png');
+    assert.equal(pending?.bannerUrl, 'https://cdn.example/banner.gif');
   });
 });

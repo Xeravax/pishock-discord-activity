@@ -23,13 +23,13 @@ export function PrivacyPolicy({ onBack }: Props) {
         <h2>PiShock authentication</h2>
         <p className="muted">
           Linking your account uses PiShock&apos;s login page, then{' '}
-          <strong>creates a named API key</strong> (Discord Activity) for device control. The
-          short-lived login session is not persisted. The API key is shown once at link time,
-          encrypted at rest (AES-256-GCM), and is never exposed to other participants&apos;
-          browsers afterward. Unlinking removes the key from this app. The key stays valid at
-          PiShock until you revoke it there or PiShock rejects it. Your PiShock
-          password is never stored here. Other people&apos;s devices are only available when those
-          users have linked their own PiShock accounts.
+          <strong>creates a 7-day named API key</strong> (Discord PiShock Controller) for device
+          control. The short-lived login session is not persisted. The API key is shown once at
+          link time, encrypted at rest (AES-256-GCM), and is never exposed to other
+          participants&apos; browsers afterward. Unlinking removes the key from this app. Created
+          keys expire after 7 days, or sooner if you revoke them at PiShock or PiShock rejects
+          them. Your PiShock password is never stored here. Other people&apos;s devices are only
+          available when those users have linked their own PiShock accounts.
         </p>
       </section>
 
