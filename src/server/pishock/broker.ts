@@ -453,6 +453,8 @@ function ensureConnected(discordUserId: string) {
   });
 
   ws.on('message', (data) => {
+    // replaceSessionCreds detaches this socket before close; ignore its late frames.
+    if (session.ws !== ws) return;
     const text = data.toString();
     try {
       const parsed = JSON.parse(text) as Record<string, unknown>;

@@ -5,11 +5,7 @@ import {
   isPiShockRowPaused,
 } from '../src/shared/pishock-pause.js';
 import { pausedOwnedShockerIds } from '../src/server/pishock/estop-sync.js';
-import {
-  annotateShockersWithPause,
-  pausedMarksFromRows,
-  shockersFromUserDevices,
-} from '../src/server/pishock/pause.js';
+import { annotateShockersWithPause, pausedMarksFromRows } from '../src/server/pishock/pause.js';
 
 describe('PiShock pause flags', () => {
   it('treats shocker and share pause as paused', () => {
@@ -56,19 +52,5 @@ describe('PiShock pause flags', () => {
     ) as Array<Record<string, unknown>>;
     assert.equal(rows[0]?.Paused, true);
     assert.equal(rows[1]?.Paused, false);
-  });
-
-  it('flattens GetUserDevices pause flags', () => {
-    const rows = shockersFromUserDevices([
-      {
-        clientId: 1,
-        shockers: [
-          { shockerId: 11, name: 'Leg', isPaused: true },
-          { shockerId: 12, name: 'Arm', isPaused: false },
-        ],
-      },
-    ]);
-    const marks = pausedMarksFromRows(rows);
-    assert.deepEqual(marks.shockerIds, [11]);
   });
 });

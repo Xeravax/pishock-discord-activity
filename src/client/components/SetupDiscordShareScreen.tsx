@@ -48,6 +48,8 @@ type Props = {
   initialSelectedIds?: number[];
   /** Saved share rows. Personal defaults are used only when a shocker has no row. */
   initialShares?: ShareLimitRow[];
+  /** Current queue settings. Leaving the step unchanged posts these, not disabled defaults. */
+  initialQueue?: QueuePanelSettings;
   /** True after post-confirm device fetch finishes (even if the list is empty). */
   devicesReady?: boolean;
   busy?: boolean;
@@ -238,6 +240,7 @@ export function SetupDiscordShareScreen({
   initialPersonal,
   initialSelectedIds,
   initialShares,
+  initialQueue,
   devicesReady = false,
   busy,
   error,
@@ -252,13 +255,19 @@ export function SetupDiscordShareScreen({
   const [personal, setPersonal] = useState<PersonalLimits>(initialPersonal);
   const [shareModes, setShareModes] = useState<Record<number, ModeLimitsValue>>({});
   const [editedShareIds, setEditedShareIds] = useState<Set<number>>(() => new Set());
-  const [queue, setQueue] = useState<QueuePanelSettings>(DEFAULT_QUEUE);
+  const [queue, setQueue] = useState<QueuePanelSettings>(initialQueue ?? DEFAULT_QUEUE);
+  const [queueTouched, setQueueTouched] = useState(false);
   const [defaultsOpen, setDefaultsOpen] = useState(true);
   const [sharesOpen, setSharesOpen] = useState(true);
 
   useEffect(() => {
     setPersonal(initialPersonal);
   }, [initialPersonal]);
+
+  useEffect(() => {
+    if (queueTouched || !initialQueue) return;
+    setQueue(initialQueue);
+  }, [queueTouched, initialQueue]);
 
   const updatePersonalDefaults = (next: PersonalLimits) => {
     setPersonal(next);
@@ -651,7 +660,10 @@ export function SetupDiscordShareScreen({
                   type="checkbox"
                   checked={queue.enabled}
                   disabled={busy}
-                  onChange={(e) => setQueue((q) => ({ ...q, enabled: e.target.checked }))}
+                  onChange={(e) => {
+                    setQueueTouched(true);
+                    setQueue((q) => ({ ...q, enabled: e.target.checked }));
+                  }}
                 />
                 <span className="auth-boot__shocker-copy">
                   <span className="auth-boot__shocker-name">Enable command queue</span>
@@ -672,7 +684,10 @@ export function SetupDiscordShareScreen({
                     step={500}
                     formatValue={(ms) => (ms <= 0 ? 'Command length' : formatDurationMs(ms))}
                     disabled={busy}
-                    onChange={(progressMs) => setQueue((q) => ({ ...q, progressMs }))}
+                    onChange={(progressMs) => {
+                      setQueueTouched(true);
+                      setQueue((q) => ({ ...q, progressMs }));
+                    }}
                   />
                   <LimitSlider
                     label="Commands ahead per person"
@@ -682,14 +697,20 @@ export function SetupDiscordShareScreen({
                     step={1}
                     formatValue={(n) => String(n)}
                     disabled={busy}
-                    onChange={(maxPerSender) => setQueue((q) => ({ ...q, maxPerSender }))}
+                    onChange={(maxPerSender) => {
+                      setQueueTouched(true);
+                      setQueue((q) => ({ ...q, maxPerSender }));
+                    }}
                   />
                   <label className={`auth-boot__shocker${queue.starOnly ? ' is-on' : ''}`}>
                     <input
                       type="checkbox"
                       checked={queue.starOnly}
                       disabled={busy}
-                      onChange={(e) => setQueue((q) => ({ ...q, starOnly: e.target.checked }))}
+                      onChange={(e) => {
+                        setQueueTouched(true);
+                        setQueue((q) => ({ ...q, starOnly: e.target.checked }));
+                      }}
                     />
                     <span className="auth-boot__shocker-copy">
                       <span className="auth-boot__shocker-name">Stars only</span>

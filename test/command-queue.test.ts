@@ -432,4 +432,112 @@ describe('command queue', () => {
     await h.flush();
     assert.deepEqual(h.executed, [good.itemId]);
   });
+
+  it('does not advance to the next item while advance is held', async () => {
+    const h = makeHarness();
+    const first = await h.queue.enqueue(
+      baseInput({ ownerDiscordUserId: 'owner', executorDiscordUserId: 'a', durationMs: 40 }),
+    );
+    await h.queue.enqueue(
+      baseInput({ ownerDiscordUserId: 'owner', executorDiscordUserId: 'b', durationMs: 40 }),
+    );
+    await h.flush();
+    h.queue.holdAdvance('owner');
+    await h.queue.skipActive('owner');
+    await h.advance(10_000);
+    await h.flush();
+    assert.deepEqual(h.executed, [first.itemId]);
+    const held = await h.queue.snapshot('owner');
+    assert.equal(held.waiting.length, 1);
+    h.queue.releaseAdvance('owner');
+    await h.flush();
+    assert.equal(h.executed.length, 2);
+  });
+
+  it('requeues an item when advance is held during validation', async () => {
+    let releaseValidate: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => {
+      releaseValidate = resolve;
+    });
+    const h = makeHarness({
+      validate: async () => {
+        await gate;
+        return true;
+      },
+    });
+    const item = await h.queue.enqueue(
+      baseInput({ ownerDiscordUserId: 'owner', executorDiscordUserId: 'a', durationMs: 40 }),
+    );
+    await h.flush();
+    h.queue.holdAdvance('owner');
+    releaseValidate();
+    await h.flush();
+    assert.deepEqual(h.executed, []);
+    const held = await h.queue.snapshot('owner');
+    assert.equal(held.active, null);
+    assert.equal(held.waiting.length, 1);
+    h.queue.releaseAdvance('owner');
+    await h.flush();
+    assert.deepEqual(h.executed, [item.itemId]);
+  });
+
+  it('does not run an item cleared while validation is in flight', async () => {
+    let releaseValidate: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => {
+      releaseValidate = resolve;
+    });
+    const h = makeHarness({
+      validate: async () => {
+        await gate;
+        return true;
+      },
+    });
+    await h.queue.enqueue(
+      baseInput({ ownerDiscordUserId: 'owner', executorDiscordUserId: 'a', durationMs: 40 }),
+    );
+    await h.flush();
+    await h.queue.hardClear('owner', { endActiveDevice: false });
+    releaseValidate();
+    await h.flush();
+    assert.deepEqual(h.executed, []);
+    const state = await h.queue.snapshot('owner');
+    assert.equal(state.active, null);
+    assert.equal(state.waiting.length, 0);
+  });
+
+  it('invalidateInFlight is visible to the running execute', async () => {
+    let canceled: (() => boolean) | undefined;
+    let releaseStarted: () => void = () => undefined;
+    const started = new Promise<void>((resolve) => {
+      releaseStarted = resolve;
+    });
+    let releaseDone: () => void = () => undefined;
+    const done = new Promise<void>((resolve) => {
+      releaseDone = resolve;
+    });
+    const queue = createCommandQueue({
+      isStarred: () => false,
+      getLimits: () => ({ progressMs: 0, maxPerSender: 3 }),
+      validateBeforeRun: async () => true,
+      execute: async (_item, isCanceled) => {
+        canceled = isCanceled;
+        releaseStarted();
+        await done;
+      },
+      endActive: async () => true,
+      onStateChange: () => undefined,
+      onTicket: () => undefined,
+    });
+    await queue.enqueue(baseInput({ ownerDiscordUserId: 'owner', executorDiscordUserId: 'a' }));
+    await started;
+    assert.equal(canceled?.(), false);
+    queue.invalidateInFlight('owner');
+    assert.equal(canceled?.(), true);
+    releaseDone();
+    await hFlush();
+  });
 });
+
+async function hFlush() {
+  for (let i = 0; i < 20; i++) await Promise.resolve();
+}

@@ -328,7 +328,7 @@ export function ModeLimitsEditor({
                 <span className="text-caption text-secondary">Required warning before shock</span>
                 <select
                   className="q-field__native q-placeholder mode-limits-warning__select"
-                  disabled={disabled || (!hideActionToggles && !value.canVibrate)}
+                  disabled={disabled}
                   value={normalizeWarningLevel(value.requiredWarningLevel)}
                   onChange={(e) =>
                     onChange({
@@ -344,9 +344,11 @@ export function ModeLimitsEditor({
                     </option>
                   ))}
                 </select>
-                {!hideActionToggles && !value.canVibrate ? (
+                {!hideActionToggles &&
+                !value.canVibrate &&
+                normalizeWarningLevel(value.requiredWarningLevel) !== 'none' ? (
                   <span className="text-caption text-negative">
-                    Enable vibrate to enforce a warning.
+                    Shocks cannot run while a required warning conflicts with vibration being off.
                   </span>
                 ) : null}
               </label>

@@ -2,8 +2,11 @@ import assert from 'node:assert/strict';
 import { afterEach, describe, it, mock } from 'node:test';
 import {
   assertModeAllowed,
+  beginPendingHold,
+  cancelPendingHold,
   clampDurationMs,
   clampIntensity,
+  isPendingHoldCurrent,
   OperatePolicyError,
 } from '../src/server/operate-policy.js';
 import { bandForOperation, shareBandsFromRow } from '../src/server/limit-bands.js';
@@ -11,6 +14,7 @@ import { isBrokerLogUniqueConflict } from '../src/server/pishock/broker-log-inge
 import {
   getPiShockPauseState,
   invalidatePiShockPauseCache,
+  rememberPiShockPaused,
 } from '../src/server/pishock/pause.js';
 import { allActiveShockersEStopped } from '../src/server/pishock/estop-sync.js';
 import {
@@ -49,7 +53,9 @@ function routePauseFetch(url: string, shockers: unknown, failShockers = false): 
     return jsonOk(shockers);
   }
   if (url.includes('/Share/GetShared')) return jsonOk([]);
-  if (url.includes('GetUserDevices')) return jsonOk([]);
+  if (url.includes('GetUserDevices')) {
+    throw new Error('pause refresh must not call legacy GetUserDevices');
+  }
   return jsonOk([]);
 }
 
@@ -200,6 +206,42 @@ describe('warnBeforeShock', () => {
         err.status === 423,
     );
   });
+
+  it('aborts after the wait when the share is disabled or paused', async () => {
+    let slept = false;
+    await assert.rejects(
+      () =>
+        warnBeforeShock(
+          {
+            operation: 'shock',
+            requestedWarningLevel: 'none',
+            requiredWarningLevel: 'small',
+            canVibrate: true,
+            creds: CREDS,
+            clientId: 'hub-1',
+            shockerId: 7,
+            ownerDiscordUserId: 'owner',
+            vibrateBand: vibeBand,
+            gateOnShare: true,
+          },
+          {
+            publishOperate: async () => true,
+            isEmergencyStopped: async () => {
+              assert.equal(slept, true);
+              return false;
+            },
+            sleep: async () => {
+              slept = true;
+            },
+            isShareBlocked: async () => true,
+          },
+        ),
+      (err: unknown) =>
+        err instanceof ShockWarningError &&
+        err.code === 'TARGET_UNAVAILABLE' &&
+        err.status === 404,
+    );
+  });
 });
 
 describe('pause source failure fail-closed', () => {
@@ -224,5 +266,55 @@ describe('pause source failure fail-closed', () => {
     const second = await getPiShockPauseState('pause-user', CREDS);
     assert.equal(second.unknown, false);
     assert.ok(second.shockerIds.includes(42));
+  });
+
+  it('keeps pause marks remembered while a refresh is in flight', async () => {
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    globalThis.fetch = async () => {
+      await gate;
+      return jsonOk([]);
+    };
+    const pending = getPiShockPauseState('pause-inflight', CREDS);
+    await Promise.resolve();
+    await Promise.resolve();
+    rememberPiShockPaused('pause-inflight', { shockerId: 77 });
+    release();
+    const state = await pending;
+    assert.ok(state.shockerIds.includes(77));
+    invalidatePiShockPauseCache('pause-inflight');
+  });
+
+  it('aborts hung pause lookups when the source timeout fires', async () => {
+    mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 2_000_000 });
+    let aborted = false;
+    globalThis.fetch = (_input: unknown, init?: { signal?: AbortSignal }) =>
+      new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () => {
+          aborted = true;
+          const err = new Error('aborted');
+          err.name = 'AbortError';
+          reject(err);
+        });
+      });
+    const pending = getPiShockPauseState('pause-abort', CREDS);
+    mock.timers.tick(5_000);
+    const state = await pending;
+    assert.equal(aborted, true);
+    assert.equal(state.unknown, true);
+    invalidatePiShockPauseCache('pause-abort');
+  });
+});
+
+describe('pending holds', () => {
+  it('a release invalidates only that shocker’s in-flight hold', () => {
+    const first = beginPendingHold('owner', 7);
+    const other = beginPendingHold('owner', 8);
+    assert.equal(isPendingHoldCurrent('owner', 7, first), true);
+    cancelPendingHold('owner', 7);
+    assert.equal(isPendingHoldCurrent('owner', 7, first), false);
+    assert.equal(isPendingHoldCurrent('owner', 8, other), true);
   });
 });

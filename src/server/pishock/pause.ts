@@ -1,12 +1,7 @@
 import {
   isPiShockRowPaused,
 } from '../../shared/pishock-pause.js';
-import {
-  getShared,
-  getShockers,
-  getUserDevices,
-  type PiShockCreds,
-} from './client.js';
+import { getShared, getShockers, type PiShockCreds } from './client.js';
 
 const TTL_MS = 8_000;
 /** Bound each PiShock pause source so a hung lookup cannot stall operate. */
@@ -23,7 +18,6 @@ type PauseCacheEntry = {
   at: number;
   shockers: SourceIds;
   shared: SourceIds;
-  devices: SourceIds;
   rememberedShockers: Set<number>;
   rememberedCodes: Set<string>;
 };
@@ -48,7 +42,6 @@ function emptyEntry(): PauseCacheEntry {
     at: 0,
     shockers: emptySource(),
     shared: emptySource(),
-    devices: emptySource(),
     rememberedShockers: new Set(),
     rememberedCodes: new Set(),
   };
@@ -93,49 +86,30 @@ export function pausedMarksFromRows(rows: unknown[]): {
   return { shockerIds: [...shockerIds], shareCodes: [...shareCodes] };
 }
 
-/** Flatten GetUserDevices clients → shockers (with isPaused). */
-export function shockersFromUserDevices(data: unknown): Array<Record<string, unknown>> {
-  if (!Array.isArray(data)) return [];
-  const out: Array<Record<string, unknown>> = [];
-  for (const client of data) {
-    if (!client || typeof client !== 'object') continue;
-    const row = client as Record<string, unknown>;
-    const nested = row.shockers ?? row.Shockers;
-    if (!Array.isArray(nested)) continue;
-    for (const s of nested) {
-      if (!s || typeof s !== 'object') continue;
-      const shocker = s as Record<string, unknown>;
-      const id =
-        shocker.shockerId ??
-        shocker.ShockerId ??
-        shocker.id ??
-        shocker.Id;
-      out.push({
-        ...shocker,
-        ShockerId: id,
-        // Normalize common website flag onto our pause detector keys.
-        isPaused: shocker.isPaused ?? shocker.IsPaused ?? shocker.paused ?? shocker.Paused,
-        Paused: shocker.Paused ?? shocker.paused ?? shocker.isPaused ?? shocker.IsPaused,
-      });
-    }
-  }
-  return out;
-}
-
 function readList(data: unknown): unknown[] {
   return Array.isArray(data) ? data : [];
 }
 
-function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+function withTimeout<T>(promise: Promise<T>, ms: number, abort?: () => void): Promise<T> {
   return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error('pause source timeout')), ms);
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      abort?.();
+      reject(new Error('pause source timeout'));
+    }, ms);
     timer.unref?.();
     promise.then(
       (value) => {
+        if (settled) return;
+        settled = true;
         clearTimeout(timer);
         resolve(value);
       },
       (err) => {
+        if (settled) return;
+        settled = true;
         clearTimeout(timer);
         reject(err);
       },
@@ -146,11 +120,16 @@ function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
 /** A timeout or rejection keeps the previous ids. A successful payload replaces them. */
 async function loadSource(
   prev: SourceIds,
-  load: () => Promise<{ data?: unknown }>,
+  load: (signal: AbortSignal) => Promise<{ data?: unknown }>,
   toRows: (data: unknown) => unknown[],
 ): Promise<SourceIds> {
+  const controller = new AbortController();
   try {
-    const result = await withTimeout(load(), PAUSE_SOURCE_TIMEOUT_MS);
+    const result = await withTimeout(
+      load(controller.signal),
+      PAUSE_SOURCE_TIMEOUT_MS,
+      () => controller.abort(),
+    );
     const marks = pausedMarksFromRows(toRows(result?.data));
     return {
       shockerIds: new Set(marks.shockerIds),
@@ -164,17 +143,15 @@ async function loadSource(
 }
 
 function pauseStateFromEntry(entry: PauseCacheEntry): PiShockPauseState {
-  const unknown = !entry.shockers.known || !entry.shared.known || !entry.devices.known;
+  const unknown = !entry.shockers.known || !entry.shared.known;
   const shockerIds = new Set<number>([
     ...entry.shockers.shockerIds,
     ...entry.shared.shockerIds,
-    ...entry.devices.shockerIds,
     ...entry.rememberedShockers,
   ]);
   const shareCodes = new Set<string>([
     ...entry.shockers.shareCodes,
     ...entry.shared.shareCodes,
-    ...entry.devices.shareCodes,
     ...entry.rememberedCodes,
   ]);
   return { shockerIds: [...shockerIds], shareCodes: [...shareCodes], unknown };
@@ -186,25 +163,38 @@ async function refreshPiShockPause(
   epoch: number,
 ): Promise<PauseCacheEntry> {
   const prev = cache.get(discordUserId) ?? emptyEntry();
-  const [shockers, shared, devices] = await Promise.all([
-    loadSource(prev.shockers, () => getShockers(creds), readList),
-    loadSource(prev.shared, () => getShared(creds), readList),
-    loadSource(prev.devices, () => getUserDevices(creds), shockersFromUserDevices),
+  const prevRememberedShockers = new Set(prev.rememberedShockers);
+  const prevRememberedCodes = new Set(prev.rememberedCodes);
+  const [shockers, shared] = await Promise.all([
+    loadSource(prev.shockers, (signal) => getShockers(creds, signal), readList),
+    loadSource(prev.shared, (signal) => getShared(creds, signal), readList),
   ]);
-  const rememberedShockers = new Set(prev.rememberedShockers);
-  const rememberedCodes = new Set(prev.rememberedCodes);
+  const current = cache.get(discordUserId);
+  const rememberedShockers = new Set<number>(prevRememberedShockers);
+  const rememberedCodes = new Set<string>(prevRememberedCodes);
+  if (current) {
+    for (const id of current.rememberedShockers) rememberedShockers.add(id);
+    for (const code of current.rememberedCodes) rememberedCodes.add(code);
+  }
+  const addedDuringRefreshShockers = new Set<number>();
+  for (const id of rememberedShockers) {
+    if (!prevRememberedShockers.has(id)) addedDuringRefreshShockers.add(id);
+  }
+  const addedDuringRefreshCodes = new Set<string>();
+  for (const code of rememberedCodes) {
+    if (!prevRememberedCodes.has(code)) addedDuringRefreshCodes.add(code);
+  }
   // Only when every source succeeds is the live set authoritative enough to
-  // drop 503-remembered marks that no longer appear as paused.
-  if (shockers.known && shared.known && devices.known) {
-    const liveIds = new Set<number>([
-      ...shockers.shockerIds,
-      ...shared.shockerIds,
-      ...devices.shockerIds,
-    ]);
+  // drop 503-remembered marks that no longer appear as paused. Marks added
+  // while this refresh was in flight stay until a later refresh.
+  if (shockers.known && shared.known) {
+    const liveIds = new Set<number>([...shockers.shockerIds, ...shared.shockerIds]);
     for (const id of [...rememberedShockers]) {
+      if (addedDuringRefreshShockers.has(id)) continue;
       if (!liveIds.has(id)) rememberedShockers.delete(id);
     }
     for (const code of [...rememberedCodes]) {
+      if (addedDuringRefreshCodes.has(code)) continue;
       if (!shared.shareCodes.has(code)) rememberedCodes.delete(code);
     }
   }
@@ -212,7 +202,6 @@ async function refreshPiShockPause(
     at: Date.now(),
     shockers,
     shared,
-    devices,
     rememberedShockers,
     rememberedCodes,
   };
@@ -318,7 +307,7 @@ export function rememberPiShockPaused(
   }
   const code = input.shareCode?.trim().toLowerCase();
   if (code) hit.rememberedCodes.add(code);
-  if (hit.shockers.known && hit.shared.known && hit.devices.known) {
+  if (hit.shockers.known && hit.shared.known) {
     hit.at = Date.now();
   }
   cache.set(discordUserId, hit);
@@ -339,15 +328,13 @@ export function forgetPiShockPaused(
     hit.rememberedShockers.delete(dropId);
     hit.shockers.shockerIds.delete(dropId);
     hit.shared.shockerIds.delete(dropId);
-    hit.devices.shockerIds.delete(dropId);
   }
   if (code) {
     hit.rememberedCodes.delete(code);
     hit.shockers.shareCodes.delete(code);
     hit.shared.shareCodes.delete(code);
-    hit.devices.shareCodes.delete(code);
   }
-  if (hit.shockers.known && hit.shared.known && hit.devices.known) {
+  if (hit.shockers.known && hit.shared.known) {
     hit.at = Date.now();
   }
 }

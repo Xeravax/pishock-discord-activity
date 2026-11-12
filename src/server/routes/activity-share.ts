@@ -10,6 +10,7 @@ import {
 import { LimitBandConflictError, shareBandsFromRow } from '../limit-bands.js';
 import { normalizeWarningLevel } from '../../shared/warning.js';
 import {
+  commitPersonalLimitsAndShares,
   getPersonalActivityLimits,
   listActivityBans,
   listActivityShares,
@@ -233,19 +234,29 @@ export const activityShareRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (a
       }
     }
 
-    if (body.personal) {
+    let shares = existing;
+    if (body.personal && incoming) {
       try {
-        await setPersonalActivityLimits(req.discordUser.id, body.personal);
+        await commitPersonalLimitsAndShares(req.discordUser.id, body.personal, normalizedRows);
       } catch (err) {
         const conflict = bandConflictMessage(err);
         if (!conflict) throw err;
         return reply.code(400).send({ error: conflict });
       }
-    }
-
-    let shares = existing;
-    if (incoming) {
-      shares = await replaceActivityShares(req.discordUser.id, normalizedRows);
+      shares = await listActivityShares(req.discordUser.id);
+    } else {
+      if (body.personal) {
+        try {
+          await setPersonalActivityLimits(req.discordUser.id, body.personal);
+        } catch (err) {
+          const conflict = bandConflictMessage(err);
+          if (!conflict) throw err;
+          return reply.code(400).send({ error: conflict });
+        }
+      }
+      if (incoming) {
+        shares = await replaceActivityShares(req.discordUser.id, normalizedRows);
+      }
     }
 
     if (Array.isArray(body.bannedDiscordUserIds)) {

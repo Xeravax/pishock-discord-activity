@@ -19,7 +19,10 @@ import { publishOperate } from '../pishock/broker.js';
 import {
   assertModeAllowed,
   assertOperateRateLimit,
+  beginPendingHold,
+  cancelPendingHold,
   clearHoldAutoEnd,
+  isPendingHoldCurrent,
   clampDurationMs,
   clampIntensity,
   OperatePolicyError,
@@ -424,6 +427,7 @@ export const participantRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app
     const executorCreds = req.pishockCreds;
 
     if (operation === 'end') {
+      cancelPendingHold(targetDiscordUserId, shockerId);
       if (await getCommandQueueEnabled(targetDiscordUserId)) {
         const handled = await commandQueue.handleSenderEnd(
           targetDiscordUserId,
@@ -688,6 +692,7 @@ export const participantRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app
           code: 'BROKER_PUBLISH_FAILED',
         });
       }
+      const pendingHold = hold ? beginPendingHold(targetDiscordUserId, shockerId) : null;
       await warnBeforeShock({
         operation,
         requestedWarningLevel,
@@ -698,7 +703,11 @@ export const participantRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app
         shockerId,
         ownerDiscordUserId: targetDiscordUserId,
         vibrateBand: modes.vibrate,
+        gateOnShare: true,
       });
+      if (pendingHold != null && !isPendingHoldCurrent(targetDiscordUserId, shockerId, pendingHold)) {
+        return { ok: true, via: 'broker', canceled: true };
+      }
       const shareNow = await findActivityShareByShocker(targetDiscordUserId, shockerId);
       if (!shareNow || !shareNow.enabled || shareNow.paused) {
         return reply.code(404).send({
@@ -730,6 +739,9 @@ export const participantRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app
           error: 'This shocker or share is paused on PiShock',
           code: 'PISHOCK_PAUSED',
         });
+      }
+      if (pendingHold != null && !isPendingHoldCurrent(targetDiscordUserId, shockerId, pendingHold)) {
+        return { ok: true, via: 'broker', canceled: true };
       }
       if ((hold || warning) && clientId != null) {
         const published = await publishOperate(targetCreds, {

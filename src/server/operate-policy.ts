@@ -273,6 +273,14 @@ export type OperatePolicyDeps = {
     executorDiscordUserId: string,
   ) => Promise<boolean>;
   isEmergencyStopped: (discordUserId: string, shockerId: number) => Promise<boolean>;
+  /** Owner PiShock credentials, when this process can load them. */
+  loadOwnerPiShockCreds?: (discordUserId: string) => Promise<PiShockCreds | null>;
+  /** Pause check that already has the owner's credentials. Do not call with the caller's key. */
+  ownerShockerPauseBlocks?: (
+    discordUserId: string,
+    creds: PiShockCreds,
+    shockerId: number,
+  ) => Promise<boolean>;
 };
 
 const defaultOperatePolicyDeps: OperatePolicyDeps = {
@@ -417,8 +425,9 @@ export async function resolveOwnOperatePolicy(
   callerDiscordUserId: string,
   creds: PiShockCreds,
   input: { shockerId?: number; shareCode?: string },
-  deps: OperatePolicyDeps = defaultOperatePolicyDeps,
+  depsInput: Partial<OperatePolicyDeps> = {},
 ): Promise<ResolvedOperatePolicy> {
+  const deps: OperatePolicyDeps = { ...defaultOperatePolicyDeps, ...depsInput };
   const personal = await deps.getPersonalActivityLimits(callerDiscordUserId);
   const snapshot = await deps.fetchControlSnapshot(creds);
 
@@ -443,6 +452,23 @@ export async function resolveOwnOperatePolicy(
         }
         if (await deps.isEmergencyStopped(registered.discordUserId, registered.shockerId)) {
           throw new OperatePolicyError('Owner has emergency stop engaged', 423, 'EMERGENCY_STOP');
+        }
+        if (deps.loadOwnerPiShockCreds && deps.ownerShockerPauseBlocks) {
+          const ownerCreds = await deps.loadOwnerPiShockCreds(registered.discordUserId);
+          if (
+            ownerCreds &&
+            (await deps.ownerShockerPauseBlocks(
+              registered.discordUserId,
+              ownerCreds,
+              registered.shockerId,
+            ))
+          ) {
+            throw new OperatePolicyError(
+              'This shocker or share is paused on PiShock',
+              503,
+              'PISHOCK_PAUSED',
+            );
+          }
         }
         const shareBands = shareBandsFromRow(registered);
         const ownerPersonal = personalBandsFromUser(
@@ -643,6 +669,30 @@ export async function resolveOwnOperatePolicy(
 
 export function holdTimerKey(ownerDiscordUserId: string, shockerId: number): string {
   return `${ownerDiscordUserId}:${shockerId}`;
+}
+
+/** Generation of a hold that is waiting out its warning before the shock starts. */
+const pendingHolds = new Map<string, number>();
+
+export function beginPendingHold(ownerDiscordUserId: string, shockerId: number): number {
+  const key = holdTimerKey(ownerDiscordUserId, shockerId);
+  const next = (pendingHolds.get(key) ?? 0) + 1;
+  pendingHolds.set(key, next);
+  return next;
+}
+
+/** A release during the warning wait invalidates the hold that has not started yet. */
+export function cancelPendingHold(ownerDiscordUserId: string, shockerId: number): void {
+  const key = holdTimerKey(ownerDiscordUserId, shockerId);
+  pendingHolds.set(key, (pendingHolds.get(key) ?? 0) + 1);
+}
+
+export function isPendingHoldCurrent(
+  ownerDiscordUserId: string,
+  shockerId: number,
+  token: number,
+): boolean {
+  return pendingHolds.get(holdTimerKey(ownerDiscordUserId, shockerId)) === token;
 }
 
 export function clearHoldAutoEnd(ownerDiscordUserId: string, shockerId: number): void {

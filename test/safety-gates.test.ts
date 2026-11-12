@@ -362,6 +362,43 @@ describe('should refuse — must not proceed', () => {
     );
   });
 
+  it('refuses cross-user operate when the owner shocker is paused and creds are available', async () => {
+    const deps = baseDeps({
+      findActivityShareByCode: async () => shareRow({ discordUserId: 'owner-1' }),
+      getConsent: async () => true,
+      loadOwnerPiShockCreds: async () => CREDS,
+      ownerShockerPauseBlocks: async (ownerId, creds, shockerId) => {
+        assert.equal(ownerId, 'owner-1');
+        assert.equal(creds, CREDS);
+        assert.equal(shockerId, 7);
+        return true;
+      },
+    });
+    await assert.rejects(
+      () => resolveOwnOperatePolicy('caller-2', CREDS, { shareCode: 'SHARECODE' }, deps),
+      (err: unknown) =>
+        err instanceof OperatePolicyError &&
+        err.status === 503 &&
+        err.code === 'PISHOCK_PAUSED',
+    );
+  });
+
+  it('does not query owner pause without owner credentials', async () => {
+    let checked = false;
+    const deps = baseDeps({
+      findActivityShareByCode: async () => shareRow({ discordUserId: 'owner-1' }),
+      getConsent: async () => true,
+      loadOwnerPiShockCreds: async () => null,
+      ownerShockerPauseBlocks: async () => {
+        checked = true;
+        return true;
+      },
+    });
+    const policy = await resolveOwnOperatePolicy('caller-2', CREDS, { shareCode: 'SHARECODE' }, deps);
+    assert.equal(checked, false);
+    assert.equal(policy.crossUser, true);
+  });
+
   it('refuses own shocker when emergency stop is latched', async () => {
     const deps = baseDeps({
       fetchControlSnapshot: async () =>

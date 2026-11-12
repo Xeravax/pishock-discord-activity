@@ -210,12 +210,17 @@ export function App() {
   const linkPollGenRef = useRef(0);
   const presenceStartedAtRef = useRef<number | null>(null);
   const friendsAutoSelectDoneRef = useRef(false);
+  /** User cleared the friends selection; do not auto-select when people join later. */
+  const friendsSelectionClearedRef = useRef(false);
   const deviceFetchGenRef = useRef(0);
   const emergencyStopWriteGenRef = useRef(0);
   const loadSettingsRef = useRef<(() => Promise<unknown>) | null>(null);
+  /** True after `/queue` has loaded once. A later failed refresh keeps that snapshot. */
+  const queueSettingsLoadedRef = useRef(false);
 
   const refreshQueue = useCallback(async (accessToken: string) => {
     const data = await apiFetch<QueueState & { stars?: string[] }>('/queue', accessToken);
+    queueSettingsLoadedRef.current = true;
     setQueueState({
       enabled: Boolean(data.enabled),
       progressMs: Number(data.progressMs) || 0,
@@ -525,13 +530,18 @@ export function App() {
   useEffect(() => {
     if (!friendsMode) {
       friendsAutoSelectDoneRef.current = false;
+      friendsSelectionClearedRef.current = false;
       return;
     }
-    if (friendsAutoSelectDoneRef.current || !participantRosterLoaded) return;
-    if (selectedTargetIds.length > 0) {
-      friendsAutoSelectDoneRef.current = true;
+    if (
+      friendsAutoSelectDoneRef.current ||
+      friendsSelectionClearedRef.current ||
+      !participantRosterLoaded
+    ) {
       return;
     }
+    // Don't override a selection, and don't consume the one-shot until we pick someone.
+    if (selectedTargetIds.length > 0) return;
     if (participants.length === 0) return;
     const selfId = me?.user?.id;
     const firstAvailable = participants.find((p) => {
@@ -544,9 +554,9 @@ export function App() {
       if (selfId && p.id === selfId) return false;
       return participantStatus[p.id] != null;
     });
-    if (!hasEvaluableStatus) return;
+    if (!hasEvaluableStatus || !firstAvailable) return;
     friendsAutoSelectDoneRef.current = true;
-    if (firstAvailable) setSelectedTargetIds([firstAvailable.id]);
+    setSelectedTargetIds([firstAvailable.id]);
   }, [
     friendsMode,
     participantRosterLoaded,
@@ -1857,12 +1867,17 @@ export function App() {
     try {
       await refreshDevices(token);
       await loadSettingsRef.current?.();
+      try {
+        await refreshQueue(token);
+      } catch (err) {
+        if (!queueSettingsLoadedRef.current) throw err;
+      }
       setSetupDevicesReady(true);
     } catch (err) {
       setLinkError(err instanceof Error ? err.message : String(err));
       setSetupDevicesReady(false);
     }
-  }, [token, me?.pishockLinked, refreshDevices]);
+  }, [token, me?.pishockLinked, refreshDevices, refreshQueue]);
 
   const applyDiscordShareLimits = useCallback((shares: ShareLimitRow[]) => {
     const next: Record<number, ShareLimitRow> = {};
@@ -2106,6 +2121,12 @@ export function App() {
         initialPersonal={personalLimits}
         initialSelectedIds={initialSelectedIds}
         initialShares={savedShareRows}
+        initialQueue={{
+          enabled: queueState.enabled,
+          progressMs: queueState.progressMs,
+          maxPerSender: queueState.maxPerSender,
+          starOnly: queueState.starOnly,
+        }}
         devicesReady={setupDevicesReady}
         busy={setupShareBusy}
         error={linkError}
@@ -2299,18 +2320,23 @@ export function App() {
               onToggleIndividualIntensity={onToggleIndividualIntensity}
               onSelect={(id) => {
                 if (!id) {
+                  friendsSelectionClearedRef.current = true;
                   setSelectedTargetIds([]);
                   return;
                 }
                 if (multiShock) {
-                  setSelectedTargetIds((prev) =>
-                    prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id],
-                  );
+                  setSelectedTargetIds((prev) => {
+                    const next = prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id];
+                    if (next.length === 0) friendsSelectionClearedRef.current = true;
+                    return next;
+                  });
                   return;
                 }
-                setSelectedTargetIds((prev) =>
-                  prev.length === 1 && prev[0] === id ? [] : [id],
-                );
+                setSelectedTargetIds((prev) => {
+                  const next = prev.length === 1 && prev[0] === id ? [] : [id];
+                  if (next.length === 0) friendsSelectionClearedRef.current = true;
+                  return next;
+                });
               }}
               onRefresh={() => token && refreshParticipants(token, true)}
               onTogglePriority={

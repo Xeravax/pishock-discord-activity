@@ -2,6 +2,7 @@ import type { AppEnv } from '../env.js';
 import { broadcastRealtime } from '../realtime.js';
 import {
   assertModeAllowed,
+  assertWithinCeilings,
   clearHoldAutoEnd,
   clampDurationMs,
   clampIntensity,
@@ -9,7 +10,7 @@ import {
   scheduleHoldAutoEnd,
 } from '../operate-policy.js';
 import { bandForOperation, nestBands, personalBandsFromUser, shareBandsFromRow } from '../limit-bands.js';
-import { atLeastWarning } from '../../shared/warning.js';
+import { atLeastWarning, normalizeWarningLevel, warningRank } from '../../shared/warning.js';
 import {
   findActivityShareByShocker,
   getCommandQueueSettings,
@@ -232,7 +233,10 @@ async function endQueuedItem(item: QueueItemInternal): Promise<boolean> {
   return published;
 }
 
-async function executeQueuedItem(item: QueueItemInternal): Promise<void> {
+async function executeQueuedItem(
+  item: QueueItemInternal,
+  isCanceled?: () => boolean,
+): Promise<void> {
   const payload = item.payload as QueuedOperatePayload | undefined;
   if (!payload?.env) {
     throw new Error('Missing queue payload');
@@ -335,7 +339,64 @@ async function executeQueuedItem(item: QueueItemInternal): Promise<void> {
       shockerId: item.shockerId,
       ownerDiscordUserId: item.ownerDiscordUserId,
       vibrateBand: modes.vibrate,
+      gateOnShare: true,
     });
+    if (isCanceled?.()) return;
+
+    const shareNow = await findActivityShareByShocker(item.ownerDiscordUserId, item.shockerId);
+    if (!shareNow || !shareNow.enabled || shareNow.paused) {
+      throw new Error('Share no longer allows this operation');
+    }
+    assertModeAllowed(item.operation, hold, {
+      canShock: shareNow.canShock,
+      canVibrate: shareNow.canVibrate,
+      canBeep: shareNow.canBeep,
+      canHold: shareNow.canHold,
+    });
+    const shareBandsNow = shareBandsFromRow(shareNow);
+    const ownerPersonalNow = personalBandsFromUser(
+      await getPersonalActivityLimits(item.ownerDiscordUserId),
+    );
+    const modesNow = {
+      shock: nestBands(
+        [shareBandsNow.shock, ownerPersonalNow.shock],
+        shareNow.deviceMaxIntensity,
+        shareNow.deviceMaxDurationMs,
+      ),
+      vibrate: nestBands(
+        [shareBandsNow.vibrate, ownerPersonalNow.vibrate],
+        shareNow.deviceMaxIntensity,
+        shareNow.deviceMaxDurationMs,
+      ),
+      beep: nestBands(
+        [shareBandsNow.beep, ownerPersonalNow.beep],
+        shareNow.deviceMaxIntensity,
+        shareNow.deviceMaxDurationMs,
+      ),
+      requiredWarningLevel: atLeastWarning(
+        shareBandsNow.requiredWarningLevel,
+        ownerPersonalNow.requiredWarningLevel,
+      ),
+    };
+    if (item.operation === 'shock' || item.operation === 'hold') {
+      const sentWarning = atLeastWarning(
+        normalizeWarningLevel(item.warningLevel),
+        modes.requiredWarningLevel,
+      );
+      if (warningRank(sentWarning) < warningRank(modesNow.requiredWarningLevel)) {
+        throw new Error('Required warning changed before the shock was sent');
+      }
+    }
+    const bandNow = bandForOperation(modesNow, item.operation);
+    assertWithinCeilings(
+      intensity,
+      durationMs,
+      bandNow.maxIntensity,
+      bandNow.maxDurationMs,
+      bandNow.minIntensity,
+      bandNow.minDurationMs,
+    );
+    if (isCanceled?.()) return;
 
     if ((hold || warning) && clientId != null) {
       const published = await publishOperate(targetCreds, {
@@ -384,6 +445,7 @@ async function executeQueuedItem(item: QueueItemInternal): Promise<void> {
           : 'Hold requires a hub client id so it can be ended',
       );
     }
+    if (isCanceled?.()) return;
     await operateById(targetCreds, item.shockerId, op, intensity, durationMs, agent);
     await auditParticipantCommand({
       ...auditBase,

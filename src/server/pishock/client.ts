@@ -161,6 +161,7 @@ async function requestOnce<T = unknown>(
   url: string,
   style: AuthStyle,
   body?: unknown,
+  signal?: AbortSignal,
 ): Promise<{ status: number; data: T | null; raw: string }> {
   ensureApiKeyUsable(creds);
   const hasJsonBody = body !== undefined;
@@ -168,6 +169,7 @@ async function requestOnce<T = unknown>(
     method,
     headers: headers(creds, hasJsonBody, style),
     body: hasJsonBody ? JSON.stringify(body) : undefined,
+    signal,
   });
   const raw = await res.text();
   if (res.status === 401) {
@@ -194,7 +196,7 @@ async function request<T = unknown>(
   method: string,
   url: string,
   body?: unknown,
-  opts?: { fatalAuth?: boolean },
+  opts?: { fatalAuth?: boolean; signal?: AbortSignal },
 ): Promise<{ status: number; data: T | null; raw: string }> {
   ensureApiKeyUsable(creds);
   const fatalAuth = opts?.fatalAuth !== false;
@@ -203,7 +205,7 @@ async function request<T = unknown>(
   for (let i = 0; i < styles.length; i++) {
     const style = styles[i]!;
     try {
-      return await requestOnce<T>(creds, method, url, style, body);
+      return await requestOnce<T>(creds, method, url, style, body, opts?.signal);
     } catch (err) {
       if (err instanceof PiShockApiError && err.needsRelogin && i + 1 < styles.length) {
         last401 = err;
@@ -233,12 +235,12 @@ export async function getHubs(creds: PiShockCreds) {
   return request(creds, 'GET', `${PISHOCK_API}/Hub`);
 }
 
-export async function getShockers(creds: PiShockCreds) {
-  return request(creds, 'GET', `${PISHOCK_API}/Shockers`);
+export async function getShockers(creds: PiShockCreds, signal?: AbortSignal) {
+  return request(creds, 'GET', `${PISHOCK_API}/Shockers`, undefined, { signal });
 }
 
-export async function getShared(creds: PiShockCreds) {
-  return request(creds, 'GET', `${PISHOCK_API}/Share/GetShared`);
+export async function getShared(creds: PiShockCreds, signal?: AbortSignal) {
+  return request(creds, 'GET', `${PISHOCK_API}/Share/GetShared`, undefined, { signal });
 }
 
 function shareShockerId(payload: Record<string, unknown>): number {
@@ -361,53 +363,6 @@ export async function pauseShare(creds: PiShockCreds, shareId: number, pauseStat
     ShareId: shareId,
     PauseState: pauseState,
   });
-}
-
-/** Legacy device list — reliable `isPaused` flags for owned shockers. */
-export async function getUserDevices(creds: PiShockCreds): Promise<{
-  status: number;
-  data: unknown;
-  raw: string;
-}> {
-  const query = new URLSearchParams({
-    UserId: String(creds.userId),
-    Token: creds.token,
-  });
-  if (creds.mode !== 'session') query.set('api', 'true');
-  if (isPiShockApiKeyRejected(creds.token)) {
-    throw new PiShockApiError(401, 'Unauthorized');
-  }
-  // Legacy GetUserDevices only accepts UserId+Token on the query string.
-  let res: Response;
-  try {
-    res = await fetch(`${PISHOCK_LEGACY_API}/PiShock/GetUserDevices?${query}`, {
-      method: 'GET',
-      headers: {
-        Accept: 'application/json, text/plain',
-        'User-Agent': AGENT_NAME,
-      },
-    });
-  } catch (err) {
-    console.warn(
-      '[pishock] GetUserDevices failed',
-      redactPiShockSecrets(err instanceof Error ? err.message : String(err)),
-    );
-    throw new PiShockApiError(502, 'PiShock device list failed', false);
-  }
-  const raw = await res.text();
-  if (res.status === 401) {
-    rejectPiShockApiKey(creds.token);
-    throw new PiShockApiError(401, 'Unauthorized');
-  }
-  if (!res.ok) {
-    return { status: res.status, data: null, raw };
-  }
-  if (!raw) return { status: res.status, data: null, raw };
-  try {
-    return { status: res.status, data: JSON.parse(raw) as unknown, raw };
-  } catch {
-    return { status: res.status, data: null, raw };
-  }
 }
 
 export async function deleteShare(creds: PiShockCreds, shareId: number) {

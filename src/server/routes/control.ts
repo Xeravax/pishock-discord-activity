@@ -33,9 +33,12 @@ import {
   assertModeAllowed,
   assertOperateRateLimit,
   assertWithinCeilings,
+  beginPendingHold,
+  cancelPendingHold,
   clearHoldAutoEnd,
   clampDurationMs,
   clampIntensity,
+  isPendingHoldCurrent,
   findHubNameInSnapshot,
   findShockerInSnapshot,
   OperatePolicyError,
@@ -53,6 +56,7 @@ import {
   listCommandLogs,
   listPublicCommandLogs,
   getEmergencyStopShockerIds,
+  loadPiShockCreds,
   logCommand,
   setEmergencyStops,
 } from '../session.js';
@@ -146,6 +150,7 @@ function snapshotShockerIds(shockers: unknown[]): number[] {
 
 /** Cut the active queued command when the emergency-stop publish itself failed. */
 async function stopActiveQueuedDevice(ownerDiscordUserId: string, shockerIds: number[]) {
+  commandQueue.holdAdvance(ownerDiscordUserId);
   const state = await commandQueue.snapshot(ownerDiscordUserId);
   if (!state.active || !shockerIds.includes(state.active.shockerId)) return;
   await commandQueue.skipActive(ownerDiscordUserId);
@@ -224,41 +229,47 @@ export const controlRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app, op
 
     let cutFailures = 0;
     if (body.engaged) {
-      const cuts: Array<{ shockerId: number; clientId: string | null }> = [];
-      for (const shockerId of shockerIds) {
-        const row = findShockerInSnapshot(snapshot, shockerId);
-        // Prefer the hub attached to this shocker; body.clientId is only a fallback.
-        const rowClientId = row
-          ? String(row.ClientId ?? row.clientId ?? '').trim() || null
-          : null;
-        const bodyClientId =
-          shockerIds.length === 1 ? verifyOwnedClientId(snapshot, body.clientId) : null;
-        cuts.push({ shockerId, clientId: rowClientId ?? bodyClientId });
-      }
-      for (const cut of cuts) {
-        if (!cut.clientId) {
-          cutFailures += 1;
-          await stopActiveQueuedDevice(req.discordUser.id, [cut.shockerId]);
-          continue;
+      commandQueue.holdAdvance(req.discordUser.id);
+      commandQueue.invalidateInFlight(req.discordUser.id);
+      try {
+        const cuts: Array<{ shockerId: number; clientId: string | null }> = [];
+        for (const shockerId of shockerIds) {
+          const row = findShockerInSnapshot(snapshot, shockerId);
+          // Prefer the hub attached to this shocker; body.clientId is only a fallback.
+          const rowClientId = row
+            ? String(row.ClientId ?? row.clientId ?? '').trim() || null
+            : null;
+          const bodyClientId =
+            shockerIds.length === 1 ? verifyOwnedClientId(snapshot, body.clientId) : null;
+          cuts.push({ shockerId, clientId: rowClientId ?? bodyClientId });
         }
-        const published = await publishOperate(creds, {
-          clientId: cut.clientId,
-          shockerId: cut.shockerId,
-          operation: 'e',
-          intensity: 0,
-          durationMs: 0,
-          end: true,
-          agentName: 'Emergency Stop',
-        });
-        if (!published) {
-          cutFailures += 1;
-          await stopActiveQueuedDevice(req.discordUser.id, [cut.shockerId]);
-          continue;
+        for (const cut of cuts) {
+          if (!cut.clientId) {
+            cutFailures += 1;
+            await stopActiveQueuedDevice(req.discordUser.id, [cut.shockerId]);
+            continue;
+          }
+          const published = await publishOperate(creds, {
+            clientId: cut.clientId,
+            shockerId: cut.shockerId,
+            operation: 'e',
+            intensity: 0,
+            durationMs: 0,
+            end: true,
+            agentName: 'Emergency Stop',
+          });
+          if (!published) {
+            cutFailures += 1;
+            await stopActiveQueuedDevice(req.discordUser.id, [cut.shockerId]);
+            continue;
+          }
+          clearHoldAutoEnd(req.discordUser.id, cut.shockerId);
         }
-        clearHoldAutoEnd(req.discordUser.id, cut.shockerId);
+        // Latch and clear pending work even when an immediate cut fails.
+        await commandQueue.hardClear(req.discordUser.id, { endActiveDevice: false });
+      } finally {
+        commandQueue.releaseAdvance(req.discordUser.id);
       }
-      // Latch and clear pending work even when an immediate cut fails.
-      await commandQueue.hardClear(req.discordUser.id, { endActiveDevice: false });
     }
 
     const result = await setEmergencyStops(req.discordUser.id, shockerIds, body.engaged);
@@ -378,10 +389,19 @@ export const controlRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app, op
     );
     let policy;
     try {
-      policy = await resolveOwnOperatePolicy(req.discordUser.id, creds, {
-        shockerId: body.shockerId,
-        shareCode: body.shareCode,
-      });
+      policy = await resolveOwnOperatePolicy(
+        req.discordUser.id,
+        creds,
+        {
+          shockerId: body.shockerId,
+          shareCode: body.shareCode,
+        },
+        {
+          loadOwnerPiShockCreds: (ownerId) => loadPiShockCreds(opts.env, ownerId),
+          ownerShockerPauseBlocks: (ownerId, ownerCreds, id) =>
+            shockerPauseBlocks(ownerId, ownerCreds, id),
+        },
+      );
     } catch (err) {
       if (err instanceof OperatePolicyError) {
         return reply.code(err.status).send({ error: err.message, code: err.code });
@@ -399,6 +419,7 @@ export const controlRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app, op
       if (shockerId == null || clientId == null) {
         return reply.code(400).send({ error: 'end requires a known shocker and hub client' });
       }
+      cancelPendingHold(policy.ownerDiscordUserId, shockerId);
       clearHoldAutoEnd(policy.ownerDiscordUserId, shockerId);
       const published = await publishOperate(creds, {
         clientId,
@@ -480,6 +501,8 @@ export const controlRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app, op
     const intensity = clampIntensity(body.intensity, band.maxIntensity, band.minIntensity);
     const durationMs = clampDurationMs(body.durationMs, band.maxDurationMs, band.minDurationMs);
 
+    const pendingHold =
+      hold && shockerId != null ? beginPendingHold(policy.ownerDiscordUserId, shockerId) : null;
     try {
       await warnBeforeShock({
         operation,
@@ -492,7 +515,15 @@ export const controlRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app, op
         shareCode,
         ownerDiscordUserId: policy.ownerDiscordUserId,
         vibrateBand: policy.bands.vibrate,
+        gateOnShare: policy.crossUser,
       });
+      if (
+        pendingHold != null &&
+        shockerId != null &&
+        !isPendingHoldCurrent(policy.ownerDiscordUserId, shockerId, pendingHold)
+      ) {
+        return { ok: true, via: 'broker', canceled: true };
+      }
 
       const op =
         operation === 'shock' || operation === 'hold'

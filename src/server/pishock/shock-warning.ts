@@ -7,7 +7,7 @@ import {
   normalizeWarningLevel,
   type WarningLevel,
 } from '../../shared/warning.js';
-import { isEmergencyStopped } from '../session.js';
+import { findActivityShareByShocker, isEmergencyStopped } from '../session.js';
 import { publishOperate } from './broker.js';
 import { ShockerOp } from '../../shared/constants.js';
 import type { PiShockCreds } from './client.js';
@@ -54,12 +54,20 @@ export type WarnBeforeShockDeps = {
   publishOperate: typeof publishOperate;
   isEmergencyStopped: typeof isEmergencyStopped;
   sleep: (ms: number) => Promise<void>;
+  /** True when this owner's activity share is missing, disabled, or paused. */
+  isShareBlocked?: (ownerDiscordUserId: string, shockerId: number) => Promise<boolean>;
 };
+
+async function shareBlocksCommand(ownerDiscordUserId: string, shockerId: number): Promise<boolean> {
+  const share = await findActivityShareByShocker(ownerDiscordUserId, shockerId);
+  return !share || !share.enabled || share.paused;
+}
 
 const defaultWarnDeps: WarnBeforeShockDeps = {
   publishOperate,
   isEmergencyStopped,
   sleep,
+  isShareBlocked: shareBlocksCommand,
 };
 
 /**
@@ -78,6 +86,8 @@ export async function warnBeforeShock(
     shareCode?: string | null;
     ownerDiscordUserId: string;
     vibrateBand: IntensityDurationBand;
+    /** Re-check the activity share after the warning wait. Own-device controls leave this off. */
+    gateOnShare?: boolean;
   },
   deps: WarnBeforeShockDeps = defaultWarnDeps,
 ): Promise<void> {
@@ -144,5 +154,10 @@ export async function warnBeforeShock(
       423,
       'EMERGENCY_STOP',
     );
+  }
+  if (input.gateOnShare && input.shockerId != null && deps.isShareBlocked) {
+    if (await deps.isShareBlocked(input.ownerDiscordUserId, input.shockerId)) {
+      throw new ShockWarningError('Share is not available', 404, 'TARGET_UNAVAILABLE');
+    }
   }
 }
