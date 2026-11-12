@@ -196,13 +196,22 @@ describe('refuse — operate policy bypasses', () => {
 
   it('cross-user caps ignore the executor personal activity limits', async () => {
     // Executor must not raise (or redefine) someone else's share ceiling via their own settings.
+    // Owner personal floors still nest into guest operate.
     const deps = baseDeps({
-      getPersonalActivityLimits: async () => ({
-        activityMinIntensity: 1,
-        activityMaxIntensity: 1,
-        activityMinDurationMs: 16,
-        activityMaxDurationMs: 16,
-      }),
+      getPersonalActivityLimits: async (discordUserId) =>
+        discordUserId === 'caller-2'
+          ? {
+              activityMinIntensity: 1,
+              activityMaxIntensity: 1,
+              activityMinDurationMs: 16,
+              activityMaxDurationMs: 16,
+            }
+          : {
+              activityMinIntensity: 1,
+              activityMaxIntensity: 100,
+              activityMinDurationMs: 16,
+              activityMaxDurationMs: 15_000,
+            },
       findActivityShareByCode: async () =>
         shareRow({ maxIntensity: 50, maxDurationMs: 5_000, deviceMaxIntensity: 80 }),
     });

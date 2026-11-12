@@ -275,11 +275,16 @@ export function ActivityLimitsSettings({
   }, [onLoad]);
 
   useEffect(() => {
+    if (focusShockerId == null) return;
+    setSharesOpen(true);
+  }, [focusShockerId]);
+
+  useEffect(() => {
     if (!loaded || focusShockerId == null) return;
     document
       .getElementById(`activity-limit-shocker-${focusShockerId}`)
       ?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-  }, [loaded, focusShockerId]);
+  }, [loaded, focusShockerId, sharesOpen]);
 
   const save = async () => {
     setSaving(true);

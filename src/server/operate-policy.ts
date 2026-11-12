@@ -19,6 +19,7 @@ import {
   type ModeLimitBands,
 } from './limit-bands.js';
 import {
+  atLeastWarning,
   normalizeWarningLevel,
   type WarningLevel,
 } from '../shared/warning.js';
@@ -444,6 +445,9 @@ export async function resolveOwnOperatePolicy(
           throw new OperatePolicyError('Owner has emergency stop engaged', 423, 'EMERGENCY_STOP');
         }
         const shareBands = shareBandsFromRow(registered);
+        const ownerPersonal = personalBandsFromUser(
+          await deps.getPersonalActivityLimits(registered.discordUserId),
+        );
         return policyFromBands(
           {
             ownerDiscordUserId: registered.discordUserId,
@@ -461,11 +465,23 @@ export async function resolveOwnOperatePolicy(
             crossUser: true,
           },
           {
-            shock: nestBands([shareBands.shock], registered.deviceMaxIntensity, registered.deviceMaxDurationMs),
-            vibrate: nestBands([shareBands.vibrate], registered.deviceMaxIntensity, registered.deviceMaxDurationMs),
-            beep: nestBands([shareBands.beep], registered.deviceMaxIntensity, registered.deviceMaxDurationMs),
+            shock: nestBands(
+              [shareBands.shock, ownerPersonal.shock],
+              registered.deviceMaxIntensity,
+              registered.deviceMaxDurationMs,
+            ),
+            vibrate: nestBands(
+              [shareBands.vibrate, ownerPersonal.vibrate],
+              registered.deviceMaxIntensity,
+              registered.deviceMaxDurationMs,
+            ),
+            beep: nestBands(
+              [shareBands.beep, ownerPersonal.beep],
+              registered.deviceMaxIntensity,
+              registered.deviceMaxDurationMs,
+            ),
           },
-          shareBands.requiredWarningLevel,
+          atLeastWarning(shareBands.requiredWarningLevel, ownerPersonal.requiredWarningLevel),
         );
       }
 
@@ -512,9 +528,7 @@ export async function resolveOwnOperatePolicy(
             registered.deviceMaxDurationMs,
           ),
         },
-        shareBands.requiredWarningLevel !== 'none'
-          ? shareBands.requiredWarningLevel
-          : personalBands.requiredWarningLevel,
+        atLeastWarning(shareBands.requiredWarningLevel, personalBands.requiredWarningLevel),
       );
     }
 

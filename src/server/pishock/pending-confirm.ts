@@ -104,7 +104,9 @@ export function isConfirmInFlight(discordUserId: string): boolean {
 }
 
 export function getConfirmFlight(discordUserId: string): PendingPiShockConfirm | null {
-  return confirmFlights.get(discordUserId)?.pending ?? null;
+  const flight = confirmFlights.get(discordUserId);
+  if (!flight || flight.ownerGeneration == null) return null;
+  return flight.pending;
 }
 
 /**

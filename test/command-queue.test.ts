@@ -223,6 +223,43 @@ describe('command queue', () => {
     assert.equal(h.executed[1], second.itemId);
   });
 
+  it('skipActive does not clear a newer active item after a raced end', async () => {
+    let releaseEnd!: () => void;
+    const endGate = new Promise<void>((resolve) => {
+      releaseEnd = resolve;
+    });
+    const endedIds: string[] = [];
+    const h = makeHarness({
+      endActive: async (item) => {
+        endedIds.push(item.id);
+        await endGate;
+      },
+    });
+    const first = await h.queue.enqueue(
+      baseInput({ ownerDiscordUserId: 'owner', executorDiscordUserId: 'a', durationMs: 5_000 }),
+    );
+    const second = await h.queue.enqueue(
+      baseInput({ ownerDiscordUserId: 'owner', executorDiscordUserId: 'b', durationMs: 40 }),
+    );
+    await h.flush();
+    assert.equal(h.executed[0], first.itemId);
+
+    const skip1 = h.queue.skipActive('owner');
+    const skip2 = h.queue.skipActive('owner');
+    releaseEnd();
+    const [r1, r2] = await Promise.all([skip1, skip2]);
+    assert.equal(r1.ended, true);
+    assert.equal(r2.ended, true);
+    assert.ok(endedIds.includes(first.itemId));
+    await h.flush();
+    await h.advance(0);
+    await h.flush();
+
+    assert.ok(h.executed.includes(second.itemId));
+    const state = await h.queue.snapshot('owner');
+    assert.equal(state.active?.id, second.itemId);
+  });
+
   it('clear drops waiting only', async () => {
     const h = makeHarness();
     const first = await h.queue.enqueue(

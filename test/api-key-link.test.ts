@@ -67,6 +67,33 @@ describe('validateApiKey', () => {
       },
     );
   });
+
+  it('propagates non-401 PiShock failures instead of forcing 401', async () => {
+    globalThis.fetch = async () => new Response('upstream busy', { status: 503 });
+
+    await assert.rejects(
+      () => validateApiKey({ apiKey: 'secret-key', username: 'wearer', userId: 9 }),
+      (err: unknown) => {
+        assert.ok(err instanceof PiShockApiError);
+        assert.equal(err.status, 503);
+        assert.equal(err.needsRelogin, false);
+        return true;
+      },
+    );
+  });
+
+  it('still returns 401 when every account probe is unauthorized', async () => {
+    globalThis.fetch = async () => new Response('Unauthorized', { status: 401 });
+
+    await assert.rejects(
+      () => validateApiKey({ apiKey: 'secret-key', username: 'wearer', userId: 9 }),
+      (err: unknown) => {
+        assert.ok(err instanceof PiShockApiError);
+        assert.equal(err.status, 401);
+        return true;
+      },
+    );
+  });
 });
 
 describe('manual API key rate limit', () => {

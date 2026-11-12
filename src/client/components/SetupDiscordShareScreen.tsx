@@ -196,7 +196,11 @@ function savedShareToMode(s: ShockerView, row: ShareLimitRow): ModeLimitsValue {
   };
 }
 
-function toShare(s: ShockerView, mode: ModeLimitsValue): ActivityShareConfig {
+function toShare(
+  s: ShockerView,
+  mode: ModeLimitsValue,
+  saved?: ShareLimitRow | null,
+): ActivityShareConfig {
   const deviceMaxI = Math.min(100, s.deviceMaxIntensity ?? s.maxIntensity ?? 100);
   const deviceMaxD = Math.min(15_000, s.deviceMaxDuration ?? s.maxDuration ?? 15_000);
   return {
@@ -205,7 +209,7 @@ function toShare(s: ShockerView, mode: ModeLimitsValue): ActivityShareConfig {
     hubClientId: s.clientId != null ? String(s.clientId) : null,
     hubName: s.hubName ?? null,
     enabled: true,
-    paused: false,
+    paused: Boolean(saved?.paused),
     deviceMaxIntensity: deviceMaxI,
     deviceMaxDurationMs: deviceMaxD,
     minIntensity: mode.shock.minIntensity,
@@ -247,6 +251,7 @@ export function SetupDiscordShareScreen({
   const [seeded, setSeeded] = useState(false);
   const [personal, setPersonal] = useState<PersonalLimits>(initialPersonal);
   const [shareModes, setShareModes] = useState<Record<number, ModeLimitsValue>>({});
+  const [editedShareIds, setEditedShareIds] = useState<Set<number>>(() => new Set());
   const [queue, setQueue] = useState<QueuePanelSettings>(DEFAULT_QUEUE);
   const [defaultsOpen, setDefaultsOpen] = useState(true);
   const [sharesOpen, setSharesOpen] = useState(true);
@@ -254,6 +259,19 @@ export function SetupDiscordShareScreen({
   useEffect(() => {
     setPersonal(initialPersonal);
   }, [initialPersonal]);
+
+  const updatePersonalDefaults = (next: PersonalLimits) => {
+    setPersonal(next);
+    const savedById = new Map((initialShares ?? []).map((row) => [row.shockerId, row]));
+    setShareModes((prev) => {
+      const out = { ...prev };
+      for (const s of owned) {
+        if (editedShareIds.has(s.id) || savedById.has(s.id)) continue;
+        out[s.id] = defaultShareMode(s, next);
+      }
+      return out;
+    });
+  };
 
   useEffect(() => {
     if (!devicesReady) {
@@ -299,8 +317,13 @@ export function SetupDiscordShareScreen({
   const selectedOwned = owned.filter((s) => selected.has(s.id));
 
   const submit = (includeQueue: boolean) => {
+    const savedById = new Map((initialShares ?? []).map((row) => [row.shockerId, row]));
     const shares = selectedOwned.map((s) =>
-      toShare(s, shareModes[s.id] ?? defaultShareMode(s, personal)),
+      toShare(
+        s,
+        shareModes[s.id] ?? defaultShareMode(s, personal),
+        savedById.get(s.id) ?? null,
+      ),
     );
     void onComplete({
       shares,
@@ -507,12 +530,17 @@ export function SetupDiscordShareScreen({
                   open={defaultsOpen}
                   onToggle={() => setDefaultsOpen((open) => !open)}
                 >
+                  <p className="text-caption text-grey-5" style={{ margin: '0 0 8px' }}>
+                    These ranges are your saved own-device limits and the starting point for new
+                    shares. Turn actions on or off on each shared shocker below.
+                  </p>
                   <ModeLimitsEditor
                     value={personalToMode(personal)}
                     deviceMaxIntensity={100}
                     deviceMaxDurationMs={15_000}
                     disabled={busy}
-                    onChange={(m) => setPersonal((p) => modeToPersonal(m, p))}
+                    hideActionToggles
+                    onChange={(m) => updatePersonalDefaults(modeToPersonal(m, personal))}
                   />
                 </SetupLimitsPane>
 
@@ -544,12 +572,13 @@ export function SetupDiscordShareScreen({
                             deviceMaxIntensity={deviceMaxI}
                             deviceMaxDurationMs={deviceMaxD}
                             disabled={busy}
-                            onChange={(m) =>
+                            onChange={(m) => {
+                              setEditedShareIds((prev) => new Set(prev).add(s.id));
                               setShareModes((prev) => ({
                                 ...prev,
                                 [s.id]: m,
-                              }))
-                            }
+                              }));
+                            }}
                           />
                         </div>
                       );

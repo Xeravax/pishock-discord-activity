@@ -277,9 +277,14 @@ export function QueuePanel({
                 Clear
               </button>
             </div>
-            {!halted ? (
+            {!halted && !paused ? (
               <div className="text-caption text-grey-5 queue-panel-status-row">
                 Waiting operations continue.
+              </div>
+            ) : null}
+            {!halted && paused ? (
+              <div className="text-caption text-grey-5 queue-panel-status-row">
+                Waiting entries stay queued until you resume.
               </div>
             ) : null}
             {paused || halted ? (

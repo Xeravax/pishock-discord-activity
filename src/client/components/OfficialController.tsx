@@ -906,8 +906,11 @@ export function OfficialController({
     };
     holdingOpRef.current = operation;
     setHoldingOp(operation);
-    // Hold for activity max; release sends broker end (m:"e"). The server warns first.
-    fire(operation, Math.max(1, intensity), maxDur, { hold: true });
+    // Hold for the active mode's max; release sends broker end (m:"e"). The server warns first.
+    const holdMode: ModeBandOp =
+      operation === 'vibrate' ? 'vibrate' : operation === 'beep' ? 'beep' : 'shock';
+    const holdMaxDur = shockerUsableDur(active, holdMode);
+    fire(operation, Math.max(1, intensity), holdMaxDur, { hold: true });
   };
 
   useEffect(() => {
@@ -1953,6 +1956,13 @@ function DurationMetric({
     const label = sec < 1 ? `.${String(sec).split('.')[1]}` : String(sec);
     return { choiceKey: String(sec), ms, label };
   });
+  if (floor <= maxMs && !presetChoices.some((c) => c.ms === floor)) {
+    presetChoices.unshift({
+      choiceKey: `floor-${floor}`,
+      ms: floor,
+      label: formatDurationSec(floor),
+    });
+  }
   if (presetChoices.length === 0 && floor <= maxMs) {
     const lowest = Math.round(DURATION_PRESETS_SEC[0] * 1000);
     const highest = Math.round(DURATION_PRESETS_SEC[DURATION_PRESETS_SEC.length - 1]! * 1000);

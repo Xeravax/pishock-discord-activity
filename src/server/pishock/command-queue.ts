@@ -374,7 +374,12 @@ export function createCommandQueue(deps: CommandQueueDeps) {
         if (!next) break;
 
         const gen = q.generation;
-        const ok = await deps.validateBeforeRun(next);
+        let ok = false;
+        try {
+          ok = await deps.validateBeforeRun(next);
+        } catch {
+          ok = false;
+        }
         if (!ok) {
           emitTicket(next, 'removed', null, q.paused, {
             estimatedWaitMs: null,

@@ -7,6 +7,14 @@ function shockerIdOf(row: Record<string, unknown>): number | null {
   return Math.floor(id);
 }
 
+/** True when every active share shocker is latched — independent of PiShock pause. */
+export function allActiveShockersEStopped(
+  active: Array<{ shockerId: number }>,
+  eStops: ReadonlySet<number>,
+): boolean {
+  return active.length > 0 && active.every((s) => eStops.has(s.shockerId));
+}
+
 /** Owned shocker ids PiShock currently reports as paused (snapshot rows only). */
 export function pausedOwnedShockerIds(snapshot: ControlSnapshot): number[] {
   const ids = new Set<number>();

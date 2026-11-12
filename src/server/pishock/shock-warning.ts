@@ -50,22 +50,37 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+export type WarnBeforeShockDeps = {
+  publishOperate: typeof publishOperate;
+  isEmergencyStopped: typeof isEmergencyStopped;
+  sleep: (ms: number) => Promise<void>;
+};
+
+const defaultWarnDeps: WarnBeforeShockDeps = {
+  publishOperate,
+  isEmergencyStopped,
+  sleep,
+};
+
 /**
  * Publish the warning vibe and wait. Returns when the shock or hold may proceed.
  * A non-none level with no hub, a failed publish, or an emergency stop after the wait aborts.
  */
-export async function warnBeforeShock(input: {
-  operation: string;
-  requestedWarningLevel: unknown;
-  requiredWarningLevel: WarningLevel;
-  canVibrate: boolean;
-  creds: PiShockCreds;
-  clientId: string | null;
-  shockerId: number | null;
-  shareCode?: string | null;
-  ownerDiscordUserId: string;
-  vibrateBand: IntensityDurationBand;
-}): Promise<void> {
+export async function warnBeforeShock(
+  input: {
+    operation: string;
+    requestedWarningLevel: unknown;
+    requiredWarningLevel: WarningLevel;
+    canVibrate: boolean;
+    creds: PiShockCreds;
+    clientId: string | null;
+    shockerId: number | null;
+    shareCode?: string | null;
+    ownerDiscordUserId: string;
+    vibrateBand: IntensityDurationBand;
+  },
+  deps: WarnBeforeShockDeps = defaultWarnDeps,
+): Promise<void> {
   if (input.operation !== 'shock' && input.operation !== 'hold') return;
 
   const level = atLeastWarning(
@@ -105,7 +120,7 @@ export async function warnBeforeShock(input: {
     input.vibrateBand.maxDurationMs,
     input.vibrateBand.minDurationMs,
   );
-  const published = await publishOperate(input.creds, {
+  const published = await deps.publishOperate(input.creds, {
     clientId,
     shockerId: input.shockerId,
     operation: ShockerOp.Vibrate,
@@ -122,8 +137,8 @@ export async function warnBeforeShock(input: {
     );
   }
 
-  await sleep(warnDuration + WARNING_SHOCK_GAP_MS);
-  if (await isEmergencyStopped(input.ownerDiscordUserId, input.shockerId)) {
+  await deps.sleep(warnDuration + WARNING_SHOCK_GAP_MS);
+  if (await deps.isEmergencyStopped(input.ownerDiscordUserId, input.shockerId)) {
     throw new ShockWarningError(
       'Owner has emergency stop engaged',
       423,

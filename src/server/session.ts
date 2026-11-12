@@ -85,7 +85,16 @@ export async function loadPiShockCreds(
   // No clock wipe — keys stay until PiShock rejects them (401 → clearPiShockSession).
   const token = decryptToken(env.tokenKey, row.encryptedToken, row.tokenIv, row.tokenAuthTag);
   if (isPiShockApiKeyRejected(token)) {
-    await clearPiShockSession(discordUserId);
+    // Compare-and-delete so a replacement key linked meanwhile is preserved.
+    const deleted = await prisma.piShockSession.deleteMany({
+      where: {
+        discordUserId,
+        encryptedToken: row.encryptedToken,
+        tokenIv: row.tokenIv,
+        tokenAuthTag: row.tokenAuthTag,
+      },
+    });
+    if (deleted.count > 0) disconnectBroker(discordUserId);
     return null;
   }
   const apiKeyHash = hashApiKey(token);
@@ -100,8 +109,15 @@ export async function loadPiShockCreds(
       });
       for (const other of displaced) disconnectBroker(other.discordUserId);
     }
-    await prisma.piShockSession.update({
-      where: { discordUserId },
+    // Only stamp the hash if this ciphertext is still the stored session.
+    await prisma.piShockSession.updateMany({
+      where: {
+        discordUserId,
+        encryptedToken: row.encryptedToken,
+        tokenIv: row.tokenIv,
+        tokenAuthTag: row.tokenAuthTag,
+        OR: [{ apiKeyHash: null }, { apiKeyHash: { not: apiKeyHash } }],
+      },
       data: { apiKeyHash },
     });
   }

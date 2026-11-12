@@ -24,7 +24,7 @@ import { commandQueue } from '../pishock/command-queue-runtime.js';
 import {
   annotateShockersWithPause,
   getPiShockPauseState,
-  invalidatePiShockPauseCache,
+  isPiShockSharePaused,
   rememberPiShockPaused,
   shockerPauseBlocks,
   type PiShockPauseState,
@@ -159,7 +159,6 @@ export const controlRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app, op
       const snapshot = await fetchControlSnapshot(req.pishockCreds!);
       const clientIds = collectHubClientIds(snapshot.hubs);
       ensureLogCapture(req.discordUser.id, req.pishockCreds!, clientIds);
-      invalidatePiShockPauseCache(req.discordUser.id);
       const [emergencyStopShockerIds, pause] = await Promise.all([
         getEmergencyStopShockerIds(req.discordUser.id),
         getPiShockPauseState(req.discordUser.id, req.pishockCreds!).catch(
@@ -223,23 +222,25 @@ export const controlRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app, op
       }
     }
 
+    let cutFailures = 0;
     if (body.engaged) {
-      const cuts: Array<{ shockerId: number; clientId: string }> = [];
+      const cuts: Array<{ shockerId: number; clientId: string | null }> = [];
       for (const shockerId of shockerIds) {
         const row = findShockerInSnapshot(snapshot, shockerId);
-        const clientId =
-          (shockerIds.length === 1 ? verifyOwnedClientId(snapshot, body.clientId) : null) ??
-          (row ? String(row.ClientId ?? row.clientId ?? '').trim() || null : null);
-        if (!clientId) {
-          await stopActiveQueuedDevice(req.discordUser.id, shockerIds);
-          return reply.code(502).send({
-            error: 'Emergency stop requires a hub client id',
-            code: 'EMERGENCY_STOP_FAILED',
-          });
-        }
-        cuts.push({ shockerId, clientId });
+        // Prefer the hub attached to this shocker; body.clientId is only a fallback.
+        const rowClientId = row
+          ? String(row.ClientId ?? row.clientId ?? '').trim() || null
+          : null;
+        const bodyClientId =
+          shockerIds.length === 1 ? verifyOwnedClientId(snapshot, body.clientId) : null;
+        cuts.push({ shockerId, clientId: rowClientId ?? bodyClientId });
       }
       for (const cut of cuts) {
+        if (!cut.clientId) {
+          cutFailures += 1;
+          await stopActiveQueuedDevice(req.discordUser.id, [cut.shockerId]);
+          continue;
+        }
         const published = await publishOperate(creds, {
           clientId: cut.clientId,
           shockerId: cut.shockerId,
@@ -250,19 +251,36 @@ export const controlRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app, op
           agentName: 'Emergency Stop',
         });
         if (!published) {
-          await stopActiveQueuedDevice(req.discordUser.id, shockerIds);
-          return reply.code(502).send({
-            error: 'Failed to cut the shocker',
-            code: 'EMERGENCY_STOP_FAILED',
-          });
+          cutFailures += 1;
+          await stopActiveQueuedDevice(req.discordUser.id, [cut.shockerId]);
+          continue;
         }
+        clearHoldAutoEnd(req.discordUser.id, cut.shockerId);
       }
-      for (const cut of cuts) clearHoldAutoEnd(req.discordUser.id, cut.shockerId);
-      // Devices already cut above; drop waiting + active queue slots for this wearer.
+      // Latch and clear pending work even when an immediate cut fails.
       await commandQueue.hardClear(req.discordUser.id, { endActiveDevice: false });
     }
 
     const result = await setEmergencyStops(req.discordUser.id, shockerIds, body.engaged);
+    if (body.engaged && cutFailures > 0) {
+      broadcastRealtimeAll({
+        type: 'emergency_stop',
+        ownerDiscordUserId: req.discordUser.id,
+        shockerId: shockerIds[0]!,
+        engaged: true,
+        emergencyStopShockerIds: result.emergencyStopShockerIds,
+        at: Date.now(),
+      });
+      return reply.code(502).send({
+        error:
+          cutFailures === shockerIds.length
+            ? 'Failed to cut the shocker'
+            : 'Emergency stop latched, but one or more cuts failed',
+        code: 'EMERGENCY_STOP_FAILED',
+        emergencyStopShockerIds: result.emergencyStopShockerIds,
+        cutFailures,
+      });
+    }
     for (const shockerId of shockerIds) {
       const row = findShockerInSnapshot(snapshot, shockerId);
       const hubClientId = row
@@ -413,10 +431,16 @@ export const controlRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app, op
       return { ok: true, via: 'broker', ended: true };
     }
 
-    // Refuse before hitting PiShock when the site already reports this shocker paused.
-    if (shockerId != null) {
-      const paused = await shockerPauseBlocks(req.discordUser.id, creds, shockerId);
-      if (paused) {
+    // Refuse before hitting PiShock when the site already reports this shocker/share paused.
+    if (shockerId != null || shareCode) {
+      const pausedByShocker =
+        shockerId != null
+          ? await shockerPauseBlocks(req.discordUser.id, creds, shockerId)
+          : false;
+      const pausedByShare = shareCode
+        ? await isPiShockSharePaused(req.discordUser.id, creds, shareCode)
+        : false;
+      if (pausedByShocker || pausedByShare) {
         rememberPiShockPaused(req.discordUser.id, { shockerId, shareCode });
         return reply.code(503).send({
           error: 'This shocker or share is paused on PiShock',

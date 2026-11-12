@@ -208,6 +208,13 @@ export const pishockSessionRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (
         expiresAt: created.expiry,
         apiKeyId: created.apiKeyId,
       });
+      if (!confirmAttemptOwns(req.discordUser.id, generation)) {
+        // Cancel/manual link won during save — do not hand the key to this confirm.
+        return reply.code(409).send({
+          error: 'PiShock login confirmation was cancelled',
+          code: 'CONFIRM_CANCELLED',
+        });
+      }
 
       return {
         ok: true,

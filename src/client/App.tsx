@@ -521,21 +521,31 @@ export function App() {
     });
   }, [token, refreshParticipantStatus]);
 
-  // Auto-select once per friends-mode entry, after the roster and status first load.
+  // Auto-select once per friends-mode entry, after a usable roster/status loads.
   useEffect(() => {
     if (!friendsMode) {
       friendsAutoSelectDoneRef.current = false;
       return;
     }
     if (friendsAutoSelectDoneRef.current || !participantRosterLoaded) return;
-    friendsAutoSelectDoneRef.current = true;
-    if (selectedTargetIds.length > 0) return;
+    if (selectedTargetIds.length > 0) {
+      friendsAutoSelectDoneRef.current = true;
+      return;
+    }
+    if (participants.length === 0) return;
     const selfId = me?.user?.id;
     const firstAvailable = participants.find((p) => {
       if (selfId && p.id === selfId) return false;
       const status = participantStatus[p.id];
       return Boolean(status?.available && status.shockers?.length);
     });
+    // Wait until status for at least one non-self participant is known.
+    const hasEvaluableStatus = participants.some((p) => {
+      if (selfId && p.id === selfId) return false;
+      return participantStatus[p.id] != null;
+    });
+    if (!hasEvaluableStatus) return;
+    friendsAutoSelectDoneRef.current = true;
     if (firstAvailable) setSelectedTargetIds([firstAvailable.id]);
   }, [
     friendsMode,
@@ -1217,7 +1227,11 @@ export function App() {
   const applyDefaultStartMenu = useCallback(
     (menu: DefaultStartMenu) => {
       if (!me?.user?.id) return;
-      saveDefaultStartMenu(me.user.id, menu);
+      try {
+        saveDefaultStartMenu(me.user.id, menu);
+      } catch {
+        // Storage may be blocked; still apply for this session.
+      }
       defaultMenuAppliedRef.current = true;
       setDefaultMenuPrompt(false);
       setFriendsMode(menu === 'friends');
@@ -1395,7 +1409,6 @@ export function App() {
   };
 
   const continueAfterApiKeyReveal = async (accessToken: string) => {
-    setApiKeyReveal(null);
     setSetupDevicesReady(false);
     setSetupSharePhase(true);
     try {
@@ -1404,6 +1417,7 @@ export function App() {
         await refreshDevices(accessToken);
         await refreshLogs(accessToken).catch(() => undefined);
         await loadSettingsRef.current?.();
+        setApiKeyReveal(null);
         setSetupDevicesReady(true);
       } else {
         setSetupSharePhase(false);
@@ -1842,15 +1856,12 @@ export function App() {
     setSetupSharePhase(true);
     try {
       await refreshDevices(token);
-    } catch (err) {
-      setLinkError(err instanceof Error ? err.message : String(err));
-    }
-    try {
       await loadSettingsRef.current?.();
+      setSetupDevicesReady(true);
     } catch (err) {
       setLinkError(err instanceof Error ? err.message : String(err));
+      setSetupDevicesReady(false);
     }
-    setSetupDevicesReady(true);
   }, [token, me?.pishockLinked, refreshDevices]);
 
   const applyDiscordShareLimits = useCallback((shares: ShareLimitRow[]) => {

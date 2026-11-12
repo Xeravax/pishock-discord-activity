@@ -29,15 +29,18 @@ export function ApiKeyRevealPanel({
   onContinue,
 }: Props) {
   const [copied, setCopied] = useState(false);
+  const [copyError, setCopyError] = useState<string | null>(null);
   const expiryLabel = formatExpiry(expiresAt);
 
   const copyKey = async () => {
     try {
       await navigator.clipboard.writeText(apiKey);
+      setCopyError(null);
       setCopied(true);
       window.setTimeout(() => setCopied(false), 2000);
     } catch {
       setCopied(false);
+      setCopyError('Could not copy. Reveal the key and select it manually.');
     }
   };
 
@@ -78,6 +81,12 @@ export function ApiKeyRevealPanel({
           <div className="auth-boot__account-label">API key</div>
           <SecretValue value={apiKey} label="API key" className="auth-boot__api-key" />
         </div>
+
+        {copyError ? (
+          <div className="auth-boot__error" role="alert">
+            <p>{copyError}</p>
+          </div>
+        ) : null}
 
         <div className="auth-boot__actions">
           <button

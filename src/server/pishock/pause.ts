@@ -191,13 +191,30 @@ async function refreshPiShockPause(
     loadSource(prev.shared, () => getShared(creds), readList),
     loadSource(prev.devices, () => getUserDevices(creds), shockersFromUserDevices),
   ]);
+  const rememberedShockers = new Set(prev.rememberedShockers);
+  const rememberedCodes = new Set(prev.rememberedCodes);
+  // Only when every source succeeds is the live set authoritative enough to
+  // drop 503-remembered marks that no longer appear as paused.
+  if (shockers.known && shared.known && devices.known) {
+    const liveIds = new Set<number>([
+      ...shockers.shockerIds,
+      ...shared.shockerIds,
+      ...devices.shockerIds,
+    ]);
+    for (const id of [...rememberedShockers]) {
+      if (!liveIds.has(id)) rememberedShockers.delete(id);
+    }
+    for (const code of [...rememberedCodes]) {
+      if (!shared.shareCodes.has(code)) rememberedCodes.delete(code);
+    }
+  }
   const entry: PauseCacheEntry = {
     at: Date.now(),
     shockers,
     shared,
     devices,
-    rememberedShockers: new Set(prev.rememberedShockers),
-    rememberedCodes: new Set(prev.rememberedCodes),
+    rememberedShockers,
+    rememberedCodes,
   };
   if ((epochs.get(discordUserId) ?? 0) === epoch) {
     cache.set(discordUserId, entry);

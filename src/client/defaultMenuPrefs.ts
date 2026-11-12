@@ -16,7 +16,11 @@ export function loadDefaultStartMenu(discordUserId: string): DefaultStartMenu | 
 }
 
 export function saveDefaultStartMenu(discordUserId: string, menu: DefaultStartMenu) {
-  localStorage.setItem(keyFor(discordUserId), JSON.stringify({ menu }));
+  try {
+    localStorage.setItem(keyFor(discordUserId), JSON.stringify({ menu }));
+  } catch {
+    // Quota / privacy mode — caller still applies the choice for this session.
+  }
 }
 
 export function clearDefaultStartMenu(discordUserId: string) {

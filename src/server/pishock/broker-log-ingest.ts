@@ -190,12 +190,13 @@ export async function ingestBrokerDeviceLog(
     });
     return true;
   } catch (err) {
-    if (isPrismaUniqueConflict(err)) return false;
+    if (isBrokerLogUniqueConflict(err)) return false;
     throw err;
   }
 }
 
-function isPrismaUniqueConflict(err: unknown): boolean {
+/** True only for Prisma unique violations — other write errors must propagate. */
+export function isBrokerLogUniqueConflict(err: unknown): boolean {
   return Boolean(
     err &&
       typeof err === 'object' &&

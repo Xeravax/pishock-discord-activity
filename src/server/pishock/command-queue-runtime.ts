@@ -8,11 +8,13 @@ import {
   resolveDeviceCeilingsFromPiShock,
   scheduleHoldAutoEnd,
 } from '../operate-policy.js';
-import { bandForOperation, shareBandsFromRow } from '../limit-bands.js';
+import { bandForOperation, nestBands, personalBandsFromUser, shareBandsFromRow } from '../limit-bands.js';
+import { atLeastWarning } from '../../shared/warning.js';
 import {
   findActivityShareByShocker,
   getCommandQueueSettings,
   getConsent,
+  getPersonalActivityLimits,
   isEmergencyStopped,
   isExecutorBanned,
   isQueueStarred,
@@ -282,7 +284,31 @@ async function executeQueuedItem(item: QueueItemInternal): Promise<void> {
       canBeep: share.canBeep,
       canHold: share.canHold,
     });
-    const modes = shareBandsFromRow(share);
+    const shareBands = shareBandsFromRow(share);
+    const ownerPersonal = personalBandsFromUser(
+      await getPersonalActivityLimits(item.ownerDiscordUserId),
+    );
+    const modes = {
+      shock: nestBands(
+        [shareBands.shock, ownerPersonal.shock],
+        share.deviceMaxIntensity,
+        share.deviceMaxDurationMs,
+      ),
+      vibrate: nestBands(
+        [shareBands.vibrate, ownerPersonal.vibrate],
+        share.deviceMaxIntensity,
+        share.deviceMaxDurationMs,
+      ),
+      beep: nestBands(
+        [shareBands.beep, ownerPersonal.beep],
+        share.deviceMaxIntensity,
+        share.deviceMaxDurationMs,
+      ),
+      requiredWarningLevel: atLeastWarning(
+        shareBands.requiredWarningLevel,
+        ownerPersonal.requiredWarningLevel,
+      ),
+    };
     const band = bandForOperation(modes, item.operation);
     const intensity = Math.max(
       1,
@@ -294,6 +320,10 @@ async function executeQueuedItem(item: QueueItemInternal): Promise<void> {
     auditBase.hubName = share.hubName ?? null;
     auditBase.intensity = intensity;
     auditBase.durationMs = durationMs;
+
+    if (hold && !clientId) {
+      throw new Error('Hold requires a hub client id so it can be ended');
+    }
 
     await warnBeforeShock({
       operation: item.operation,

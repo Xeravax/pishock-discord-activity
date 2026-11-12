@@ -105,6 +105,7 @@ async function tick() {
   const generation = healthGeneration;
   try {
     const info = await fetchHealth();
+    if (generation !== healthGeneration) return;
     if (!info) {
       setState({
         status: state.status === 'restarting' ? 'restarting' : 'down',
@@ -138,8 +139,6 @@ async function tick() {
       });
       return;
     }
-
-    if (generation !== healthGeneration) return;
 
     setState({
       status: 'ok',

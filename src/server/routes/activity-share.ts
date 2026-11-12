@@ -214,6 +214,25 @@ export const activityShareRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (a
       bannedDiscordUserIds?: string[];
     };
 
+    const existing = await listActivityShares(req.discordUser.id);
+    const existingByShocker = new Map(existing.map((s) => [s.shockerId, s]));
+    const incoming = Array.isArray(body.shares) ? body.shares : null;
+
+    const normalizedRows: Parameters<typeof replaceActivityShares>[1] = [];
+    if (incoming) {
+      for (const s of incoming) {
+        const result = await normalizeShareRow(
+          s,
+          existingByShocker.get(Number(s.shockerId)),
+          req.pishockCreds,
+        );
+        if (!result.ok) {
+          return reply.code(400).send({ error: result.error });
+        }
+        normalizedRows.push(result.row);
+      }
+    }
+
     if (body.personal) {
       try {
         await setPersonalActivityLimits(req.discordUser.id, body.personal);
@@ -224,21 +243,9 @@ export const activityShareRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (a
       }
     }
 
-    const existing = await listActivityShares(req.discordUser.id);
-    const existingByShocker = new Map(existing.map((s) => [s.shockerId, s]));
-    const incoming = Array.isArray(body.shares) ? body.shares : null;
-
     let shares = existing;
     if (incoming) {
-      const normalized = [];
-      for (const s of incoming) {
-        const result = await normalizeShareRow(s, existingByShocker.get(Number(s.shockerId)), req.pishockCreds);
-        if (!result.ok) {
-          return reply.code(400).send({ error: result.error });
-        }
-        normalized.push(result.row);
-      }
-      shares = await replaceActivityShares(req.discordUser.id, normalized);
+      shares = await replaceActivityShares(req.discordUser.id, normalizedRows);
     }
 
     if (Array.isArray(body.bannedDiscordUserIds)) {
