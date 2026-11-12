@@ -1,3 +1,4 @@
+import { useEffect, useRef } from 'react';
 import { AppVersionBadge } from './AppVersionBadge';
 import type { DefaultStartMenu } from '../defaultMenuPrefs';
 
@@ -11,6 +12,11 @@ type Props = {
 
 /** Ask a linked user which controller menu should open on launch. */
 export function DefaultMenuPrompt({ discordName, busy, onDismiss, onChoose }: Props) {
+  const headingRef = useRef<HTMLHeadingElement>(null);
+  useEffect(() => {
+    headingRef.current?.focus();
+  }, []);
+
   return (
     <div className="auth-boot" role="dialog" aria-modal="true" aria-labelledby="default-menu-title">
       <div className="auth-boot__glow" aria-hidden />
@@ -26,7 +32,7 @@ export function DefaultMenuPrompt({ discordName, busy, onDismiss, onChoose }: Pr
         </h1>
         <p className="auth-boot__sub">Welcome back · {discordName}</p>
 
-        <h2 id="default-menu-title" className="auth-boot__heading">
+        <h2 id="default-menu-title" ref={headingRef} tabIndex={-1} className="auth-boot__heading">
           What should open by default?
         </h2>
         <p className="auth-boot__hint">

@@ -5,10 +5,15 @@ import { createApiKey, getAccount, validateApiKey } from '../pishock/auth-api.js
 import { getHubs, PiShockApiError, redactPiShockSecrets } from '../pishock/client.js';
 import { ManualLinkRateError, assertManualApiKeyRateLimit } from '../pishock/manual-link-rate.js';
 import {
+  beginConfirmAttempt,
   clearPendingConfirm,
+  confirmAttemptOwns,
+  finishConfirmAttempt,
+  getConfirmFlight,
   getPendingConfirm,
+  isConfirmInFlight,
+  restoreOwnedPendingConfirm,
   setPendingConfirm,
-  takePendingConfirm,
   type CreatedApiKeyDraft,
 } from '../pishock/pending-confirm.js';
 import { awaitRelayLogin, getPendingLogin, startRelayLogin } from '../pishock/relay.js';
@@ -56,6 +61,23 @@ export const pishockSessionRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (
   });
 
   app.get('/api/pishock/login/status', async (req) => {
+    if (isConfirmInFlight(req.discordUser.id)) {
+      const flight = getConfirmFlight(req.discordUser.id);
+      if (flight) {
+        return {
+          status: 'confirm' as const,
+          pishockUserId: flight.userId,
+          pishockUsername: flight.username || null,
+          hubNames: flight.hubNames,
+          discordUser: {
+            id: req.discordUser.id,
+            username: req.discordUser.username,
+            global_name: req.discordUser.global_name ?? null,
+          },
+        };
+      }
+    }
+
     const confirm = getPendingConfirm(req.discordUser.id);
     if (confirm) {
       return {
@@ -112,7 +134,13 @@ export const pishockSessionRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (
     if (!req.hasConsent) {
       return reply.code(403).send({ error: 'Consent required' });
     }
-    const pending = takePendingConfirm(req.discordUser.id);
+    const pending = beginConfirmAttempt(req.discordUser.id);
+    if (pending === 'busy') {
+      return reply.code(409).send({
+        error: 'PiShock login confirmation is already in progress',
+        code: 'CONFIRM_IN_PROGRESS',
+      });
+    }
     if (!pending) {
       return reply.code(404).send({
         error: 'No PiShock login waiting for confirmation',
@@ -121,9 +149,11 @@ export const pishockSessionRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (
     }
 
     const session = { userId: pending.userId, token: pending.token };
+    const generation = pending.generation;
     const restore = (created: CreatedApiKeyDraft | null) => {
-      setPendingConfirm(
+      restoreOwnedPendingConfirm(
         req.discordUser.id,
+        generation,
         { UserId: pending.userId, Token: pending.token },
         pending.hubNames,
         pending.username,
@@ -165,6 +195,12 @@ export const pishockSessionRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (
         apiKey: created.apiKey,
       });
 
+      if (!confirmAttemptOwns(req.discordUser.id, generation)) {
+        return reply.code(409).send({
+          error: 'PiShock login confirmation was cancelled',
+          code: 'CONFIRM_CANCELLED',
+        });
+      }
       await savePiShockSession(opts.env, req.discordUser.id, {
         userId: account.userId,
         username: account.username,
@@ -191,6 +227,8 @@ export const pishockSessionRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (
         error: 'Failed to create PiShock API key',
         code: 'PISHOCK_API_KEY_CREATE_FAILED',
       });
+    } finally {
+      finishConfirmAttempt(req.discordUser.id, generation);
     }
   });
 

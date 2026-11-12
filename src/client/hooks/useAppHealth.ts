@@ -44,6 +44,8 @@ const listeners = new Set<() => void>();
 let pollTimer: number | null = null;
 let inFlight = false;
 let started = false;
+/** Bumped by markClientOutdated so an in-flight health poll cannot apply ok afterward. */
+let healthGeneration = 0;
 
 function emit() {
   for (const listener of listeners) listener();
@@ -71,6 +73,7 @@ function setState(patch: Partial<HealthState>) {
 
 /** Mark the client outdated immediately (e.g. API returned 426). */
 export function markClientOutdated(serverVersion?: string | null) {
+  healthGeneration += 1;
   const now = Date.now();
   setState({
     status: 'outdated',
@@ -99,6 +102,7 @@ async function fetchHealth(): Promise<ServerHealthInfo | null> {
 async function tick() {
   if (inFlight) return;
   inFlight = true;
+  const generation = healthGeneration;
   try {
     const info = await fetchHealth();
     if (!info) {
@@ -134,6 +138,8 @@ async function tick() {
       });
       return;
     }
+
+    if (generation !== healthGeneration) return;
 
     setState({
       status: 'ok',

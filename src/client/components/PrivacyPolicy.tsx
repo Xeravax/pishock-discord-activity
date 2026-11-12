@@ -26,7 +26,8 @@ export function PrivacyPolicy({ onBack }: Props) {
           <strong>creates a named API key</strong> (Discord Activity) for device control. The
           short-lived login session is not persisted. The API key is shown once at link time,
           encrypted at rest (AES-256-GCM), and is never exposed to other participants&apos;
-          browsers afterward. It stays valid until you unlink or PiShock rejects it. Your PiShock
+          browsers afterward. Unlinking removes the key from this app. The key stays valid at
+          PiShock until you revoke it there or PiShock rejects it. Your PiShock
           password is never stored here. Other people&apos;s devices are only available when those
           users have linked their own PiShock accounts.
         </p>
@@ -76,7 +77,8 @@ export function PrivacyPolicy({ onBack }: Props) {
       <section className="panel">
         <h2>Retention</h2>
         <p className="muted">
-          API keys stay valid until you unlink or PiShock rejects them. Logs are retained only as
+          Unlinking removes the key from this app. The key stays valid at PiShock until you revoke
+          it there or PiShock rejects it. Logs are retained only as
           long as needed for operation, safety, and abuse prevention. You can unlink your PiShock
           account from the activity at any time.
         </p>

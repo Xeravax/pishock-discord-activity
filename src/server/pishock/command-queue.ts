@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import type { WarningLevel } from '../../shared/warning.js';
 import { HOLD_AUTO_END_GRACE_MS } from '../operate-policy.js';
 
 export const QUEUE_MAX_WAITING_TOTAL = 30;
@@ -89,6 +90,8 @@ export type QueueEnqueueInput = {
   durationMs: number;
   hold: boolean;
   warning: boolean;
+  /** User-selected warning for a queued shock or hold. Execution raises it to the current requirement. */
+  warningLevel?: WarningLevel;
   shockerId: number;
   shareCode: string | null;
   hubClientId: string | null;
@@ -555,6 +558,9 @@ export function createCommandQueue(deps: CommandQueueDeps) {
     }
     if (!ended) {
       return { ended: false, state: await snapshot(ownerDiscordUserId) };
+    }
+    if (q.active !== active) {
+      return { ended: true, state: await snapshot(ownerDiscordUserId) };
     }
     bumpGeneration(q);
     clearActiveSlot(q);

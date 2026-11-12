@@ -172,6 +172,7 @@ export function App() {
   const [actionError, setActionError] = useState<string | null>(null);
   const [legalView, setLegalView] = useState<LegalView>(null);
   const [friendsMode, setFriendsMode] = useState(true);
+  const [participantRosterLoaded, setParticipantRosterLoaded] = useState(false);
   const [participants, setParticipants] = useState<DiscordParticipant[]>([]);
   const [participantStatus, setParticipantStatus] = useState<Record<string, ParticipantStatus>>({});
   const [selectedTargetIds, setSelectedTargetIds] = useState<string[]>([]);
@@ -181,18 +182,9 @@ export function App() {
   const [pairDialog, setPairDialog] = useState<ShockerView | null>(null);
   const [lastIncoming, setLastIncoming] = useState<IncomingShockHit | null>(null);
   /** Per-shocker Discord share caps (what guests are limited to) */
-  const [discordShareLimits, setDiscordShareLimits] = useState<
-    Record<
-      number,
-      {
-        enabled: boolean;
-        minIntensity: number;
-        maxIntensity: number;
-        minDurationMs: number;
-        maxDurationMs: number;
-      }
-    >
-  >({});
+  const [discordShareLimits, setDiscordShareLimits] = useState<Record<number, ShareLimitRow>>(
+    {},
+  );
   const [queueState, setQueueState] = useState<QueueState>({
     enabled: false,
     progressMs: 0,
@@ -217,6 +209,10 @@ export function App() {
   const operateInflightRef = useRef(0);
   const linkPollGenRef = useRef(0);
   const presenceStartedAtRef = useRef<number | null>(null);
+  const friendsAutoSelectDoneRef = useRef(false);
+  const deviceFetchGenRef = useRef(0);
+  const emergencyStopWriteGenRef = useRef(0);
+  const loadSettingsRef = useRef<(() => Promise<unknown>) | null>(null);
 
   const refreshQueue = useCallback(async (accessToken: string) => {
     const data = await apiFetch<QueueState & { stars?: string[] }>('/queue', accessToken);
@@ -247,6 +243,8 @@ export function App() {
   }, []);
 
   const refreshDevices = useCallback(async (accessToken: string) => {
+    const fetchGen = ++deviceFetchGenRef.current;
+    const emergencyStopGen = emergencyStopWriteGenRef.current;
     let data: DevicesResponse & {
       emergencyStopShockerIds?: number[];
       pausedShockerIds?: number[];
@@ -276,7 +274,11 @@ export function App() {
       }
       return next;
     });
-    if (Array.isArray(data.emergencyStopShockerIds)) {
+    if (
+      Array.isArray(data.emergencyStopShockerIds) &&
+      fetchGen === deviceFetchGenRef.current &&
+      emergencyStopGen === emergencyStopWriteGenRef.current
+    ) {
       setMe((prev) =>
         prev
           ? { ...prev, emergencyStopShockerIds: data.emergencyStopShockerIds }
@@ -326,6 +328,7 @@ export function App() {
       const instanceId = getActivityInstanceId();
       if (!instanceId || roster.length === 0) {
         setParticipantStatus({});
+        if (instanceId && roster.length === 0) setParticipantRosterLoaded(true);
         return;
       }
       const idsKey = roster
@@ -339,6 +342,7 @@ export function App() {
         now - participantStatusCache.fetchedAt < PARTICIPANT_STATUS_TTL_MS
       ) {
         setParticipantStatus(participantStatusCache.map);
+        setParticipantRosterLoaded(true);
         return;
       }
       const data = await apiFetch<{ participants: ParticipantStatus[] }>(
@@ -358,6 +362,7 @@ export function App() {
       }
       participantStatusCache = { key: idsKey, fetchedAt: now, map };
       setParticipantStatus(map);
+      setParticipantRosterLoaded(true);
       setLivePausedIds((prev) => {
         if (prev.size === 0) return prev;
         const next = new Set(prev);
@@ -516,9 +521,15 @@ export function App() {
     });
   }, [token, refreshParticipantStatus]);
 
-  // Default friends view to the first Discord user with an available PiShock share.
+  // Auto-select once per friends-mode entry, after the roster and status first load.
   useEffect(() => {
-    if (!friendsMode || selectedTargetIds.length > 0) return;
+    if (!friendsMode) {
+      friendsAutoSelectDoneRef.current = false;
+      return;
+    }
+    if (friendsAutoSelectDoneRef.current || !participantRosterLoaded) return;
+    friendsAutoSelectDoneRef.current = true;
+    if (selectedTargetIds.length > 0) return;
     const selfId = me?.user?.id;
     const firstAvailable = participants.find((p) => {
       if (selfId && p.id === selfId) return false;
@@ -528,6 +539,7 @@ export function App() {
     if (firstAvailable) setSelectedTargetIds([firstAvailable.id]);
   }, [
     friendsMode,
+    participantRosterLoaded,
     selectedTargetIds.length,
     participants,
     participantStatus,
@@ -542,6 +554,7 @@ export function App() {
     const applyEmergencyStop = (event: Extract<RealtimeEvent, { type: 'emergency_stop' }>) => {
       const selfId = selfIdRef.current;
       if (selfId && event.ownerDiscordUserId === selfId) {
+        emergencyStopWriteGenRef.current += 1;
         setMe((prev) =>
           prev ? { ...prev, emergencyStopShockerIds: event.emergencyStopShockerIds } : prev,
         );
@@ -878,10 +891,6 @@ export function App() {
     }
   }, [hubOptions, selectedHubId]);
 
-  const selectedFriendStatus = selectedTargetId
-    ? participantStatus[selectedTargetId]
-    : undefined;
-
   const friendShockers = useMemo(() => {
     if (!selectedTargetIds.length) return [] as ShockerView[];
     const rows: ShockerView[] = [];
@@ -1117,45 +1126,57 @@ export function App() {
       friendShockers.length > 0 &&
       friendShockers.every((s) => s.paused || s.emergencyStop),
   );
-  const friendQueue = selectedFriendStatus?.queue;
+  const selectedQueueAccess = selectedTargetIds.map((id) => {
+    const queue = participantStatus[id]?.queue;
+    if (queue?.starOnly && !queue.starredByThem) return 'star' as const;
+    if (queue?.enabled && queue.halted) return 'halt' as const;
+    return 'open' as const;
+  });
   const friendStarBlocked = Boolean(
     friendsMode &&
-      selectedTargetId &&
       !friendBlocked &&
       !friendAllEStop &&
       !friendAllPaused &&
-      friendQueue?.starOnly &&
-      !friendQueue.starredByThem,
-  );
-  const friendStarred = Boolean(
-    friendsMode &&
-      selectedTargetId &&
-      !friendBlocked &&
-      friendQueue?.starredByThem,
+      selectedQueueAccess.length > 0 &&
+      selectedQueueAccess.every((access) => access === 'star'),
   );
   const friendQueueHalted = Boolean(
     friendsMode &&
-      selectedTargetId &&
       !friendBlocked &&
       !friendAllEStop &&
       !friendAllPaused &&
       !friendStarBlocked &&
-      friendQueue?.enabled &&
-      friendQueue.halted,
+      selectedQueueAccess.length > 0 &&
+      selectedQueueAccess.every((access) => access === 'halt'),
+  );
+  const friendQueueAccessLocked = Boolean(
+    friendsMode &&
+      !friendBlocked &&
+      !friendAllEStop &&
+      !friendAllPaused &&
+      selectedQueueAccess.length > 0 &&
+      selectedQueueAccess.every((access) => access !== 'open'),
+  );
+  const friendStarred = Boolean(
+    friendsMode &&
+      !friendBlocked &&
+      selectedTargetIds.length > 0 &&
+      selectedTargetIds.every((id) => participantStatus[id]?.queue?.starredByThem),
   );
   const friendQueuePaused = Boolean(
     friendsMode &&
-      selectedTargetId &&
       !friendBlocked &&
       !friendAllEStop &&
       !friendAllPaused &&
-      !friendStarBlocked &&
-      !friendQueueHalted &&
-      friendQueue?.enabled &&
-      friendQueue.paused,
+      !friendQueueAccessLocked &&
+      selectedTargetIds.length > 0 &&
+      selectedTargetIds.every((id) => {
+        const queue = participantStatus[id]?.queue;
+        return Boolean(queue?.enabled && queue.paused && !queue.halted);
+      }),
   );
   const friendControlsLocked =
-    friendBlocked || friendAllEStop || friendAllPaused || friendStarBlocked || friendQueueHalted;
+    friendBlocked || friendAllEStop || friendAllPaused || friendQueueAccessLocked;
 
   useEffect(() => {
     // Unlinked users only use Discord Shockers — Claim / My Shockers stay hidden
@@ -1382,6 +1403,7 @@ export function App() {
       if (meData.pishockLinked) {
         await refreshDevices(accessToken);
         await refreshLogs(accessToken).catch(() => undefined);
+        await loadSettingsRef.current?.();
         setSetupDevicesReady(true);
       } else {
         setSetupSharePhase(false);
@@ -1753,6 +1775,7 @@ export function App() {
           engaged: input.engaged,
         }),
       });
+      emergencyStopWriteGenRef.current += 1;
       setMe((prev) =>
         prev ? { ...prev, emergencyStopShockerIds: result.emergencyStopShockerIds } : prev,
       );
@@ -1819,33 +1842,20 @@ export function App() {
     setSetupSharePhase(true);
     try {
       await refreshDevices(token);
-      setSetupDevicesReady(true);
     } catch (err) {
       setLinkError(err instanceof Error ? err.message : String(err));
-      setSetupDevicesReady(true);
     }
+    try {
+      await loadSettingsRef.current?.();
+    } catch (err) {
+      setLinkError(err instanceof Error ? err.message : String(err));
+    }
+    setSetupDevicesReady(true);
   }, [token, me?.pishockLinked, refreshDevices]);
 
   const applyDiscordShareLimits = useCallback((shares: ShareLimitRow[]) => {
-    const next: Record<
-      number,
-      {
-        enabled: boolean;
-        minIntensity: number;
-        maxIntensity: number;
-        minDurationMs: number;
-        maxDurationMs: number;
-      }
-    > = {};
-    for (const row of shares) {
-      next[row.shockerId] = {
-        enabled: row.enabled,
-        minIntensity: row.minIntensity ?? 1,
-        maxIntensity: row.maxIntensity,
-        minDurationMs: row.minDurationMs ?? 16,
-        maxDurationMs: row.maxDurationMs,
-      };
-    }
+    const next: Record<number, ShareLimitRow> = {};
+    for (const row of shares) next[row.shockerId] = row;
     setDiscordShareLimits(next);
   }, []);
 
@@ -1858,6 +1868,7 @@ export function App() {
     applyDiscordShareLimits(data.shares);
     return data;
   }, [token, applyDiscordShareLimits]);
+  loadSettingsRef.current = loadSettings;
 
   const saveSettings = useCallback(
     async (payload: { personal: PersonalLimits; shares: ShareLimitRow[] }) => {
@@ -1960,8 +1971,10 @@ export function App() {
               ? 'Stars only — ask them to star you'
               : friendQueueHalted
                 ? 'Queue closed to new commands'
-                : friendQueuePaused
-                  ? 'Queue paused — you can still join'
+                : friendQueueAccessLocked
+                  ? 'Every selected person is restricted'
+                  : friendQueuePaused
+                    ? 'Queue paused — you can still join'
                   : friendStarred
                     ? 'You are starred'
                     : friendShockers.length > 0
@@ -2070,16 +2083,18 @@ export function App() {
 
   if (setupSharePhase) {
     const ownedForSetup = ownedAndShared.filter((s) => s.owned);
-    const initialSelectedIds = Object.entries(discordShareLimits)
-      .filter(([, row]) => row.enabled)
-      .map(([id]) => Number(id))
-      .filter((id) => ownedForSetup.some((s) => s.id === id));
+    const savedShareRows = Object.values(discordShareLimits);
+    const initialSelectedIds =
+      savedShareRows.length === 0
+        ? undefined
+        : savedShareRows.filter((row) => row.enabled).map((row) => row.shockerId);
     return (
       <SetupDiscordShareScreen
         key={setupShareKey}
         shockers={ownedForSetup}
         initialPersonal={personalLimits}
         initialSelectedIds={initialSelectedIds}
+        initialShares={savedShareRows}
         devicesReady={setupDevicesReady}
         busy={setupShareBusy}
         error={linkError}
@@ -2230,6 +2245,14 @@ export function App() {
                   cannot send anything new until they open the queue again.
                 </div>
               </div>
+            ) : friendQueueAccessLocked ? (
+              <div className="access-banner access-banner--queue-halted q-mt-sm q-pa-sm">
+                <div className="text-warning text-subtitle2">Selection restricted</div>
+                <div className="text-grey-4 text-body2">
+                  Every selected person has a closed queue or only accepts starred people.
+                  Controls stay locked until the selection includes someone you can operate.
+                </div>
+              </div>
             ) : friendQueuePaused ? (
               <div className="access-banner access-banner--queue-paused q-mt-sm q-pa-sm">
                 <div className="text-warning text-subtitle2">Queue paused</div>
@@ -2241,7 +2264,10 @@ export function App() {
             ) : null
           }
           starredPanel={friendStarred}
-          starredPanelStarOnly={Boolean(friendQueue?.starOnly)}
+          starredPanelStarOnly={
+            selectedTargetIds.length > 0 &&
+            selectedTargetIds.every((id) => Boolean(participantStatus[id]?.queue?.starOnly))
+          }
           forceControlsLocked={friendControlsLocked}
           safetyBanner={!pip ? <SafetyNoticeBar /> : null}
           friendsPanel={({
@@ -2283,17 +2309,24 @@ export function App() {
               }
             />
           )}
-          onOperate={(input) =>
+          onOperate={(input) => {
+            const targetId =
+              typeof input.targetDiscordUserId === 'string'
+                ? input.targetDiscordUserId
+                : friendsMode
+                  ? selectedTargetId ?? undefined
+                  : undefined;
+            if (friendsMode && targetId) {
+              const queue = participantStatus[targetId]?.queue;
+              const starBlocked = Boolean(queue?.starOnly && !queue.starredByThem);
+              const queueHalted = Boolean(queue?.enabled && queue.halted);
+              if (starBlocked || queueHalted) return;
+            }
             operate({
               ...input,
-              targetDiscordUserId:
-                typeof input.targetDiscordUserId === 'string'
-                  ? input.targetDiscordUserId
-                  : friendsMode
-                    ? selectedTargetId
-                    : undefined,
-            })
-          }
+              targetDiscordUserId: targetId,
+            });
+          }}
           estopShockers={ownedAndShared.filter((s) => s.owned)}
           onEmergencyStop={setEmergencyStop}
           onSelectHub={(hubId) => {
@@ -2551,6 +2584,7 @@ export function App() {
             onOpen={() => undefined}
             onRefresh={() => undefined}
             onManualSubmit={submitManualApiKey}
+            onClearManualError={() => setManualLinkError(null)}
             manualBusy={manualLinkBusy}
             manualError={manualLinkError}
           />
@@ -2862,9 +2896,8 @@ function rowIsPaused(
   id: number,
   livePausedIds: Set<number>,
 ): boolean {
-  if (isPiShockRowPaused(row)) return true;
-  if (isPiShockRowExplicitlyUnpaused(row)) return false;
-  return livePausedIds.has(id);
+  if (livePausedIds.has(id)) return true;
+  return isPiShockRowPaused(row);
 }
 
 function normalizeShockers(

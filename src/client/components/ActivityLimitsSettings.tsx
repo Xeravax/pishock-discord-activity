@@ -355,11 +355,16 @@ export function ActivityLimitsSettings({
           open={personalOpen}
           onToggle={() => setPersonalOpen((open) => !open)}
         >
+          <p className="text-grey-5 text-caption q-mb-sm">
+            These ranges are the saved limits for your own devices, and the starting point for a
+            new share. Turn Shock, Vibrate, Beep, and Hold on or off on each shared shocker.
+          </p>
           <ModeLimitsEditor
             value={personalToMode(personal)}
             deviceMaxIntensity={100}
             deviceMaxDurationMs={15_000}
             disabled={busy || saving}
+            hideActionToggles
             onChange={(m) => setPersonal((p) => modeToPersonal(m, p))}
           />
         </LimitsPane>

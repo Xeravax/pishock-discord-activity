@@ -37,6 +37,8 @@ type Props = {
   deviceMaxDurationMs: number;
   disabled?: boolean;
   showWarning?: boolean;
+  /** Own-device ranges persist; action on/off does not, so those switches stay hidden. */
+  hideActionToggles?: boolean;
   onChange: (next: ModeLimitsValue) => void;
 };
 
@@ -190,10 +192,16 @@ function bandSummary(band: ModeBand): string {
   return `${formatIntensityPct(band.minIntensity)}–${formatIntensityPct(band.maxIntensity)} · ${formatDurationMs(band.minDurationMs)}–${formatDurationMs(band.maxDurationMs)}`;
 }
 
-function extraSummary(value: ModeLimitsValue, showWarning: boolean): string {
+function extraSummary(
+  value: ModeLimitsValue,
+  showWarning: boolean,
+  hideActionToggles: boolean,
+): string {
   const parts: string[] = [];
-  parts.push(value.canBeep ? 'Beep on' : 'Beep off');
-  parts.push(value.canHold ? 'Hold on' : 'Hold off');
+  if (!hideActionToggles) {
+    parts.push(value.canBeep ? 'Beep on' : 'Beep off');
+    parts.push(value.canHold ? 'Hold on' : 'Hold off');
+  }
   if (showWarning) {
     parts.push(
       value.requiredWarningLevel === 'none'
@@ -211,6 +219,7 @@ export function ModeLimitsEditor({
   deviceMaxDurationMs,
   disabled,
   showWarning = true,
+  hideActionToggles = false,
   onChange,
 }: Props) {
   const deviceMaxI = Math.min(100, deviceMaxIntensity);
@@ -232,9 +241,9 @@ export function ModeLimitsEditor({
         <ModeColumn
           modeKey="shock"
           title="Shock"
-          enabled={value.canShock}
+          enabled={hideActionToggles || value.canShock}
           open={openModes.shock}
-          showEnableToggle
+          showEnableToggle={!hideActionToggles}
           disabled={disabled}
           summary={bandSummary(value.shock)}
           onToggleOpen={() => toggleOpen('shock')}
@@ -252,9 +261,9 @@ export function ModeLimitsEditor({
         <ModeColumn
           modeKey="vibrate"
           title="Vibrate"
-          enabled={value.canVibrate}
+          enabled={hideActionToggles || value.canVibrate}
           open={openModes.vibrate}
-          showEnableToggle
+          showEnableToggle={!hideActionToggles}
           disabled={disabled}
           summary={bandSummary(value.vibrate)}
           onToggleOpen={() => toggleOpen('vibrate')}
@@ -276,46 +285,50 @@ export function ModeLimitsEditor({
           open={openModes.extra}
           showEnableToggle={false}
           disabled={disabled}
-          summary={extraSummary(value, showWarning)}
+          summary={extraSummary(value, showWarning, hideActionToggles)}
           onToggleOpen={() => toggleOpen('extra')}
         >
           <div className="mode-limits-extra">
-            <label className="mode-limits-extra__row">
-              <input
-                type="checkbox"
-                checked={value.canBeep}
-                disabled={disabled}
-                style={{ accentColor: '#79c6db' }}
-                onChange={(e) => onChange({ ...value, canBeep: e.target.checked })}
-              />
-              <span>
-                <span className="mode-limits-extra__label">Beep</span>
-                <span className="mode-limits-col__hint">Allow beep commands</span>
-              </span>
-            </label>
+            {hideActionToggles ? null : (
+              <>
+                <label className="mode-limits-extra__row">
+                  <input
+                    type="checkbox"
+                    checked={value.canBeep}
+                    disabled={disabled}
+                    style={{ accentColor: '#79c6db' }}
+                    onChange={(e) => onChange({ ...value, canBeep: e.target.checked })}
+                  />
+                  <span>
+                    <span className="mode-limits-extra__label">Beep</span>
+                    <span className="mode-limits-col__hint">Allow beep commands</span>
+                  </span>
+                </label>
 
-            <label className="mode-limits-extra__row">
-              <input
-                type="checkbox"
-                checked={value.canHold}
-                disabled={disabled}
-                style={{ accentColor: '#79c6db' }}
-                onChange={(e) => onChange({ ...value, canHold: e.target.checked })}
-              />
-              <span>
-                <span className="mode-limits-extra__label">Hold</span>
-                <span className="mode-limits-col__hint">
-                  Press-and-hold operate until release
-                </span>
-              </span>
-            </label>
+                <label className="mode-limits-extra__row">
+                  <input
+                    type="checkbox"
+                    checked={value.canHold}
+                    disabled={disabled}
+                    style={{ accentColor: '#79c6db' }}
+                    onChange={(e) => onChange({ ...value, canHold: e.target.checked })}
+                  />
+                  <span>
+                    <span className="mode-limits-extra__label">Hold</span>
+                    <span className="mode-limits-col__hint">
+                      Press-and-hold operate until release
+                    </span>
+                  </span>
+                </label>
+              </>
+            )}
 
             {showWarning ? (
               <label className="mode-limits-warning">
                 <span className="text-caption text-secondary">Required warning before shock</span>
                 <select
                   className="q-field__native q-placeholder mode-limits-warning__select"
-                  disabled={disabled || !value.canVibrate}
+                  disabled={disabled || (!hideActionToggles && !value.canVibrate)}
                   value={normalizeWarningLevel(value.requiredWarningLevel)}
                   onChange={(e) =>
                     onChange({
@@ -331,7 +344,7 @@ export function ModeLimitsEditor({
                     </option>
                   ))}
                 </select>
-                {!value.canVibrate ? (
+                {!hideActionToggles && !value.canVibrate ? (
                   <span className="text-caption text-negative">
                     Enable vibrate to enforce a warning.
                   </span>

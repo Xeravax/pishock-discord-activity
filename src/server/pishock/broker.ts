@@ -34,6 +34,25 @@ function brokerUrl(creds: PiShockCreds): string {
   return `${PISHOCK_BROKER}?Username=${encodeURIComponent(creds.username)}&ApiKey=${encodeURIComponent(creds.token)}`;
 }
 
+/** Swap credentials. A new token closes the old socket without letting its close clear a replacement. */
+function replaceSessionCreds(session: BrokerSession, creds: PiShockCreds): void {
+  const tokenChanged = session.creds.token !== creds.token;
+  session.creds = creds;
+  if (!tokenChanged) return;
+  if (session.reconnectTimer) {
+    clearTimeout(session.reconnectTimer);
+    session.reconnectTimer = undefined;
+  }
+  const old = session.ws;
+  session.ws = null;
+  if (!old) return;
+  try {
+    old.close();
+  } catch {
+    // ignore
+  }
+}
+
 export function subscribeBroker(
   discordUserId: string,
   creds: PiShockCreds,
@@ -56,7 +75,7 @@ export function subscribeBroker(
     };
     sessions.set(discordUserId, session);
   } else {
-    session.creds = creds;
+    replaceSessionCreds(session, creds);
   }
   clearIdleTimer(session);
   session.subscribers.add(subscriber);
@@ -156,7 +175,7 @@ export function ensureLogCapture(
     };
     sessions.set(discordUserId, session);
   } else {
-    session.creds = creds;
+    replaceSessionCreds(session, creds);
   }
 
   session.logCaptureTouchAt = Date.now();
@@ -444,6 +463,7 @@ function ensureConnected(discordUserId: string) {
   });
 
   ws.on('close', () => {
+    if (session.ws !== ws) return;
     session.ws = null;
     broadcast(session, { type: 'status', message: 'broker disconnected', at: Date.now() });
     if (session.subscribers.size > 0 && !isPiShockApiKeyRejected(session.creds.token)) {

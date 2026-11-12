@@ -27,7 +27,8 @@ export function PiShockAuthDisclaimer({ compact }: Props) {
         </li>
         <li>
           The short-lived login session token is used only to create that key and is{' '}
-          <strong>not</strong> persisted. The API key stays until you unlink or PiShock rejects it.
+          <strong>not</strong> persisted. Unlinking removes the key from this app. The key stays
+          valid at PiShock until you revoke it there or PiShock rejects it.
         </li>
         <li>
           Other people&apos;s devices are only controllable when{' '}

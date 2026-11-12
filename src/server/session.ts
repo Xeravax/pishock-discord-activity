@@ -134,6 +134,23 @@ export function installPiShockKeyRejectionHandler(env: AppEnv) {
   });
 }
 
+async function deleteRejectedKeySession(
+  discordUserId: string,
+  where: {
+    apiKeyHash: string | null;
+    encryptedToken?: string;
+    tokenIv?: string;
+    tokenAuthTag?: string;
+  },
+) {
+  const removed = await prisma.piShockSession.deleteMany({
+    where: { discordUserId, ...where },
+  });
+  if (removed.count < 1) return;
+  console.warn(`[pishock] clearing session for ${discordUserId} after API key 401`);
+  disconnectBroker(discordUserId);
+}
+
 async function purgePiShockSessionsForRejectedKey(env: AppEnv, token: string) {
   const hash = hashApiKey(token);
   const rows = await prisma.piShockSession.findMany({
@@ -148,8 +165,7 @@ async function purgePiShockSessionsForRejectedKey(env: AppEnv, token: string) {
   });
   for (const row of rows) {
     if (row.apiKeyHash === hash) {
-      console.warn(`[pishock] clearing session for ${row.discordUserId} after API key 401`);
-      await clearPiShockSession(row.discordUserId);
+      await deleteRejectedKeySession(row.discordUserId, { apiKeyHash: hash });
       continue;
     }
     let stored = '';
@@ -159,13 +175,23 @@ async function purgePiShockSessionsForRejectedKey(env: AppEnv, token: string) {
       continue;
     }
     if (stored === token) {
-      console.warn(`[pishock] clearing session for ${row.discordUserId} after API key 401`);
-      await clearPiShockSession(row.discordUserId);
+      await deleteRejectedKeySession(row.discordUserId, {
+        apiKeyHash: null,
+        encryptedToken: row.encryptedToken,
+        tokenIv: row.tokenIv,
+        tokenAuthTag: row.tokenAuthTag,
+      });
       continue;
     }
     await prisma.piShockSession
-      .update({
-        where: { discordUserId: row.discordUserId },
+      .updateMany({
+        where: {
+          discordUserId: row.discordUserId,
+          apiKeyHash: null,
+          encryptedToken: row.encryptedToken,
+          tokenIv: row.tokenIv,
+          tokenAuthTag: row.tokenAuthTag,
+        },
         data: { apiKeyHash: hashApiKey(stored) },
       })
       .catch(() => {
@@ -703,20 +729,24 @@ export async function setPersonalActivityLimits(
     activityRequiredWarningLevel?: string | null;
   },
 ) {
+  const stored = await prisma.discordUser.findUnique({ where: { id: discordUserId } });
   const bands = personalBandsFromUser({
-    activityMinIntensity: input.activityMinIntensity,
-    activityMaxIntensity: input.activityMaxIntensity,
-    activityMinDurationMs: input.activityMinDurationMs,
-    activityMaxDurationMs: input.activityMaxDurationMs,
-    activityVibMinIntensity: input.activityVibMinIntensity,
-    activityVibMaxIntensity: input.activityVibMaxIntensity,
-    activityVibMinDurationMs: input.activityVibMinDurationMs,
-    activityVibMaxDurationMs: input.activityVibMaxDurationMs,
-    activityBeepMinIntensity: input.activityBeepMinIntensity,
-    activityBeepMaxIntensity: input.activityBeepMaxIntensity,
-    activityBeepMinDurationMs: input.activityBeepMinDurationMs,
-    activityBeepMaxDurationMs: input.activityBeepMaxDurationMs,
-    activityRequiredWarningLevel: input.activityRequiredWarningLevel,
+    activityMinIntensity: input.activityMinIntensity ?? stored?.activityMinIntensity,
+    activityMaxIntensity: input.activityMaxIntensity ?? stored?.activityMaxIntensity,
+    activityMinDurationMs: input.activityMinDurationMs ?? stored?.activityMinDurationMs,
+    activityMaxDurationMs: input.activityMaxDurationMs ?? stored?.activityMaxDurationMs,
+    activityVibMinIntensity: input.activityVibMinIntensity ?? stored?.activityVibMinIntensity,
+    activityVibMaxIntensity: input.activityVibMaxIntensity ?? stored?.activityVibMaxIntensity,
+    activityVibMinDurationMs: input.activityVibMinDurationMs ?? stored?.activityVibMinDurationMs,
+    activityVibMaxDurationMs: input.activityVibMaxDurationMs ?? stored?.activityVibMaxDurationMs,
+    activityBeepMinIntensity: input.activityBeepMinIntensity ?? stored?.activityBeepMinIntensity,
+    activityBeepMaxIntensity: input.activityBeepMaxIntensity ?? stored?.activityBeepMaxIntensity,
+    activityBeepMinDurationMs: input.activityBeepMinDurationMs ?? stored?.activityBeepMinDurationMs,
+    activityBeepMaxDurationMs: input.activityBeepMaxDurationMs ?? stored?.activityBeepMaxDurationMs,
+    activityRequiredWarningLevel:
+      input.activityRequiredWarningLevel !== undefined
+        ? input.activityRequiredWarningLevel
+        : stored?.activityRequiredWarningLevel,
   });
   return prisma.discordUser.update({
     where: { id: discordUserId },

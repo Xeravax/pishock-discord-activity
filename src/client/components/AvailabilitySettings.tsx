@@ -132,6 +132,14 @@ export function AvailabilitySettings({
     const maxDurationMs = Math.min(deviceMaxD, s.activityMaxDuration ?? s.maxDuration ?? deviceMaxD);
     const minIntensity = Math.min(maxIntensity, s.activityMinIntensity ?? 1);
     const minDurationMs = Math.min(maxDurationMs, s.activityMinDuration ?? 16);
+    const vibMaxIntensity = Math.min(deviceMaxI, s.vibMaxIntensity ?? maxIntensity);
+    const vibMinIntensity = Math.min(vibMaxIntensity, s.vibMinIntensity ?? minIntensity);
+    const vibMaxDurationMs = Math.min(deviceMaxD, s.vibMaxDuration ?? maxDurationMs);
+    const vibMinDurationMs = Math.min(vibMaxDurationMs, s.vibMinDuration ?? minDurationMs);
+    const beepMaxIntensity = Math.min(deviceMaxI, s.beepMaxIntensity ?? maxIntensity);
+    const beepMinIntensity = Math.min(beepMaxIntensity, s.beepMinIntensity ?? minIntensity);
+    const beepMaxDurationMs = Math.min(deviceMaxD, s.beepMaxDuration ?? maxDurationMs);
+    const beepMinDurationMs = Math.min(beepMaxDurationMs, s.beepMinDuration ?? minDurationMs);
     setShares((prev) => [
       ...prev,
       {
@@ -147,19 +155,19 @@ export function AvailabilitySettings({
         maxIntensity,
         minDurationMs,
         maxDurationMs,
-        vibMinIntensity: minIntensity,
-        vibMaxIntensity: maxIntensity,
-        vibMinDurationMs: minDurationMs,
-        vibMaxDurationMs: maxDurationMs,
-        beepMinIntensity: minIntensity,
-        beepMaxIntensity: maxIntensity,
-        beepMinDurationMs: minDurationMs,
-        beepMaxDurationMs: maxDurationMs,
+        vibMinIntensity,
+        vibMaxIntensity,
+        vibMinDurationMs,
+        vibMaxDurationMs,
+        beepMinIntensity,
+        beepMaxIntensity,
+        beepMinDurationMs,
+        beepMaxDurationMs,
         canShock: s.canShock,
         canVibrate: s.canVibrate,
         canBeep: s.canBeep,
         canHold: s.canHold,
-        requiredWarningLevel: 'none',
+        requiredWarningLevel: normalizeWarningLevel(s.requiredWarningLevel),
       },
     ]);
   };
@@ -241,10 +249,9 @@ export function AvailabilitySettings({
   return (
     <div className="column q-gutter-md">
       <div className="text-grey-5 text-body2">
-        Opt shockers into Discord Shockers so people in this activity can control them. We create a
-        PiShock share code when possible so shocks from linked executors go through the official
-        share API; otherwise the server uses your session with an attributed agent name. Your token
-        never leaves the server.
+        Opt shockers into Discord Shockers so people in this activity can control them. Commands
+        from linked executors run on your PiShock account with your API key and an attributed
+        agent name. The server keeps that API key and does not send it to other participants.
       </div>
 
       {error ? (

@@ -12,8 +12,6 @@ import { AppVersionBadge } from './AppVersionBadge';
 import { IndividualIntensityToggle, MultiShockToggle } from './MultiShockToggle';
 import { colorForShocker } from '../multiColors';
 import {
-  WARNING_PRESETS,
-  WARNING_SHOCK_GAP_MS,
   atLeastWarning,
   cycleWarningLevel,
   normalizeWarningLevel,
@@ -46,6 +44,8 @@ export type OfficialOperateInput = {
     Max?: number;
   } | null;
   hold?: boolean;
+  /** Per-target warning sent with a shock or hold. The server publishes the one vibration. */
+  warningLevel?: WarningLevel;
 };
 
 type HubInfo = {
@@ -462,7 +462,6 @@ export function OfficialController({
   const [warningLevel, setWarningLevel] = useState<WarningLevel>(initialPrefs.warningLevel);
   /** Use Mode: press-and-hold Operate/Beep until release (official Remote-style). */
   const [tapMode, setTapMode] = useState(initialPrefs.tapMode);
-  const warningTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [hubsOpen, setHubsOpen] = useState(false);
   const [holdingOp, setHoldingOp] = useState<'shock' | 'vibrate' | 'beep' | null>(null);
   const holdingOpRef = useRef<'shock' | 'vibrate' | 'beep' | null>(null);
@@ -640,12 +639,20 @@ export function OfficialController({
     (floor, s) => atLeastWarning(floor, normalizeWarningLevel(s.requiredWarningLevel)),
     'none',
   );
-  const effectiveWarningLevel = atLeastWarning(warningLevel, requiredWarningFloor);
   const activeBlocked = Boolean(active && (active.emergencyStop || active.paused));
   const selectedAllBlocked =
     selectedShockers.length > 0 &&
     selectedShockers.every((s) => s.emergencyStop || s.paused);
   const controlsLocked = forceControlsLocked || (multiShock ? selectedAllBlocked : activeBlocked);
+  const modeEligible = (mode: 'shock' | 'vibrate' | 'beep') => {
+    const pool = multiShock ? selectedShockers : active ? [active] : [];
+    return pool.some((s) => {
+      if (s.emergencyStop || s.paused) return false;
+      if (mode === 'shock') return s.canShock;
+      if (mode === 'vibrate') return s.canVibrate;
+      return s.canBeep;
+    });
+  };
   const estopPool = (estopShockers ?? shockers).filter((s) => s.owned);
   const stopTargets = estopAll ? estopPool : active?.owned ? [active] : [];
   const stopArmed = stopTargets.length > 0 && stopTargets.every((s) => s.emergencyStop);
@@ -669,10 +676,6 @@ export function OfficialController({
     setShockDurationMs((v) => clamp(v, minDur, maxDur));
     setVibDurationMs((v) => clamp(v, vibMinDur, vibMaxDur));
   }, [maxInt, maxDur, minDur, vibMaxInt, vibMaxDur, vibMinDur, shockEditCap, activeId]);
-
-  useEffect(() => {
-    setWarningLevel((level) => atLeastWarning(level, requiredWarningFloor));
-  }, [requiredWarningFloor]);
 
   useEffect(() => {
     if (!individualIntensity || !multiShock) return;
@@ -756,23 +759,12 @@ export function OfficialController({
   useEffect(() => {
     if (activeBlocked) {
       setWarningLevel('none');
-      if (warningTimerRef.current) {
-        clearTimeout(warningTimerRef.current);
-        warningTimerRef.current = null;
-      }
       // Owner STOP already cuts the broker op; just clear local press state
       holdingOpRef.current = null;
       holdTargetRef.current = null;
       setHoldingOp(null);
     }
   }, [activeBlocked]);
-
-  useEffect(
-    () => () => {
-      if (warningTimerRef.current) clearTimeout(warningTimerRef.current);
-    },
-    [],
-  );
 
   const resolveFireTargets = (opts?: {
     target?: {
@@ -819,7 +811,6 @@ export function OfficialController({
     durationMs: number,
     opts?: {
       hold?: boolean;
-      skipWarning?: boolean;
       target?: {
         shockerId: number;
         clientId?: number | string;
@@ -847,6 +838,7 @@ export function OfficialController({
       const sMinInt = shockerUsableMinInt(shocker, mode);
       const sMaxDur = shockerUsableDur(shocker, mode);
       const sMinDur = shockerUsableMinDur(shocker, mode);
+      const shockLike = op === 'shock' || op === 'hold';
       onOperate({
         shockerId: shocker.id,
         shareCode: shocker.shareCode,
@@ -860,53 +852,14 @@ export function OfficialController({
         maxDuration: sMaxDur,
         hold: Boolean(opts?.hold),
         warning,
+        warningLevel: shockLike
+          ? atLeastWarning(warningLevel, normalizeWarningLevel(shocker.requiredWarningLevel))
+          : undefined,
         operation: op,
         intensity: clamp(inten, sMinInt, sMaxInt),
         durationMs: clamp(dur, sMinDur, sMaxDur),
       });
     };
-
-    // Vibrate-before-shock for SMALL / MID / LONG (fan-out to all targets)
-    if (
-      operation === 'shock' &&
-      !opts?.skipWarning &&
-      !opts?.hold &&
-      effectiveWarningLevel !== 'none'
-    ) {
-      const preset = WARNING_PRESETS[effectiveWarningLevel];
-      let warnWaitMs = preset.durationMs;
-      for (const shocker of targets) {
-        if (shocker.emergencyStop || shocker.paused || !shocker.canVibrate) continue;
-        const sMaxInt = shockerUsableInt(shocker, 'vibrate');
-        const sMinInt = shockerUsableMinInt(shocker, 'vibrate');
-        const sMaxDur = shockerUsableDur(shocker, 'vibrate');
-        const sMinDur = shockerUsableMinDur(shocker, 'vibrate');
-        const warnIntensity = clamp(preset.intensity, sMinInt, sMaxInt);
-        const warnDuration = clamp(preset.durationMs, sMinDur, sMaxDur);
-        warnWaitMs = Math.max(warnWaitMs, warnDuration);
-        dispatch(shocker, 'vibrate', warnIntensity, warnDuration, {
-          Active: true,
-          Intensity: warnIntensity,
-          DurationMs: warnDuration,
-          Min: warnIntensity,
-          Max: warnIntensity,
-        });
-      }
-      if (warningTimerRef.current) clearTimeout(warningTimerRef.current);
-      warningTimerRef.current = setTimeout(() => {
-        warningTimerRef.current = null;
-        if (controlsLocked) return;
-        for (const shocker of targets) {
-          if (shocker.emergencyStop || shocker.paused || !shocker.canShock) continue;
-          const perIntensity =
-            individualIntensity && multiShock
-              ? resolveShockIntensityFor(shocker)
-              : intensity;
-          dispatch(shocker, 'shock', perIntensity, durationMs, null);
-        }
-      }, warnWaitMs + WARNING_SHOCK_GAP_MS);
-      return;
-    }
 
     for (const shocker of targets) {
       if (operation !== 'end' && (shocker.emergencyStop || shocker.paused)) continue;
@@ -936,9 +889,10 @@ export function OfficialController({
     ev: ReactPointerEvent<HTMLElement>,
   ) => {
     if (multiShock || !active || controlsLocked || holdingOpRef.current) return;
-    if (operation === 'shock' && (!active.canShock || active.paused)) return;
-    if (operation === 'vibrate' && (!active.canVibrate || active.paused)) return;
-    if (operation === 'beep' && (!active.canBeep || active.paused)) return;
+    if (active.emergencyStop || active.paused) return;
+    if (operation === 'shock' && !active.canShock) return;
+    if (operation === 'vibrate' && !active.canVibrate) return;
+    if (operation === 'beep' && !active.canBeep) return;
     try {
       (ev.currentTarget as HTMLElement).setPointerCapture(ev.pointerId);
     } catch {
@@ -952,38 +906,8 @@ export function OfficialController({
     };
     holdingOpRef.current = operation;
     setHoldingOp(operation);
-
-    const startHold = () => {
-      if (holdingOpRef.current !== operation) return;
-      // Hold for activity max; release sends broker end (m:"e")
-      fire(operation, Math.max(1, intensity), maxDur, { hold: true, skipWarning: true });
-    };
-
-    // Warn vibrate, then start continuous shock hold
-    if (
-      operation === 'shock' &&
-      effectiveWarningLevel !== 'none' &&
-      active.canVibrate
-    ) {
-      const preset = WARNING_PRESETS[effectiveWarningLevel];
-      fire(
-        'vibrate',
-        clamp(preset.intensity, 1, vibMaxInt),
-        clamp(preset.durationMs, vibMinDur, vibMaxDur),
-        {
-          skipWarning: true,
-          target: holdTargetRef.current,
-        },
-      );
-      if (warningTimerRef.current) clearTimeout(warningTimerRef.current);
-      warningTimerRef.current = setTimeout(() => {
-        warningTimerRef.current = null;
-        startHold();
-      }, preset.durationMs + WARNING_SHOCK_GAP_MS);
-      return;
-    }
-
-    startHold();
+    // Hold for activity max; release sends broker end (m:"e"). The server warns first.
+    fire(operation, Math.max(1, intensity), maxDur, { hold: true });
   };
 
   useEffect(() => {
@@ -1479,8 +1403,7 @@ export function OfficialController({
                                               disabled={
                                                 (busy && !holdingOp) ||
                                                 controlsLocked ||
-                                                !active.canShock ||
-                                                !!active.paused
+                                                !modeEligible('shock')
                                               }
                                               onClick={
                                                 tapMode
@@ -1537,9 +1460,7 @@ export function OfficialController({
                                                   : `Wearer requires at least ${warningButtonLabel(requiredWarningFloor)} warning`
                                               }
                                               onClick={() =>
-                                                setWarningLevel((level) =>
-                                                  cycleWarningLevel(level, requiredWarningFloor),
-                                                )
+                                                setWarningLevel((level) => cycleWarningLevel(level))
                                               }
                                             >
                                               <span className="q-btn__wrapper col row q-anchor--skip">
@@ -1549,7 +1470,7 @@ export function OfficialController({
                                                     aria-hidden
                                                   />
                                                   <span className="block">
-                                                    {warningButtonLabel(effectiveWarningLevel)}
+                                                    {warningButtonLabel(warningLevel)}
                                                   </span>
                                                 </span>
                                               </span>
@@ -1674,11 +1595,6 @@ export function OfficialController({
                                         disabled={busy || !onEmergencyStop || stopTargets.length === 0}
                                         onClick={() => {
                                           if (!active || !onEmergencyStop || stopTargets.length === 0) return;
-                                          setWarningLevel(requiredWarningFloor);
-                                          if (warningTimerRef.current) {
-                                            clearTimeout(warningTimerRef.current);
-                                            warningTimerRef.current = null;
-                                          }
                                           onEmergencyStop({
                                             shockerId: active.id,
                                             shockerIds: stopTargets.map((s) => s.id),
@@ -1722,8 +1638,7 @@ export function OfficialController({
                                     disabled={
                                       (busy && !holdingOp) ||
                                       controlsLocked ||
-                                      !active.canBeep ||
-                                      !!active.paused
+                                      !modeEligible('beep')
                                     }
                                     onClick={
                                       tapMode ? undefined : () => fire('beep', 1, 300)
@@ -1801,8 +1716,7 @@ export function OfficialController({
                                               disabled={
                                                 (busy && !holdingOp) ||
                                                 controlsLocked ||
-                                                !active.canVibrate ||
-                                                !!active.paused
+                                                !modeEligible('vibrate')
                                               }
                                               onClick={
                                                 tapMode
@@ -2034,6 +1948,21 @@ function DurationMetric({
     const ms = Math.round(sec * 1000);
     return ms >= floor && ms <= maxMs;
   });
+  const presetChoices = presets.map((sec) => {
+    const ms = Math.round(sec * 1000);
+    const label = sec < 1 ? `.${String(sec).split('.')[1]}` : String(sec);
+    return { choiceKey: String(sec), ms, label };
+  });
+  if (presetChoices.length === 0 && floor <= maxMs) {
+    const lowest = Math.round(DURATION_PRESETS_SEC[0] * 1000);
+    const highest = Math.round(DURATION_PRESETS_SEC[DURATION_PRESETS_SEC.length - 1]! * 1000);
+    const endpoint = maxMs < lowest ? maxMs : floor > highest ? floor : maxMs;
+    presetChoices.push({
+      choiceKey: `endpoint-${endpoint}`,
+      ms: endpoint,
+      label: formatDurationSec(endpoint),
+    });
+  }
   const showLimits = limitMarkers.length > 1 && maxMs > 0;
   return (
     <div className="official-duration-wrap">
@@ -2074,9 +2003,7 @@ function DurationMetric({
           role="listbox"
           aria-label="Duration presets"
         >
-          {presets.map((sec) => {
-            const ms = Math.round(sec * 1000);
-            const label = sec < 1 ? `.${String(sec).split('.')[1]}` : String(sec);
+          {presetChoices.map(({ choiceKey, ms, label }) => {
             const selected = valueMs === ms;
             const matchingLimits = showLimits
               ? limitMarkers.filter((m) => m.durationMs === ms)
@@ -2087,7 +2014,7 @@ function DurationMetric({
             const ringColor = matchingLimits[0]?.color;
             return (
               <button
-                key={sec}
+                key={choiceKey}
                 type="button"
                 role="option"
                 aria-selected={selected}

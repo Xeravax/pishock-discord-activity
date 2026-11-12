@@ -10,8 +10,10 @@ import {
   isExecutorBanned,
 } from './session.js';
 import {
+  LIMIT_BAND_CONFLICT_MESSAGE,
   nestBands,
   personalBandsFromUser,
+  setLimitBandConflictFactory,
   shareBandsFromRow,
   type IntensityDurationBand,
   type ModeLimitBands,
@@ -28,7 +30,7 @@ export const ABS_MAX_INTENSITY = 100;
 export const ABS_MIN_DURATION_MS = 16;
 export const ABS_MAX_DURATION_MS = 15_000;
 
-/** Nest activity floors/ceilings: max(mins) ∩ min(maxes), then force min ≤ max. */
+/** Nest activity floors/ceilings: max(mins) ∩ min(maxes). An empty intersection throws. */
 export function nestLimitBand(input: {
   mins?: Array<number | null | undefined>;
   maxes?: Array<number | null | undefined>;
@@ -50,7 +52,10 @@ export function nestLimitBand(input: {
   let min = rawMins.length
     ? Math.max(absMin, ...rawMins.map((n) => Math.min(absMax, n)))
     : absMin;
-  min = Math.max(absMin, Math.min(max, min));
+  min = Math.max(absMin, Math.min(absMax, min));
+  if (min > max) {
+    throw new OperatePolicyError(LIMIT_BAND_CONFLICT_MESSAGE, 400, 'LIMIT_CONFLICT');
+  }
   return { min, max };
 }
 
@@ -124,6 +129,10 @@ export class OperatePolicyError extends Error {
     this.code = code;
   }
 }
+
+setLimitBandConflictFactory(
+  (message) => new OperatePolicyError(message, 400, 'LIMIT_CONFLICT'),
+);
 
 export function assertOperateRateLimit(discordUserId: string): void {
   const now = Date.now();
@@ -200,8 +209,8 @@ export function assertWithinCeilings(
   minIntensity: number = ABS_MIN_INTENSITY,
   minDurationMs: number = ABS_MIN_DURATION_MS,
 ): void {
-  const inten = Number(intensity ?? 1);
-  const dur = Number(durationMs ?? 300);
+  const inten = Number(intensity ?? minIntensity);
+  const dur = Number(durationMs ?? Math.max(minDurationMs, 300));
   if (Number.isFinite(inten) && inten < minIntensity) {
     throw new OperatePolicyError('Intensity below allowed minimum', 412, 'INTENSITY_FLOOR');
   }

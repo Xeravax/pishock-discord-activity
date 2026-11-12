@@ -26,7 +26,9 @@ import {
   scheduleHoldAutoEnd,
 } from '../operate-policy.js';
 import { bandForOperation, shareBandsFromRow } from '../limit-bands.js';
-import { WARNING_PRESETS, WARNING_SHOCK_GAP_MS } from '../../shared/warning.js';
+import { atLeastWarning, normalizeWarningLevel } from '../../shared/warning.js';
+import type { WarningLevel } from '../../shared/warning.js';
+import { shockWarningBody, ShockWarningError, warnBeforeShock } from '../pishock/shock-warning.js';
 import {
   getCommandQueueEnabled,
   getCommandQueueSettings,
@@ -50,9 +52,36 @@ import {
 import { commandQueue } from '../pishock/command-queue-runtime.js';
 import { CommandQueueError, type QueuedOperation } from '../pishock/command-queue.js';
 import {
-  getPiShockPausedShockerIds,
+  getPiShockPauseState,
   rememberPiShockPaused,
+  shockerPauseBlocks,
+  type PiShockPauseState,
 } from '../pishock/pause.js';
+
+const PARTICIPANT_STATUS_CONCURRENCY = 4;
+
+async function mapWithConcurrency<T, R>(
+  items: T[],
+  limit: number,
+  fn: (item: T) => Promise<R>,
+): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let next = 0;
+  const workers = Math.min(Math.max(1, limit), items.length);
+  async function worker() {
+    while (next < items.length) {
+      const index = next;
+      next += 1;
+      const item = items[index];
+      if (item === undefined) return;
+      results[index] = await fn(item);
+    }
+  }
+  if (workers > 0) {
+    await Promise.all(Array.from({ length: workers }, () => worker()));
+  }
+  return results;
+}
 
 function executorLabel(user: { id: string; username?: string | null; global_name?: string | null }) {
   const name = user.global_name || user.username || 'unknown';
@@ -171,8 +200,7 @@ export const participantRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app
 
     const ids = [...new Set((body.discordUserIds ?? []).map(String).filter(Boolean))].slice(0, 50);
     const myStars = new Set(await listQueueStars(req.discordUser.id));
-    const participants = [];
-    for (const id of ids) {
+    const participants = await mapWithConcurrency(ids, PARTICIPANT_STATUS_CONCURRENCY, async (id) => {
       const [user, shares, bannedYou, targetCreds, hasConsent, theirSettings, theyStarredMe] =
         await Promise.all([
           prisma.discordUser.findUnique({ where: { id } }),
@@ -184,9 +212,13 @@ export const participantRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app
           isQueueStarred(id, req.discordUser.id),
         ]);
       const hasSession = Boolean(targetCreds);
-      const piPaused = targetCreds
-        ? new Set(await getPiShockPausedShockerIds(id, targetCreds))
-        : new Set<number>();
+      const pause: PiShockPauseState = targetCreds
+        ? await getPiShockPauseState(id, targetCreds).catch(
+            (): PiShockPauseState => ({ shockerIds: [], shareCodes: [], unknown: true }),
+          )
+        : { shockerIds: [], shareCodes: [], unknown: false };
+      const shockerIsPaused = (shockerId: number) =>
+        pause.unknown || pause.shockerIds.includes(shockerId);
       const theirPaused = theirSettings.enabled ? commandQueue.getPaused(id) : false;
       const theirHalted = theirSettings.enabled ? commandQueue.getHalted(id) : false;
       const eStops = new Set(await getEmergencyStopShockerIds(id));
@@ -194,9 +226,11 @@ export const participantRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app
         (s: { enabled: boolean; paused: boolean }) => s.enabled && !s.paused,
       );
       const operable = active.filter(
-        (s: { shockerId: number }) => !eStops.has(s.shockerId) && !piPaused.has(s.shockerId),
+        (s: { shockerId: number }) => !eStops.has(s.shockerId) && !shockerIsPaused(s.shockerId),
       );
-      const allEStopped = active.length > 0 && operable.length === 0;
+      const allEStopped =
+        active.length > 0 &&
+        active.every((s: { shockerId: number }) => eStops.has(s.shockerId));
       const visibleShockers = bannedYou
         ? []
         : active.map(
@@ -218,7 +252,7 @@ export const participantRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app
               paused: boolean;
             }) => {
               const stopped = eStops.has(s.shockerId);
-              const devicePaused = piPaused.has(s.shockerId);
+              const devicePaused = shockerIsPaused(s.shockerId);
               const bands = shareBandsFromRow(s);
               return {
                 shockerId: s.shockerId,
@@ -278,8 +312,8 @@ export const participantRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app
           progressMs: theirSettings.progressMs,
         },
         shockers: visibleShockers,
-      });
-    }
+      };
+    });
     return { participants };
   });
 
@@ -309,6 +343,7 @@ export const participantRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app
       durationMs?: number;
       hold?: boolean;
       warning?: boolean;
+      warningLevel?: WarningLevel | string;
       clientId?: string | number;
     };
 
@@ -518,25 +553,25 @@ export const participantRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app
 
     const modes = shareBandsFromRow(share);
     const band = bandForOperation(modes, operation);
-    if (Number(body.intensity ?? 1) < band.minIntensity) {
+    const intensityCheck = Number(body.intensity ?? band.minIntensity);
+    const durationCheck = Number(body.durationMs ?? Math.max(band.minDurationMs, 300));
+    if (Number.isFinite(intensityCheck) && intensityCheck < band.minIntensity) {
       return reply.code(412).send({ error: 'Intensity below allowed minimum' });
     }
-    if (Number(body.intensity ?? 1) > band.maxIntensity) {
+    if (Number.isFinite(intensityCheck) && intensityCheck > band.maxIntensity) {
       return reply.code(412).send({ error: 'Intensity exceeds allowed maximum' });
     }
-    if (Number(body.durationMs ?? 300) < band.minDurationMs) {
+    if (Number.isFinite(durationCheck) && durationCheck < band.minDurationMs) {
       return reply.code(416).send({ error: 'Duration below allowed minimum' });
     }
-    if (Number(body.durationMs ?? 300) > band.maxDurationMs) {
+    if (Number.isFinite(durationCheck) && durationCheck > band.maxDurationMs) {
       return reply.code(416).send({ error: 'Duration exceeds allowed maximum' });
     }
 
     const intensity = clampIntensity(body.intensity, band.maxIntensity, band.minIntensity);
     const durationMs = clampDurationMs(body.durationMs, band.maxDurationMs, band.minDurationMs);
 
-    const devicePaused = (
-      await getPiShockPausedShockerIds(targetDiscordUserId, targetCreds)
-    ).includes(shockerId);
+    const devicePaused = await shockerPauseBlocks(targetDiscordUserId, targetCreds, shockerId);
     if (devicePaused) {
       return reply.code(503).send({
         error: 'This shocker or share is paused on PiShock',
@@ -544,40 +579,23 @@ export const participantRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app
       });
     }
 
-    const mustWarn =
-      (operation === 'shock' || operation === 'hold') &&
-      modes.requiredWarningLevel !== 'none';
-    if (mustWarn && !share.canVibrate) {
+    const requestedWarningLevel = normalizeWarningLevel(body.warningLevel);
+    const effectiveWarningLevel = atLeastWarning(
+      requestedWarningLevel,
+      modes.requiredWarningLevel,
+    );
+    const shockOrHold = operation === 'shock' || operation === 'hold';
+    if (shockOrHold && effectiveWarningLevel !== 'none' && !share.canVibrate) {
       return reply.code(405).send({
-        error: 'Owner requires a warning vibe before shock, but vibrate is disabled',
+        error:
+          modes.requiredWarningLevel !== 'none'
+            ? 'Owner requires a warning vibe before shock, but vibrate is disabled'
+            : 'Vibrate is disabled, so the warning before shock was not sent',
         code: 'WARNING_REQUIRED',
-        requiredWarningLevel: modes.requiredWarningLevel,
+        ...(modes.requiredWarningLevel !== 'none'
+          ? { requiredWarningLevel: modes.requiredWarningLevel }
+          : {}),
       });
-    }
-    if (mustWarn && modes.requiredWarningLevel !== 'none') {
-      const preset = WARNING_PRESETS[modes.requiredWarningLevel];
-      const warnIntensity = clampIntensity(
-        preset.intensity,
-        modes.vibrate.maxIntensity,
-        modes.vibrate.minIntensity,
-      );
-      const warnDuration = clampDurationMs(
-        preset.durationMs,
-        modes.vibrate.maxDurationMs,
-        modes.vibrate.minDurationMs,
-      );
-      const warnClientId = share.hubClientId;
-      if (warnClientId) {
-        await publishOperate(targetCreds, {
-          clientId: warnClientId,
-          shockerId: share.shockerId,
-          operation: ShockerOp.Vibrate,
-          intensity: Math.max(1, warnIntensity),
-          durationMs: warnDuration,
-          agentName: `Warning ${preset.label}`,
-        });
-        await new Promise((r) => setTimeout(r, warnDuration + WARNING_SHOCK_GAP_MS));
-      }
     }
 
     if (await getCommandQueueEnabled(targetDiscordUserId)) {
@@ -603,6 +621,7 @@ export const participantRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app
           durationMs,
           hold,
           warning,
+          warningLevel: requestedWarningLevel,
           shockerId,
           shareCode: null,
           hubClientId: share.hubClientId ?? clientId ?? null,
@@ -638,6 +657,17 @@ export const participantRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app
           : ShockerOp.Beep;
 
     try {
+      await warnBeforeShock({
+        operation,
+        requestedWarningLevel,
+        requiredWarningLevel: modes.requiredWarningLevel,
+        canVibrate: share.canVibrate,
+        creds: targetCreds,
+        clientId: clientId ?? null,
+        shockerId,
+        ownerDiscordUserId: targetDiscordUserId,
+        vibrateBand: modes.vibrate,
+      });
       if ((hold || warning) && clientId != null) {
         const published = await publishOperate(targetCreds, {
           clientId,
@@ -750,6 +780,9 @@ export const participantRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app
           instanceId,
         }),
       });
+      if (err instanceof ShockWarningError) {
+        return reply.code(err.status).send(shockWarningBody(err));
+      }
       if (err instanceof PiShockApiError) {
         console.warn(
           `[pishock] participant operate ${err.status}: ${redactPiShockSecrets(err.body).slice(0, 200)}`,

@@ -68,8 +68,9 @@ export function ApiKeyRevealPanel({
             </>
           ) : null}{' '}
           was created and stored encrypted for this activity. It stays hidden until you click it.
-          Copy it now if you want a backup — we will not show it again. It stays valid until you
-          unlink or PiShock rejects it
+          Copy it now if you want a backup — we will not show it again. Unlinking removes the key
+          from this app. The key stays valid at PiShock until you revoke it there or PiShock
+          rejects it
           {expiryLabel ? <> (PiShock reports expiry {expiryLabel})</> : null}.
         </p>
 

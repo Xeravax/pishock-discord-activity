@@ -111,7 +111,10 @@ async function readAccount(
  * PiShock documents this lookup as a query string only. Used after header
  * auth fails, so a successful link never puts the key in a URL.
  */
-async function probeUserId(apiKey: string, username: string): Promise<number> {
+async function probeUserId(
+  apiKey: string,
+  username: string,
+): Promise<{ userId: number; status: number }> {
   const probe = new URL(`${PISHOCK_AUTH}/Auth/GetUserIfAPIKeyValid`);
   probe.searchParams.set('apikey', apiKey);
   probe.searchParams.set('username', username);
@@ -119,18 +122,26 @@ async function probeUserId(apiKey: string, username: string): Promise<number> {
   const probeRaw = await probeRes.text();
   if (!probeRes.ok) {
     console.warn(`[pishock] GetUserIfAPIKeyValid → ${probeRes.status}`);
-    return 0;
+    return { userId: 0, status: probeRes.status };
   }
   const asNum = Number(probeRaw.trim());
-  if (Number.isFinite(asNum) && asNum > 0) return asNum;
+  if (Number.isFinite(asNum) && asNum > 0) return { userId: asNum, status: probeRes.status };
   try {
     const parsed = JSON.parse(probeRaw) as Record<string, unknown>;
     const id = Number(parsed.UserId ?? parsed.userId ?? parsed.UserID ?? parsed);
-    if (Number.isFinite(id) && id > 0) return id;
+    if (Number.isFinite(id) && id > 0) return { userId: id, status: probeRes.status };
   } catch {
     // opaque body
   }
-  return 0;
+  return { userId: 0, status: probeRes.status };
+}
+
+function validationFailure(statuses: number[]): PiShockApiError {
+  const non401 = statuses.find((status) => status !== 401);
+  if (non401 != null) {
+    return new PiShockApiError(non401, 'PiShock API key validation failed');
+  }
+  return new PiShockApiError(401, 'API key was rejected by api.pishock.com');
 }
 
 /**
@@ -155,6 +166,7 @@ export async function validateApiKey(input: {
     throw new PiShockApiError(400, 'API key required');
   }
 
+  const failures: number[] = [];
   const headerRes = await readAccount({
     Accept: 'application/json',
     'X-PiShock-Api-Key': apiKey,
@@ -162,28 +174,30 @@ export async function validateApiKey(input: {
   if (headerRes.ok) {
     return accountFromResponse(headerRes.raw, 'apiKeyHeader', usernameHint, input.userId);
   }
+  failures.push(headerRes.status);
   if (headerRes.status !== 401) {
     console.warn(`[pishock] API key validate apiKeyHeader → ${headerRes.status}`);
   }
 
-  let userId = input.userId && Number.isFinite(input.userId) ? input.userId : 0;
+  let userId = input.userId && Number.isFinite(input.userId) && input.userId > 0 ? input.userId : 0;
   if (!(userId > 0) && usernameHint) {
-    userId = await probeUserId(apiKey, usernameHint);
+    const probed = await probeUserId(apiKey, usernameHint);
+    if (probed.userId > 0) userId = probed.userId;
+    else if (probed.status !== 200) failures.push(probed.status);
   }
-  if (!(userId > 0)) {
-    throw new PiShockApiError(401, 'API key was rejected by api.pishock.com');
+  if (userId > 0) {
+    const tokenRes = await readAccount({
+      Accept: 'application/json',
+      'X-PiShock-UserId': String(userId),
+      'X-PiShock-Token': apiKey,
+    });
+    if (tokenRes.ok) {
+      return accountFromResponse(tokenRes.raw, 'apiKeyAsToken', usernameHint, input.userId);
+    }
+    failures.push(tokenRes.status);
+    console.warn(`[pishock] API key validate apiKeyAsToken → ${tokenRes.status}`);
   }
-
-  const tokenRes = await readAccount({
-    Accept: 'application/json',
-    'X-PiShock-UserId': String(userId),
-    'X-PiShock-Token': apiKey,
-  });
-  if (tokenRes.ok) {
-    return accountFromResponse(tokenRes.raw, 'apiKeyAsToken', usernameHint, input.userId);
-  }
-  console.warn(`[pishock] API key validate apiKeyAsToken → ${tokenRes.status}`);
-  throw new PiShockApiError(401, 'API key was rejected by api.pishock.com');
+  throw validationFailure(failures);
 }
 
 /**

@@ -23,9 +23,11 @@ import {
 import { commandQueue } from '../pishock/command-queue-runtime.js';
 import {
   annotateShockersWithPause,
-  getPiShockPausedShockerIds,
+  getPiShockPauseState,
   invalidatePiShockPauseCache,
   rememberPiShockPaused,
+  shockerPauseBlocks,
+  type PiShockPauseState,
 } from '../pishock/pause.js';
 import {
   assertModeAllowed,
@@ -37,13 +39,15 @@ import {
   findHubNameInSnapshot,
   findShockerInSnapshot,
   OperatePolicyError,
+  shockerIdOf,
   shockerNameOf,
   resolveOwnOperatePolicy,
   scheduleHoldAutoEnd,
   verifyOwnedClientId,
 } from '../operate-policy.js';
 import { bandForOperation } from '../limit-bands.js';
-import { WARNING_PRESETS, WARNING_SHOCK_GAP_MS } from '../../shared/warning.js';
+import { shockWarningBody, ShockWarningError, warnBeforeShock } from '../pishock/shock-warning.js';
+import type { WarningLevel } from '../../shared/warning.js';
 import {
   clearPiShockSession,
   listCommandLogs,
@@ -130,6 +134,23 @@ async function handlePiShockError(
   throw err;
 }
 
+function snapshotShockerIds(shockers: unknown[]): number[] {
+  const ids: number[] = [];
+  for (const raw of shockers) {
+    if (!raw || typeof raw !== 'object') continue;
+    const id = shockerIdOf(raw as Record<string, unknown>);
+    if (id != null) ids.push(id);
+  }
+  return ids;
+}
+
+/** Cut the active queued command when the emergency-stop publish itself failed. */
+async function stopActiveQueuedDevice(ownerDiscordUserId: string, shockerIds: number[]) {
+  const state = await commandQueue.snapshot(ownerDiscordUserId);
+  if (!state.active || !shockerIds.includes(state.active.shockerId)) return;
+  await commandQueue.skipActive(ownerDiscordUserId);
+}
+
 export const controlRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app, opts) => {
   app.get('/api/devices', async (req, reply) => {
     const blocked = requireSession(req, reply);
@@ -139,12 +160,15 @@ export const controlRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app, op
       const clientIds = collectHubClientIds(snapshot.hubs);
       ensureLogCapture(req.discordUser.id, req.pishockCreds!, clientIds);
       invalidatePiShockPauseCache(req.discordUser.id);
-      const [emergencyStopShockerIds, pausedIds] = await Promise.all([
+      const [emergencyStopShockerIds, pause] = await Promise.all([
         getEmergencyStopShockerIds(req.discordUser.id),
-        getPiShockPausedShockerIds(req.discordUser.id, req.pishockCreds!).catch(
-          () => [] as number[],
+        getPiShockPauseState(req.discordUser.id, req.pishockCreds!).catch(
+          (): PiShockPauseState => ({ shockerIds: [], shareCodes: [], unknown: true }),
         ),
       ]);
+      const pausedIds = pause.unknown
+        ? snapshotShockerIds(snapshot.shockers ?? [])
+        : pause.shockerIds;
       return {
         ...snapshot,
         shockers: annotateShockersWithPause(snapshot.shockers ?? [], pausedIds),
@@ -200,23 +224,40 @@ export const controlRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app, op
     }
 
     if (body.engaged) {
+      const cuts: Array<{ shockerId: number; clientId: string }> = [];
       for (const shockerId of shockerIds) {
         const row = findShockerInSnapshot(snapshot, shockerId);
         const clientId =
           (shockerIds.length === 1 ? verifyOwnedClientId(snapshot, body.clientId) : null) ??
-          (row ? String(row.ClientId ?? row.clientId ?? '') || null : null);
-        if (!clientId) continue;
-        clearHoldAutoEnd(req.discordUser.id, shockerId);
-        await publishOperate(creds, {
-          clientId,
-          shockerId,
+          (row ? String(row.ClientId ?? row.clientId ?? '').trim() || null : null);
+        if (!clientId) {
+          await stopActiveQueuedDevice(req.discordUser.id, shockerIds);
+          return reply.code(502).send({
+            error: 'Emergency stop requires a hub client id',
+            code: 'EMERGENCY_STOP_FAILED',
+          });
+        }
+        cuts.push({ shockerId, clientId });
+      }
+      for (const cut of cuts) {
+        const published = await publishOperate(creds, {
+          clientId: cut.clientId,
+          shockerId: cut.shockerId,
           operation: 'e',
           intensity: 0,
           durationMs: 0,
           end: true,
           agentName: 'Emergency Stop',
         });
+        if (!published) {
+          await stopActiveQueuedDevice(req.discordUser.id, shockerIds);
+          return reply.code(502).send({
+            error: 'Failed to cut the shocker',
+            code: 'EMERGENCY_STOP_FAILED',
+          });
+        }
       }
+      for (const cut of cuts) clearHoldAutoEnd(req.discordUser.id, cut.shockerId);
       // Devices already cut above; drop waiting + active queue slots for this wearer.
       await commandQueue.hardClear(req.discordUser.id, { endActiveDevice: false });
     }
@@ -291,6 +332,7 @@ export const controlRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app, op
       clientId?: number | string;
       hold?: boolean;
       warning?: { Active: boolean; Min: number; Max: number } | null;
+      warningLevel?: WarningLevel | string;
       instanceId?: string;
       locationHint?: ClientLocationHint | null;
     };
@@ -373,8 +415,8 @@ export const controlRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app, op
 
     // Refuse before hitting PiShock when the site already reports this shocker paused.
     if (shockerId != null) {
-      const pausedIds = await getPiShockPausedShockerIds(req.discordUser.id, creds);
-      if (pausedIds.includes(shockerId)) {
+      const paused = await shockerPauseBlocks(req.discordUser.id, creds, shockerId);
+      if (paused) {
         rememberPiShockPaused(req.discordUser.id, { shockerId, shareCode });
         return reply.code(503).send({
           error: 'This shocker or share is paused on PiShock',
@@ -414,56 +456,26 @@ export const controlRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app, op
     const intensity = clampIntensity(body.intensity, band.maxIntensity, band.minIntensity);
     const durationMs = clampDurationMs(body.durationMs, band.maxDurationMs, band.minDurationMs);
 
-    // Owner-required warning: inject a vibe before shock when vibrate is allowed.
-    const mustWarn =
-      (operation === 'shock' || operation === 'hold') &&
-      !warning &&
-      policy.requiredWarningLevel !== 'none';
-    if (mustWarn && !policy.flags.canVibrate) {
-      return reply.code(405).send({
-        error: 'Owner requires a warning vibe before shock, but vibrate is disabled',
-        code: 'WARNING_REQUIRED',
-        requiredWarningLevel: policy.requiredWarningLevel,
-      });
-    }
-
     try {
+      await warnBeforeShock({
+        operation,
+        requestedWarningLevel: body.warningLevel,
+        requiredWarningLevel: policy.requiredWarningLevel,
+        canVibrate: policy.flags.canVibrate,
+        creds,
+        clientId,
+        shockerId,
+        shareCode,
+        ownerDiscordUserId: policy.ownerDiscordUserId,
+        vibrateBand: policy.bands.vibrate,
+      });
+
       const op =
         operation === 'shock' || operation === 'hold'
           ? ShockerOp.Shock
           : operation === 'vibrate' || operation === 'warning'
             ? ShockerOp.Vibrate
             : ShockerOp.Beep;
-
-      if (
-        mustWarn &&
-        shockerId != null &&
-        clientId != null &&
-        policy.requiredWarningLevel !== 'none'
-      ) {
-        const preset = WARNING_PRESETS[policy.requiredWarningLevel];
-        const vibBand = policy.bands.vibrate;
-        const warnIntensity = clampIntensity(
-          preset.intensity,
-          vibBand.maxIntensity,
-          vibBand.minIntensity,
-        );
-        const warnDuration = clampDurationMs(
-          preset.durationMs,
-          vibBand.maxDurationMs,
-          vibBand.minDurationMs,
-        );
-        await publishOperate(creds, {
-          clientId,
-          shockerId,
-          operation: ShockerOp.Vibrate,
-          intensity: Math.max(1, warnIntensity),
-          durationMs: warnDuration,
-          shareCode: shareCode ?? undefined,
-          agentName: `Warning ${preset.label}`,
-        });
-        await new Promise((r) => setTimeout(r, warnDuration + WARNING_SHOCK_GAP_MS));
-      }
 
       // Prefer broker for owned V3 devices (same channel emergency stop cancels)
       if (shockerId != null && clientId != null && !shareCode) {
@@ -605,6 +617,9 @@ export const controlRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app, op
         detail: piShockLogError(err),
         location,
       });
+      if (err instanceof ShockWarningError) {
+        return reply.code(err.status).send(shockWarningBody(err));
+      }
       if (err instanceof PiShockApiError && err.status === 503) {
         rememberPiShockPaused(policy.ownerDiscordUserId, {
           shockerId,

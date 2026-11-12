@@ -21,14 +21,25 @@ export type PendingPiShockConfirm = {
 
 const pendingConfirmByDiscordUser = new Map<string, PendingPiShockConfirm>();
 
+type ConfirmFlight = {
+  /** Identifies this attempt. finishConfirmAttempt clears the flag only for this attempt. */
+  attempt: number;
+  /** Cleared by cancel and manual link so a late save or restore no longer owns the confirm. */
+  ownerGeneration: number | null;
+  pending: PendingPiShockConfirm;
+};
+
+const confirmFlights = new Map<string, ConfirmFlight>();
+let confirmGenerationSeq = 0;
+
 export const CONFIRM_TTL_MS = 10 * 60 * 1000;
 
-export function setPendingConfirm(
+function writePendingConfirm(
   discordUserId: string,
   creds: RelayCredentials,
-  hubNames: string[] = [],
-  username = '',
-  created?: CreatedApiKeyDraft | null,
+  hubNames: string[],
+  username: string,
+  created: CreatedApiKeyDraft | null | undefined,
 ) {
   const prev = pendingConfirmByDiscordUser.get(discordUserId);
   const sameUser = prev != null && prev.userId === creds.UserId;
@@ -54,6 +65,17 @@ export function setPendingConfirm(
   });
 }
 
+export function setPendingConfirm(
+  discordUserId: string,
+  creds: RelayCredentials,
+  hubNames: string[] = [],
+  username = '',
+  created?: CreatedApiKeyDraft | null,
+) {
+  if (confirmFlights.has(discordUserId)) return;
+  writePendingConfirm(discordUserId, creds, hubNames, username, created);
+}
+
 export function getPendingConfirm(discordUserId: string): PendingPiShockConfirm | null {
   const row = pendingConfirmByDiscordUser.get(discordUserId);
   if (!row) return null;
@@ -73,4 +95,60 @@ export function takePendingConfirm(discordUserId: string): PendingPiShockConfirm
 
 export function clearPendingConfirm(discordUserId: string) {
   pendingConfirmByDiscordUser.delete(discordUserId);
+  const flight = confirmFlights.get(discordUserId);
+  if (flight) flight.ownerGeneration = null;
+}
+
+export function isConfirmInFlight(discordUserId: string): boolean {
+  return confirmFlights.has(discordUserId);
+}
+
+export function getConfirmFlight(discordUserId: string): PendingPiShockConfirm | null {
+  return confirmFlights.get(discordUserId)?.pending ?? null;
+}
+
+/**
+ * Take the pending row and own it for this attempt.
+ * A second call while createApiKey is still running returns 'busy'.
+ */
+export function beginConfirmAttempt(
+  discordUserId: string,
+): (PendingPiShockConfirm & { generation: number }) | 'busy' | null {
+  if (confirmFlights.has(discordUserId)) return 'busy';
+  const row = getPendingConfirm(discordUserId);
+  if (!row) return null;
+  pendingConfirmByDiscordUser.delete(discordUserId);
+  const generation = ++confirmGenerationSeq;
+  confirmFlights.set(discordUserId, {
+    attempt: generation,
+    ownerGeneration: generation,
+    pending: row,
+  });
+  return { ...row, generation };
+}
+
+export function confirmAttemptOwns(discordUserId: string, generation: number): boolean {
+  return confirmFlights.get(discordUserId)?.ownerGeneration === generation;
+}
+
+/** Put the pending row back only when this attempt still owns the confirm. */
+export function restoreOwnedPendingConfirm(
+  discordUserId: string,
+  generation: number,
+  creds: RelayCredentials,
+  hubNames: string[],
+  username: string,
+  created: CreatedApiKeyDraft | null,
+): boolean {
+  if (!confirmAttemptOwns(discordUserId, generation)) return false;
+  writePendingConfirm(discordUserId, creds, hubNames, username, created);
+  const flight = confirmFlights.get(discordUserId);
+  const written = pendingConfirmByDiscordUser.get(discordUserId);
+  if (flight && written) flight.pending = written;
+  return true;
+}
+
+export function finishConfirmAttempt(discordUserId: string, generation: number) {
+  const flight = confirmFlights.get(discordUserId);
+  if (flight?.attempt === generation) confirmFlights.delete(discordUserId);
 }

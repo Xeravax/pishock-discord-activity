@@ -8,6 +8,30 @@ const ABS_MAX_INTENSITY = 100;
 const ABS_MIN_DURATION_MS = 16;
 const ABS_MAX_DURATION_MS = 15_000;
 
+export const LIMIT_BAND_CONFLICT_MESSAGE = 'Limit minimum exceeds maximum';
+
+/** Empty min/max intersection. Operate-policy replaces this with OperatePolicyError once loaded. */
+export class LimitBandConflictError extends Error {
+  readonly status = 400;
+  readonly code = 'LIMIT_CONFLICT';
+  constructor(message = LIMIT_BAND_CONFLICT_MESSAGE) {
+    super(message);
+    this.name = 'LimitBandConflictError';
+  }
+}
+
+type LimitConflictFactory = (message: string) => Error;
+
+let limitConflictFactory: LimitConflictFactory = (message) => new LimitBandConflictError(message);
+
+export function setLimitBandConflictFactory(factory: LimitConflictFactory): void {
+  limitConflictFactory = factory;
+}
+
+function throwEmptyLimitBand(): never {
+  throw limitConflictFactory(LIMIT_BAND_CONFLICT_MESSAGE);
+}
+
 export type IntensityDurationBand = {
   minIntensity: number;
   maxIntensity: number;
@@ -36,7 +60,8 @@ function nest(
   let min = rawMins.length
     ? Math.max(absMin, ...rawMins.map((n) => Math.min(absMax, n)))
     : absMin;
-  min = Math.max(absMin, Math.min(max, min));
+  min = Math.max(absMin, Math.min(absMax, min));
+  if (min > max) throwEmptyLimitBand();
   return { min, max };
 }
 

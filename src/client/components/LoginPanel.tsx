@@ -9,6 +9,8 @@ type Props = {
   onOpen: () => void;
   onRefresh: () => void;
   onManualSubmit?: (input: { username: string; apiKey: string }) => void | Promise<void>;
+  /** Clears a failed manual-link message as the user edits either field. */
+  onClearManualError?: () => void;
   manualBusy?: boolean;
   manualError?: string | null;
 };
@@ -30,6 +32,7 @@ export function LoginPanel({
   onOpen,
   onRefresh,
   onManualSubmit,
+  onClearManualError,
   manualBusy,
   manualError,
 }: Props) {
@@ -110,10 +113,23 @@ export function LoginPanel({
               <p>{manualError}</p>
             </div>
           ) : null}
-          <div className="column q-gutter-sm">
+          <form
+            className="column q-gutter-sm"
+            onSubmit={(e) => {
+              e.preventDefault();
+              if (!canManual || linking || manualBusy || !onManualSubmit) return;
+              void onManualSubmit({
+                username: username.trim(),
+                apiKey: apiKey.trim(),
+              });
+            }}
+          >
             <input
               value={username}
-              onChange={(e) => setUsername(e.target.value)}
+              onChange={(e) => {
+                setUsername(e.target.value);
+                onClearManualError?.();
+              }}
               placeholder="PiShock username"
               autoComplete="username"
               className="bg-dark text-grey-3"
@@ -121,8 +137,12 @@ export function LoginPanel({
               disabled={linking || manualBusy}
             />
             <input
+              type="password"
               value={apiKey}
-              onChange={(e) => setApiKey(e.target.value)}
+              onChange={(e) => {
+                setApiKey(e.target.value);
+                onClearManualError?.();
+              }}
               placeholder="API key"
               autoComplete="off"
               spellCheck={false}
@@ -131,16 +151,9 @@ export function LoginPanel({
               disabled={linking || manualBusy}
             />
             <button
-              type="button"
+              type="submit"
               className="q-btn q-btn-item non-selectable no-outline text-secondary bg-dark q-btn--outline q-btn--rectangle q-btn--actionable"
               disabled={!canManual || linking || manualBusy}
-              onClick={() => {
-                if (!canManual || !onManualSubmit) return;
-                void onManualSubmit({
-                  username: username.trim(),
-                  apiKey: apiKey.trim(),
-                });
-              }}
             >
               <span className="q-btn__wrapper col row q-anchor--skip">
                 <span className="q-btn__content text-center col items-center q-anchor--skip justify-center row no-wrap">
@@ -153,7 +166,7 @@ export function LoginPanel({
                 </span>
               </span>
             </button>
-          </div>
+          </form>
         </div>
       ) : null}
     </section>

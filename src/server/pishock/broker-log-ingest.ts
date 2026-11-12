@@ -189,8 +189,17 @@ export async function ingestBrokerDeviceLog(
       },
     });
     return true;
-  } catch {
-    // unique externalLogKey → already ingested
-    return false;
+  } catch (err) {
+    if (isPrismaUniqueConflict(err)) return false;
+    throw err;
   }
+}
+
+function isPrismaUniqueConflict(err: unknown): boolean {
+  return Boolean(
+    err &&
+      typeof err === 'object' &&
+      'code' in err &&
+      (err as { code?: unknown }).code === 'P2002',
+  );
 }

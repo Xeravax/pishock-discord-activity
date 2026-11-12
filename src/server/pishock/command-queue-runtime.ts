@@ -1,10 +1,14 @@
 import type { AppEnv } from '../env.js';
 import { broadcastRealtime } from '../realtime.js';
 import {
+  assertModeAllowed,
   clearHoldAutoEnd,
+  clampDurationMs,
+  clampIntensity,
   resolveDeviceCeilingsFromPiShock,
   scheduleHoldAutoEnd,
 } from '../operate-policy.js';
+import { bandForOperation, shareBandsFromRow } from '../limit-bands.js';
 import {
   findActivityShareByShocker,
   getCommandQueueSettings,
@@ -24,7 +28,8 @@ import {
   redactPiShockSecrets,
   type PiShockCreds,
 } from './client.js';
-import { getPiShockPausedShockerIds, rememberPiShockPaused } from './pause.js';
+import { rememberPiShockPaused, shockerPauseBlocks } from './pause.js';
+import { warnBeforeShock } from './shock-warning.js';
 import { publishOperate } from './broker.js';
 import { ShockerOp } from '../../shared/constants.js';
 import {
@@ -156,8 +161,9 @@ async function validateQueuedItem(item: QueueItemInternal): Promise<boolean> {
   if (queuedPayload?.env) {
     const ownerCreds = await loadPiShockCreds(queuedPayload.env, item.ownerDiscordUserId);
     if (ownerCreds) {
-      const paused = await getPiShockPausedShockerIds(item.ownerDiscordUserId, ownerCreds);
-      if (paused.includes(item.shockerId)) return false;
+      if (await shockerPauseBlocks(item.ownerDiscordUserId, ownerCreds, item.shockerId)) {
+        return false;
+      }
     }
   }
   const shares = (await listEnabledActivityShares(item.ownerDiscordUserId)).filter(
@@ -246,11 +252,7 @@ async function executeQueuedItem(item: QueueItemInternal): Promise<void> {
   const hold = item.hold || item.operation === 'hold';
   const warning = item.warning || item.operation === 'warning';
   const op = opFor(item.operation);
-  const intensity = Math.max(1, item.intensity);
-  const durationMs = item.durationMs;
   const location = payload.location;
-
-  const shareMeta = await findActivityShareByShocker(item.ownerDiscordUserId, item.shockerId);
 
   const auditBase = {
     executorDiscordUserId: item.executorDiscordUserId,
@@ -260,16 +262,51 @@ async function executeQueuedItem(item: QueueItemInternal): Promise<void> {
     targetDiscordUserId: item.ownerDiscordUserId,
     action: `participant_${item.operation}`,
     shockerId: item.shockerId,
-    shockerName: shareMeta?.shockerName ?? null,
-    hubClientId: clientId ?? shareMeta?.hubClientId ?? null,
-    hubName: shareMeta?.hubName ?? null,
+    shockerName: null as string | null,
+    hubClientId: clientId,
+    hubName: null as string | null,
     shareCode: null as string | null,
     intensity: item.intensity,
-    durationMs,
+    durationMs: item.durationMs,
     location,
   };
 
   try {
+    const share = await findActivityShareByShocker(item.ownerDiscordUserId, item.shockerId);
+    if (!share || !share.enabled || share.paused) {
+      throw new Error('Share no longer allows this operation');
+    }
+    assertModeAllowed(item.operation, hold, {
+      canShock: share.canShock,
+      canVibrate: share.canVibrate,
+      canBeep: share.canBeep,
+      canHold: share.canHold,
+    });
+    const modes = shareBandsFromRow(share);
+    const band = bandForOperation(modes, item.operation);
+    const intensity = Math.max(
+      1,
+      clampIntensity(item.intensity, band.maxIntensity, band.minIntensity),
+    );
+    const durationMs = clampDurationMs(item.durationMs, band.maxDurationMs, band.minDurationMs);
+    auditBase.shockerName = share.shockerName ?? null;
+    auditBase.hubClientId = clientId ?? share.hubClientId ?? null;
+    auditBase.hubName = share.hubName ?? null;
+    auditBase.intensity = intensity;
+    auditBase.durationMs = durationMs;
+
+    await warnBeforeShock({
+      operation: item.operation,
+      requestedWarningLevel: item.warningLevel,
+      requiredWarningLevel: modes.requiredWarningLevel,
+      canVibrate: share.canVibrate,
+      creds: targetCreds,
+      clientId,
+      shockerId: item.shockerId,
+      ownerDiscordUserId: item.ownerDiscordUserId,
+      vibrateBand: modes.vibrate,
+    });
+
     if ((hold || warning) && clientId != null) {
       const published = await publishOperate(targetCreds, {
         clientId,

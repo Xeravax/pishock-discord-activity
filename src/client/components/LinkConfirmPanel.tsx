@@ -44,7 +44,8 @@ export function LinkConfirmPanel({
           PiShock confirmed a successful login. Link it to{' '}
           <strong className="text-grey-3">{discordName}</strong> only if this is you. Confirming
           creates a <strong>named API key</strong> (<strong>Discord Activity</strong>) used for
-          device control. It stays valid until you unlink or PiShock rejects it.
+          device control. Unlinking removes the key from this app. The key stays valid at PiShock
+          until you revoke it there or PiShock rejects it.
         </p>
 
         {error ? (

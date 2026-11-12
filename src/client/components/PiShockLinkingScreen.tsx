@@ -49,7 +49,8 @@ export function PiShockLinkingScreen({
             <p className="auth-boot__hint">
               Finish signing in in your browser, then return here — we&apos;ll detect it
               automatically. After you confirm the account, we create a <strong>named API key</strong>{' '}
-              (shown once) and store it encrypted until you unlink or PiShock rejects it.
+              (shown once) and store it encrypted. Unlinking removes the key from this app. The key
+              stays valid at PiShock until you revoke it there or PiShock rejects it.
             </p>
           </>
         )}

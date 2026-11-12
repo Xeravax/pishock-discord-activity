@@ -4,9 +4,10 @@ import {
   ABS_MAX_DURATION_MS,
   ABS_MAX_INTENSITY,
   ABS_MIN_DURATION_MS,
+  OperatePolicyError,
   resolveDeviceCeilingsFromPiShock,
 } from '../operate-policy.js';
-import { shareBandsFromRow } from '../limit-bands.js';
+import { LimitBandConflictError, shareBandsFromRow } from '../limit-bands.js';
 import { normalizeWarningLevel } from '../../shared/warning.js';
 import {
   getPersonalActivityLimits,
@@ -49,6 +50,12 @@ type IncomingShare = {
 
 type ExistingShare = Awaited<ReturnType<typeof listActivityShares>>[number];
 
+function bandConflictMessage(err: unknown): string | null {
+  if (err instanceof LimitBandConflictError) return err.message;
+  if (err instanceof OperatePolicyError && err.code === 'LIMIT_CONFLICT') return err.message;
+  return null;
+}
+
 async function normalizeShareRow(
   s: IncomingShare,
   prev: ExistingShare | undefined,
@@ -88,24 +95,31 @@ async function normalizeShareRow(
   const canBeep = s.canBeep !== false;
   const canHold = s.canHold !== false;
 
-  const bands = shareBandsFromRow({
-    deviceMaxIntensity,
-    deviceMaxDurationMs,
-    minIntensity: s.minIntensity ?? prev?.minIntensity,
-    maxIntensity: s.maxIntensity ?? prev?.maxIntensity,
-    minDurationMs: s.minDurationMs ?? prev?.minDurationMs,
-    maxDurationMs: s.maxDurationMs ?? prev?.maxDurationMs,
-    vibMinIntensity: s.vibMinIntensity ?? prev?.vibMinIntensity,
-    vibMaxIntensity: s.vibMaxIntensity ?? prev?.vibMaxIntensity,
-    vibMinDurationMs: s.vibMinDurationMs ?? prev?.vibMinDurationMs,
-    vibMaxDurationMs: s.vibMaxDurationMs ?? prev?.vibMaxDurationMs,
-    beepMinIntensity: s.beepMinIntensity ?? prev?.beepMinIntensity,
-    beepMaxIntensity: s.beepMaxIntensity ?? prev?.beepMaxIntensity,
-    beepMinDurationMs: s.beepMinDurationMs ?? prev?.beepMinDurationMs,
-    beepMaxDurationMs: s.beepMaxDurationMs ?? prev?.beepMaxDurationMs,
-    requiredWarningLevel:
-      s.requiredWarningLevel ?? prev?.requiredWarningLevel ?? 'none',
-  });
+  let bands: ReturnType<typeof shareBandsFromRow>;
+  try {
+    bands = shareBandsFromRow({
+      deviceMaxIntensity,
+      deviceMaxDurationMs,
+      minIntensity: s.minIntensity ?? prev?.minIntensity,
+      maxIntensity: s.maxIntensity ?? prev?.maxIntensity,
+      minDurationMs: s.minDurationMs ?? prev?.minDurationMs,
+      maxDurationMs: s.maxDurationMs ?? prev?.maxDurationMs,
+      vibMinIntensity: s.vibMinIntensity ?? prev?.vibMinIntensity,
+      vibMaxIntensity: s.vibMaxIntensity ?? prev?.vibMaxIntensity,
+      vibMinDurationMs: s.vibMinDurationMs ?? prev?.vibMinDurationMs,
+      vibMaxDurationMs: s.vibMaxDurationMs ?? prev?.vibMaxDurationMs,
+      beepMinIntensity: s.beepMinIntensity ?? prev?.beepMinIntensity,
+      beepMaxIntensity: s.beepMaxIntensity ?? prev?.beepMaxIntensity,
+      beepMinDurationMs: s.beepMinDurationMs ?? prev?.beepMinDurationMs,
+      beepMaxDurationMs: s.beepMaxDurationMs ?? prev?.beepMaxDurationMs,
+      requiredWarningLevel:
+        s.requiredWarningLevel ?? prev?.requiredWarningLevel ?? 'none',
+    });
+  } catch (err) {
+    const conflict = bandConflictMessage(err);
+    if (!conflict) throw err;
+    return { ok: false, error: conflict };
+  }
   const requiredWarningLevel = normalizeWarningLevel(
     s.requiredWarningLevel ?? prev?.requiredWarningLevel,
   );
@@ -201,7 +215,13 @@ export const activityShareRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (a
     };
 
     if (body.personal) {
-      await setPersonalActivityLimits(req.discordUser.id, body.personal);
+      try {
+        await setPersonalActivityLimits(req.discordUser.id, body.personal);
+      } catch (err) {
+        const conflict = bandConflictMessage(err);
+        if (!conflict) throw err;
+        return reply.code(400).send({ error: conflict });
+      }
     }
 
     const existing = await listActivityShares(req.discordUser.id);

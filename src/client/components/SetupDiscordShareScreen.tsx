@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { AppVersionBadge } from './AppVersionBadge';
 import type { ShockerView } from './ShockerCard';
 import type { ActivityShareConfig } from './AvailabilitySettings';
-import type { PersonalLimits } from './ActivityLimitsSettings';
+import type { PersonalLimits, ShareLimitRow } from './ActivityLimitsSettings';
 import { ModeLimitsEditor, type ModeLimitsValue } from './ModeLimitsEditor';
 import {
   LimitSlider,
@@ -41,8 +41,13 @@ type SetupStep = 'loading' | 'devices' | 'limits' | 'queue';
 type Props = {
   shockers: ShockerView[];
   initialPersonal: PersonalLimits;
-  /** Pre-select these shockers (e.g. currently shared) when redoing setup. */
+  /**
+   * Pre-select these shockers when redoing setup.
+   * Undefined selects every owned shocker. An explicit empty list selects none.
+   */
   initialSelectedIds?: number[];
+  /** Saved share rows. Personal defaults are used only when a shocker has no row. */
+  initialShares?: ShareLimitRow[];
   /** True after post-confirm device fetch finishes (even if the list is empty). */
   devicesReady?: boolean;
   busy?: boolean;
@@ -149,6 +154,48 @@ function defaultShareMode(s: ShockerView, personal: PersonalLimits): ModeLimitsV
   };
 }
 
+function savedShareToMode(s: ShockerView, row: ShareLimitRow): ModeLimitsValue {
+  const deviceMaxI = Math.min(100, s.deviceMaxIntensity ?? s.maxIntensity ?? 100);
+  const deviceMaxD = Math.min(15_000, s.deviceMaxDuration ?? s.maxDuration ?? 15_000);
+  const shockMax = Math.min(deviceMaxI, row.maxIntensity);
+  const shockMin = Math.min(shockMax, Math.max(1, row.minIntensity ?? 1));
+  const shockMaxD = Math.min(deviceMaxD, row.maxDurationMs);
+  const shockMinD = Math.min(shockMaxD, Math.max(16, row.minDurationMs ?? 16));
+  const vibMax = Math.min(deviceMaxI, row.vibMaxIntensity ?? shockMax);
+  const vibMin = Math.min(vibMax, Math.max(1, row.vibMinIntensity ?? shockMin));
+  const vibMaxD = Math.min(deviceMaxD, row.vibMaxDurationMs ?? shockMaxD);
+  const vibMinD = Math.min(vibMaxD, Math.max(16, row.vibMinDurationMs ?? shockMinD));
+  const beepMax = Math.min(deviceMaxI, row.beepMaxIntensity ?? shockMax);
+  const beepMin = Math.min(beepMax, Math.max(1, row.beepMinIntensity ?? shockMin));
+  const beepMaxD = Math.min(deviceMaxD, row.beepMaxDurationMs ?? shockMaxD);
+  const beepMinD = Math.min(beepMaxD, Math.max(16, row.beepMinDurationMs ?? shockMinD));
+  return {
+    canShock: row.canShock,
+    canVibrate: row.canVibrate,
+    canBeep: row.canBeep,
+    canHold: row.canHold,
+    shock: {
+      minIntensity: shockMin,
+      maxIntensity: shockMax,
+      minDurationMs: shockMinD,
+      maxDurationMs: shockMaxD,
+    },
+    vibrate: {
+      minIntensity: vibMin,
+      maxIntensity: vibMax,
+      minDurationMs: vibMinD,
+      maxDurationMs: vibMaxD,
+    },
+    beep: {
+      minIntensity: beepMin,
+      maxIntensity: beepMax,
+      minDurationMs: beepMinD,
+      maxDurationMs: beepMaxD,
+    },
+    requiredWarningLevel: normalizeWarningLevel(row.requiredWarningLevel),
+  };
+}
+
 function toShare(s: ShockerView, mode: ModeLimitsValue): ActivityShareConfig {
   const deviceMaxI = Math.min(100, s.deviceMaxIntensity ?? s.maxIntensity ?? 100);
   const deviceMaxD = Math.min(15_000, s.deviceMaxDuration ?? s.maxDuration ?? 15_000);
@@ -186,6 +233,7 @@ export function SetupDiscordShareScreen({
   shockers,
   initialPersonal,
   initialSelectedIds,
+  initialShares,
   devicesReady = false,
   busy,
   error,
@@ -213,17 +261,23 @@ export function SetupDiscordShareScreen({
       return;
     }
     if (owned.length > 0 && !seeded) {
-      const preferred = (initialSelectedIds ?? []).filter((id) => owned.some((s) => s.id === id));
-      setSelected(new Set(preferred.length ? preferred : owned.map((s) => s.id)));
+      const ownedIds = new Set(owned.map((s) => s.id));
+      const selectedIds =
+        initialSelectedIds === undefined
+          ? owned.map((s) => s.id)
+          : initialSelectedIds.filter((id) => ownedIds.has(id));
+      setSelected(new Set(selectedIds));
+      const savedById = new Map((initialShares ?? []).map((row) => [row.shockerId, row]));
       const modes: Record<number, ModeLimitsValue> = {};
       for (const s of owned) {
-        modes[s.id] = defaultShareMode(s, initialPersonal);
+        const saved = savedById.get(s.id);
+        modes[s.id] = saved ? savedShareToMode(s, saved) : defaultShareMode(s, initialPersonal);
       }
       setShareModes(modes);
       setSeeded(true);
     }
     setStep((prev) => (prev === 'loading' ? 'devices' : prev));
-  }, [owned, seeded, devicesReady, initialPersonal, initialSelectedIds]);
+  }, [owned, seeded, devicesReady, initialPersonal, initialSelectedIds, initialShares]);
 
   const go = (next: SetupStep, dir: 'forward' | 'back') => {
     setStepDir(dir);

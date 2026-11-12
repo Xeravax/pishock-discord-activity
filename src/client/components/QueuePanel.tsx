@@ -251,10 +251,14 @@ export function QueuePanel({
                   halted ? ' text-warning' : ''
                 }`}
                 disabled={busy}
-                title="Block new commands — keep waiting items and finish what’s already queued"
+                title={
+                  halted
+                    ? 'Open the queue to new commands'
+                    : 'Close the queue to new commands. Waiting operations continue.'
+                }
                 onClick={() => onToggleHalted(!halted)}
               >
-                {halted ? 'Open queue' : 'Halt'}
+                {halted ? 'Open queue' : 'Close queue'}
               </button>
               <button
                 type="button"
@@ -273,6 +277,11 @@ export function QueuePanel({
                 Clear
               </button>
             </div>
+            {!halted ? (
+              <div className="text-caption text-grey-5 queue-panel-status-row">
+                Waiting operations continue.
+              </div>
+            ) : null}
             {paused || halted ? (
               <div className="text-caption queue-panel-status-row">
                 {paused ? <span className="text-warning">Paused · processing stopped</span> : null}
