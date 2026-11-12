@@ -5,6 +5,7 @@ import {
   getAccount,
   profileFromAccount,
   softAccountProfile,
+  softApiKeyProfile,
   validateApiKey,
 } from '../pishock/auth-api.js';
 import { getHubs, PiShockApiError, redactPiShockSecrets } from '../pishock/client.js';
@@ -21,6 +22,11 @@ import {
   setPendingConfirm,
   type CreatedApiKeyDraft,
 } from '../pishock/pending-confirm.js';
+import {
+  getStoredProfileImage,
+  persistAccountImages,
+  type ProfileImageKind,
+} from '../pishock/profile-images.js';
 import { awaitRelayLogin, getPendingLogin, startRelayLogin } from '../pishock/relay.js';
 import { clearPiShockSession, savePiShockSession } from '../session.js';
 
@@ -59,6 +65,26 @@ function confirmPayload(
 }
 
 export const pishockSessionRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app, opts) => {
+  /** Locally cached PiShock avatar/banner (public so <img> tags work without Bearer). */
+  app.get('/api/pishock/media/:pishockUserId/:kind', async (req, reply) => {
+    const params = req.params as { pishockUserId?: string; kind?: string };
+    const pishockUserId = Number(params.pishockUserId);
+    const kind = String(params.kind ?? '').trim() as ProfileImageKind;
+    if (!Number.isFinite(pishockUserId) || pishockUserId <= 0 || (kind !== 'avatar' && kind !== 'banner')) {
+      return reply.code(404).send({ error: 'Not found' });
+    }
+    const stored = await getStoredProfileImage(pishockUserId, kind);
+    if (!stored) return reply.code(404).send({ error: 'Not found' });
+    reply.header('Content-Type', stored.contentType);
+    reply.header('Cache-Control', 'public, max-age=86400, stale-while-revalidate=604800');
+    reply.header('ETag', `"${stored.version}"`);
+    const inm = req.headers['if-none-match'];
+    if (typeof inm === 'string' && inm.replace(/W\//i, '').replaceAll('"', '') === stored.version) {
+      return reply.code(304).send();
+    }
+    return reply.send(stored.buffer);
+  });
+
   app.post('/api/pishock/login/start', async (req, reply) => {
     if (!req.hasConsent) {
       return reply.code(403).send({ error: 'Consent required' });
@@ -187,13 +213,20 @@ export const pishockSessionRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (
       if (!username || (!profile.avatarUrl && !profile.bannerUrl)) {
         try {
           const account = await getAccount(session);
-          const refreshed = profileFromAccount(account);
+          const refreshed = await persistAccountImages(
+            pending.userId,
+            profileFromAccount(account),
+          );
           if (!username) username = refreshed.username;
           if (!profile.avatarUrl) profile.avatarUrl = refreshed.avatarUrl;
           if (!profile.bannerUrl) profile.bannerUrl = refreshed.bannerUrl;
         } catch {
           // Username may already be present from the pending row.
         }
+      } else {
+        const stored = await persistAccountImages(pending.userId, profile);
+        profile.avatarUrl = stored.avatarUrl;
+        profile.bannerUrl = stored.bannerUrl;
       }
       if (!username) {
         restore(created);
@@ -304,10 +337,14 @@ export const pishockSessionRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (
         apiKeyId: null,
       });
 
+      const profile = await softApiKeyProfile(parsed.apiKey, account.userId);
+
       return {
         ok: true,
         pishockUserId: account.userId,
         pishockUsername: account.username,
+        avatarUrl: profile?.avatarUrl ?? null,
+        bannerUrl: profile?.bannerUrl ?? null,
         expiresAt: null,
         manual: true,
       };

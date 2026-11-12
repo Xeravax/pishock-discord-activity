@@ -21,6 +21,26 @@ function requireConsent(
   return null;
 }
 
+function queuePublicFields(state: {
+  paused: boolean;
+  halted: boolean;
+  active: unknown;
+  waiting: unknown;
+  next: unknown;
+  nextStartsInMs: number | null;
+  nextEstimatedStartAt: number | null;
+}) {
+  return {
+    paused: state.paused,
+    halted: state.halted,
+    active: state.active,
+    waiting: state.waiting,
+    next: state.next,
+    nextStartsInMs: state.nextStartsInMs,
+    nextEstimatedStartAt: state.nextEstimatedStartAt,
+  };
+}
+
 async function broadcastOwnerQueueState(
   ownerDiscordUserId: string,
   settings: CommandQueueSettings,
@@ -38,6 +58,9 @@ async function broadcastOwnerQueueState(
       halted: state.halted,
       active: state.active,
       waiting: state.waiting,
+      next: state.next,
+      nextStartsInMs: state.nextStartsInMs,
+      nextEstimatedStartAt: state.nextEstimatedStartAt,
       at: Date.now(),
     },
     { discordUserId: ownerDiscordUserId },
@@ -63,10 +86,7 @@ export const queueRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app) => {
     ]);
     return {
       ...settings,
-      paused: state.paused,
-      halted: state.halted,
-      active: state.active,
-      waiting: state.waiting,
+      ...queuePublicFields(state),
       stars,
     };
   });
@@ -95,10 +115,7 @@ export const queueRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app) => {
     return {
       ok: true,
       ...settings,
-      paused: state.paused,
-      halted: state.halted,
-      active: state.active,
-      waiting: state.waiting,
+      ...queuePublicFields(state),
     };
   });
 
@@ -124,10 +141,7 @@ export const queueRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app) => {
     return {
       ok: true,
       ...settings,
-      paused: state.paused,
-      halted: state.halted,
-      active: state.active,
-      waiting: state.waiting,
+      ...queuePublicFields(state),
     };
   });
 
@@ -147,10 +161,7 @@ export const queueRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app) => {
     return {
       ok: true,
       ...settings,
-      paused: state.paused,
-      halted: state.halted,
-      active: state.active,
-      waiting: state.waiting,
+      ...queuePublicFields(state),
     };
   });
 

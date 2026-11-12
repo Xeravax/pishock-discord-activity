@@ -41,6 +41,10 @@ export function PrivacyPolicy({ onBack }: Props) {
             Encrypted PiShock API key and username linked to your Discord user (optional expiry hint
             if PiShock reports one)
           </li>
+          <li>
+            Cached PiShock profile avatar and banner images (downloaded from PiShock /Account and
+            served from this app; removed when you unlink)
+          </li>
           <li>Consent acknowledgment status</li>
           <li>Command activity logs for accountability (action, intensity, duration, success)</li>
         </ul>

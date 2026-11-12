@@ -270,6 +270,9 @@ export const activityShareRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (a
     broadcastRealtimeAll({
       type: 'activity_share_changed',
       ownerDiscordUserId: req.discordUser.id,
+      ownerUsername: req.discordUser.username ?? null,
+      ownerGlobalName: req.discordUser.global_name ?? null,
+      reason: 'limits',
       at: Date.now(),
     });
     return {
@@ -316,6 +319,9 @@ export const activityShareRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (a
     broadcastRealtimeAll({
       type: 'activity_share_changed',
       ownerDiscordUserId: req.discordUser.id,
+      ownerUsername: req.discordUser.username ?? null,
+      ownerGlobalName: req.discordUser.global_name ?? null,
+      reason: 'availability',
       at: Date.now(),
     });
     return {

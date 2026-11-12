@@ -250,6 +250,7 @@ export function ActivityLimitsSettings({
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
   const [personalOpen, setPersonalOpen] = useState(true);
   const [sharesOpen, setSharesOpen] = useState(true);
 
@@ -288,9 +289,11 @@ export function ActivityLimitsSettings({
 
   const save = async () => {
     setSaving(true);
+    setSaved(false);
     setError(null);
     try {
       await onSave({ personal, shares });
+      setSaved(true);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -349,6 +352,11 @@ export function ActivityLimitsSettings({
           {error}
         </div>
       ) : null}
+      {saved && !error ? (
+        <div className="bg-secondary text-dark q-pa-sm" style={{ borderRadius: 4 }} role="status">
+          Limits saved. Your control panel caps are updated.
+        </div>
+      ) : null}
 
       <div
         className={`setup-limits-split activity-limits-shell__split${
@@ -370,7 +378,10 @@ export function ActivityLimitsSettings({
             deviceMaxDurationMs={15_000}
             disabled={busy || saving}
             hideActionToggles
-            onChange={(m) => setPersonal((p) => modeToPersonal(m, p))}
+            onChange={(m) => {
+              setSaved(false);
+              setPersonal((p) => modeToPersonal(m, p));
+            }}
           />
         </LimitsPane>
 
@@ -489,7 +500,9 @@ export function ActivityLimitsSettings({
         >
           <span className="q-btn__wrapper col row q-anchor--skip">
             <span className="q-btn__content text-center col items-center q-anchor--skip justify-center row">
-              <span className="block">{saving ? 'Saving…' : 'Save settings'}</span>
+              <span className="block">
+                {saving ? 'Saving…' : saved ? 'Saved' : 'Save settings'}
+              </span>
             </span>
           </span>
         </button>

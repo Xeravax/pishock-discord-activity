@@ -72,6 +72,9 @@ type Props = {
   halted: boolean;
   active: QueuePanelItem | null;
   waiting: QueuePanelItem[];
+  /** Ms until the next waiting item may start */
+  nextStartsInMs?: number | null;
+  nextEstimatedStartAt?: number | null;
   busy?: boolean;
   onClose?: () => void;
   onSettingsChange: (patch: Partial<QueuePanelSettings>) => void;
@@ -97,6 +100,16 @@ function formatDuration(ms: number): string {
   return `${(ms / 1000).toFixed(ms % 1000 === 0 ? 0 : 1)}s`;
 }
 
+function formatNextEta(waitMs: number | null | undefined): string | null {
+  if (waitMs == null || !Number.isFinite(waitMs)) return null;
+  if (waitMs <= 0) return 'now';
+  const sec = Math.max(1, Math.round(waitMs / 1000));
+  if (sec < 60) return `${sec}s`;
+  const min = Math.floor(sec / 60);
+  const rem = sec % 60;
+  return rem ? `${min}m ${rem}s` : `${min}m`;
+}
+
 function defaultAvatarUrl(item: QueuePanelItem): string {
   return participantAvatarUrl(item.executorDiscordUserId, item.executorAvatar);
 }
@@ -119,6 +132,8 @@ export function QueuePanel({
   halted,
   active,
   waiting,
+  nextStartsInMs = null,
+  nextEstimatedStartAt = null,
   busy = false,
   onClose,
   onSettingsChange,
@@ -136,6 +151,7 @@ export function QueuePanel({
     () => Math.round(progressMs / 100) / 10,
   );
   const [maxPerSenderDraft, setMaxPerSenderDraft] = useState(maxPerSender);
+  const [now, setNow] = useState(() => Date.now());
 
   useEffect(() => {
     setProgressSecDraft(Math.round(progressMs / 100) / 10);
@@ -143,6 +159,27 @@ export function QueuePanel({
   useEffect(() => {
     setMaxPerSenderDraft(maxPerSender);
   }, [maxPerSender]);
+  useEffect(() => {
+    if (!enabled || waiting.length === 0) return;
+    setNow(Date.now());
+    const id = window.setInterval(() => setNow(Date.now()), 500);
+    return () => window.clearInterval(id);
+  }, [enabled, waiting.length, nextEstimatedStartAt, nextStartsInMs]);
+
+  const nextEtaLabel = useMemo(() => {
+    if (!enabled || waiting.length === 0) return null;
+    const waitMs =
+      nextEstimatedStartAt != null && Number.isFinite(nextEstimatedStartAt)
+        ? Math.max(0, nextEstimatedStartAt - now)
+        : nextStartsInMs;
+    const eta = formatNextEta(waitMs);
+    if (paused) {
+      return eta && eta !== 'now' ? `Next in ~${eta} after resume` : 'Paused — next waiting';
+    }
+    if (!eta) return null;
+    if (eta === 'now') return 'Next starting soon';
+    return `Next in ~${eta}`;
+  }, [enabled, waiting.length, nextEstimatedStartAt, nextStartsInMs, now, paused]);
 
   const commitProgress = () => {
     const sec = Number(progressSecDraft);
@@ -367,6 +404,11 @@ export function QueuePanel({
               : `${people.length}${starredCount ? ` · ${starredCount}★` : ''}`}
           </div>
         </div>
+        {nextEtaLabel ? (
+          <div className="text-caption text-secondary queue-panel-hint queue-panel-next-eta">
+            {nextEtaLabel}
+          </div>
+        ) : null}
 
         {!enabled ? (
           <div className="text-grey-5 text-caption queue-panel-hint">

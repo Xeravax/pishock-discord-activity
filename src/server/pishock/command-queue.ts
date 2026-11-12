@@ -61,7 +61,14 @@ export type QueueStatePublic = {
   /** When true, reject new enqueue; existing waiting/active items are kept. */
   halted: boolean;
   active: QueueItemPublic | null;
+  /** Priority-ordered waiting list (starred first). */
   waiting: QueueItemPublic[];
+  /** First waiting item, if any (same as waiting[0]). */
+  next: QueueItemPublic | null;
+  /** Ms until `next` may start (null when none / unknown). */
+  nextStartsInMs: number | null;
+  /** Wall-clock estimate for when `next` starts. */
+  nextEstimatedStartAt: number | null;
 };
 
 export type QueueTicketEvent = {
@@ -250,13 +257,26 @@ export function createCommandQueue(deps: CommandQueueDeps) {
           Boolean(await deps.isStarred(ownerDiscordUserId, q.active.executorDiscordUserId)),
         )
       : null;
-    const waiting = await withPriorities(ownerDiscordUserId, q.waiting);
+    // One isStarred pass, then priority-order for UI / next-item ETA.
+    const tagged = await withPriorities(ownerDiscordUserId, q.waiting);
+    const byEnqueue = (a: QueueItemPublic, b: QueueItemPublic) => a.enqueuedAt - b.enqueuedAt;
+    const waiting = [
+      ...tagged.filter((item) => item.priority).sort(byEnqueue),
+      ...tagged.filter((item) => !item.priority).sort(byEnqueue),
+    ];
+    const next = waiting[0] ?? null;
+    const nextStartsInMs = next ? remainingActiveMs(q) : null;
+    const nextEstimatedStartAt =
+      nextStartsInMs == null ? null : now() + nextStartsInMs;
     return {
       ownerDiscordUserId,
       paused: q.paused,
       halted: q.halted,
       active,
       waiting,
+      next,
+      nextStartsInMs,
+      nextEstimatedStartAt,
     };
   }
 

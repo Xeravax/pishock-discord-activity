@@ -48,6 +48,8 @@ const authPluginImpl: FastifyPluginAsync<{ env: AppEnv }> = async (app, opts) =>
     if (path === '/api/health' || path === '/api/version') return;
     // Public marketing banner from PiShock dashboard
     if (path === '/api/announcements' && req.method === 'GET') return;
+    // Cached PiShock profile images (<img> cannot send Authorization)
+    if (path.startsWith('/api/pishock/media/') && req.method === 'GET') return;
     // WebSocket upgrade authenticates via query token in realtime.ts
     if (path === '/api/ws') return;
     // Discord code exchange has no bearer yet

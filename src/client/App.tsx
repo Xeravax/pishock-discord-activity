@@ -28,7 +28,11 @@ import {
   normalizePublicLogs,
   type OfficialLogEntry,
 } from './components/OfficialLogsPanel';
-import { PipIncomingShock, type IncomingShockHit } from './components/PipIncomingShock';
+import {
+  PipIncomingShock,
+  type IncomingShockHit,
+  type PipQueueNext,
+} from './components/PipIncomingShock';
 import { participantAvatarUrl } from './participants';
 import { AvailabilitySettings } from './components/AvailabilitySettings';
 import {
@@ -86,6 +90,9 @@ type QueueState = QueuePanelSettings & {
   halted: boolean;
   active: QueuePanelItem | null;
   waiting: QueuePanelItem[];
+  next: QueuePanelItem | null;
+  nextStartsInMs: number | null;
+  nextEstimatedStartAt: number | null;
 };
 
 type SenderQueueTicket = {
@@ -175,6 +182,7 @@ export function App() {
   const [defaultMenuPrompt, setDefaultMenuPrompt] = useState(false);
   const defaultMenuAppliedRef = useRef(false);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [actionNotice, setActionNotice] = useState<string | null>(null);
   const [legalView, setLegalView] = useState<LegalView>(null);
   const [friendsMode, setFriendsMode] = useState(true);
   const [participantRosterLoaded, setParticipantRosterLoaded] = useState(false);
@@ -199,6 +207,9 @@ export function App() {
     halted: false,
     active: null,
     waiting: [],
+    next: null,
+    nextStartsInMs: null,
+    nextEstimatedStartAt: null,
   });
   const [queueBusy, setQueueBusy] = useState(false);
   const [queueOpen, setQueueOpen] = useState(false);
@@ -231,6 +242,16 @@ export function App() {
       halted: Boolean(data.halted),
       active: data.active ?? null,
       waiting: data.waiting ?? [],
+      next: data.next ?? data.waiting?.[0] ?? null,
+      nextStartsInMs:
+        typeof data.nextStartsInMs === 'number' && Number.isFinite(data.nextStartsInMs)
+          ? data.nextStartsInMs
+          : null,
+      nextEstimatedStartAt:
+        typeof data.nextEstimatedStartAt === 'number' &&
+        Number.isFinite(data.nextEstimatedStartAt)
+          ? data.nextEstimatedStartAt
+          : null,
     });
     setMe((prev) => (prev ? { ...prev, commandQueueEnabled: Boolean(data.enabled) } : prev));
     return data;
@@ -673,6 +694,16 @@ export function App() {
             halted: Boolean(event.halted),
             active: event.active ?? null,
             waiting: event.waiting ?? [],
+            next: event.next ?? event.waiting?.[0] ?? null,
+            nextStartsInMs:
+              typeof event.nextStartsInMs === 'number' && Number.isFinite(event.nextStartsInMs)
+                ? event.nextStartsInMs
+                : null,
+            nextEstimatedStartAt:
+              typeof event.nextEstimatedStartAt === 'number' &&
+              Number.isFinite(event.nextEstimatedStartAt)
+                ? event.nextEstimatedStartAt
+                : null,
           });
           setMe((prev) =>
             prev ? { ...prev, commandQueueEnabled: Boolean(event.enabled) } : prev,
@@ -705,20 +736,39 @@ export function App() {
         return;
       }
       if (event.type === 'activity_share_changed' || event.type === 'participants_invalidate') {
+        if (event.type === 'activity_share_changed') {
+          if (selfIdRef.current === event.ownerDiscordUserId) {
+            void refreshMe(token).catch(() => undefined);
+          } else {
+            const fromRoster = participantsRef.current.find(
+              (p) => p.id === event.ownerDiscordUserId,
+            );
+            const hadStatus = Boolean(participantStatusCache.map[event.ownerDiscordUserId]);
+            const watchingThem = Boolean(fromRoster) || hadStatus;
+            if (watchingThem) {
+              const name =
+                event.ownerGlobalName?.trim() ||
+                event.ownerUsername?.trim() ||
+                fromRoster?.displayName ||
+                'Someone';
+              const what =
+                event.reason === 'availability'
+                  ? 'Discord availability'
+                  : 'Discord Shocker limits';
+              setActionError(null);
+              setActionNotice(`${name} updated their ${what}.`);
+            }
+          }
+        }
         participantStatusCache = { key: '', fetchedAt: 0, map: {} };
         if (invalidateTimer != null) window.clearTimeout(invalidateTimer);
         invalidateTimer = window.setTimeout(() => {
           invalidateTimer = null;
-          void refreshParticipantStatus(token, participantsRef.current, true).catch(() => undefined);
+          // Full roster refresh so everyone still in the activity picks up new limits.
+          void refreshParticipants(token, true).catch(() => undefined);
           void refreshLogs(token).catch(() => undefined);
           void refreshQueue(token).catch(() => undefined);
         }, 150);
-        if (
-          event.type === 'activity_share_changed' &&
-          selfIdRef.current === event.ownerDiscordUserId
-        ) {
-          void refreshMe(token).catch(() => undefined);
-        }
       }
     };
 
@@ -738,7 +788,7 @@ export function App() {
     bootReady,
     me?.consent,
     refreshMe,
-    refreshParticipantStatus,
+    refreshParticipants,
     refreshLogs,
     refreshQueue,
   ]);
@@ -1113,16 +1163,52 @@ export function App() {
     };
   }, [me?.pishockLinked, lastIncoming, publicLogs]);
 
+  const pipQueueNext = useMemo<PipQueueNext | null>(() => {
+    if (!me?.pishockLinked || !queueState.enabled) return null;
+    const item = queueState.next ?? queueState.waiting[0] ?? null;
+    if (!item) return null;
+    const fromRoster = participants.find((p) => p.id === item.executorDiscordUserId);
+    return {
+      displayName:
+        fromRoster?.displayName ||
+        item.executorGlobalName ||
+        item.executorUsername ||
+        'Someone',
+      avatarUrl:
+        fromRoster?.avatarUrl ||
+        participantAvatarUrl(item.executorDiscordUserId, item.executorAvatar),
+      operation: item.operation,
+      intensity: item.intensity,
+      durationMs: item.durationMs,
+      priority: Boolean(item.priority),
+      paused: Boolean(queueState.paused),
+      estimatedStartAt: queueState.nextEstimatedStartAt,
+      startsInMs: queueState.nextStartsInMs,
+    };
+  }, [
+    me?.pishockLinked,
+    queueState.enabled,
+    queueState.next,
+    queueState.waiting,
+    queueState.paused,
+    queueState.nextEstimatedStartAt,
+    queueState.nextStartsInMs,
+    participants,
+  ]);
+
   // While PIP is open, refresh logs so hits still show if WS was missed
   useEffect(() => {
     if (!pip || !token || !me?.consent) return;
     const tick = () => {
       void refreshLogs(token).catch(() => undefined);
+      if (me.pishockLinked) {
+        void refreshQueue(token).catch(() => undefined);
+      }
     };
     tick();
     const id = window.setInterval(tick, 4000);
     return () => window.clearInterval(id);
-  }, [pip, token, me?.consent, refreshLogs]);
+  }, [pip, token, me?.consent, me?.pishockLinked, refreshLogs, refreshQueue]);
 
   useEffect(() => {
     document.documentElement.classList.toggle('pip-mode', pip);
@@ -1645,6 +1731,25 @@ export function App() {
       halted: typeof result.halted === 'boolean' ? result.halted : prev.halted,
       active: result.active !== undefined ? result.active : prev.active,
       waiting: result.waiting !== undefined ? result.waiting : prev.waiting,
+      next:
+        result.next !== undefined
+          ? result.next
+          : result.waiting !== undefined
+            ? result.waiting[0] ?? null
+            : prev.next,
+      nextStartsInMs:
+        typeof result.nextStartsInMs === 'number' && Number.isFinite(result.nextStartsInMs)
+          ? result.nextStartsInMs
+          : result.nextStartsInMs === null
+            ? null
+            : prev.nextStartsInMs,
+      nextEstimatedStartAt:
+        typeof result.nextEstimatedStartAt === 'number' &&
+        Number.isFinite(result.nextEstimatedStartAt)
+          ? result.nextEstimatedStartAt
+          : result.nextEstimatedStartAt === null
+            ? null
+            : prev.nextEstimatedStartAt,
     }));
   };
 
@@ -1917,6 +2022,8 @@ export function App() {
       if (participants.length) {
         await refreshParticipantStatus(token, participants, true);
       }
+      setActionError(null);
+      setActionNotice('Activity limits saved — control caps updated.');
     },
     [token, participants, refreshParticipantStatus, applyDiscordShareLimits],
   );
@@ -1976,6 +2083,12 @@ export function App() {
     },
     [saveSettings, finishSetupShare, token],
   );
+
+  useEffect(() => {
+    if (!actionNotice) return;
+    const id = window.setTimeout(() => setActionNotice(null), 4_000);
+    return () => window.clearTimeout(id);
+  }, [actionNotice]);
 
   useEffect(() => {
     if (!token || !me?.pishockLinked || !me.consent) return;
@@ -2204,20 +2317,34 @@ export function App() {
       setOverlay(next);
     };
 
-    // PIP: nothing but the last hit — no header, menu, safety bar, or controls
+    // PIP: last hit + next queue item / ETA — no header, menu, safety bar, or controls
     if (pip) {
-      return <PipIncomingShock hit={pipHit} />;
+      return <PipIncomingShock hit={pipHit} queueNext={pipQueueNext} />;
     }
+
+    const toastText = actionError || actionNotice;
+    const toastTone = actionError ? 'error' : actionNotice ? 'ok' : null;
 
     return (
       <div className="official-activity-root">
-        {actionError ? (
-          <div className="q-banner bg-negative text-white official-error-toast" style={{ zIndex: 7000 }}>
-            <div className="q-banner__content col text-body2">{actionError}</div>
+        {toastText && toastTone ? (
+          <div
+            className={`q-banner text-white official-error-toast${
+              toastTone === 'ok' ? ' official-error-toast--ok bg-secondary text-dark' : ' bg-negative'
+            }`}
+            style={{ zIndex: 7000 }}
+            role="status"
+          >
+            <div className="q-banner__content col text-body2">{toastText}</div>
             <button
               type="button"
-              className="q-btn q-btn-item non-selectable no-outline q-btn--flat q-btn--round text-white q-btn--dense"
-              onClick={() => setActionError(null)}
+              className={`q-btn q-btn-item non-selectable no-outline q-btn--flat q-btn--round q-btn--dense${
+                toastTone === 'ok' ? ' text-dark' : ' text-white'
+              }`}
+              onClick={() => {
+                setActionError(null);
+                setActionNotice(null);
+              }}
               aria-label="Dismiss"
             >
               <span className="q-btn__wrapper col row q-anchor--skip">
@@ -2768,6 +2895,8 @@ export function App() {
               halted={queueState.halted}
               active={queueState.active}
               waiting={queueState.waiting}
+              nextStartsInMs={queueState.nextStartsInMs}
+              nextEstimatedStartAt={queueState.nextEstimatedStartAt}
               busy={queueBusy}
               onClose={() => setQueueOpen(false)}
               onSettingsChange={(patch) => void patchQueueSettings(patch)}

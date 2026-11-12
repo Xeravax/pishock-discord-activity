@@ -74,6 +74,7 @@ COPY --from=build /app/client-dist ./client-dist
 COPY --from=build /app/version.json ./version.json
 COPY docker-entrypoint.sh ./docker-entrypoint.sh
 RUN chmod +x ./docker-entrypoint.sh \
+ && mkdir -p /app/data/pishock-profiles \
  && chown -R node:node /app
 
 USER node

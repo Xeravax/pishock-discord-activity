@@ -7,6 +7,7 @@ import {
   validateConsentAcknowledgements,
 } from '../consent.js';
 import { softApiKeyProfile } from '../pishock/auth-api.js';
+import { localProfileUrls } from '../pishock/profile-images.js';
 import {
   clearConsent,
   getCommandQueueEnabled,
@@ -73,16 +74,21 @@ export const authRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app, opts)
             pishockUsername = profile.username || pishockUsername;
             pishockAvatarUrl = profile.avatarUrl;
             pishockBannerUrl = profile.bannerUrl;
-            profileCache.set(cacheKey, {
-              at: Date.now(),
-              username: pishockUsername,
-              avatarUrl: pishockAvatarUrl,
-              bannerUrl: pishockBannerUrl,
-            });
           }
         } catch {
-          // API key may not be allowed to read Images — omit avatar/banner.
+          // Fall through to local cache.
         }
+        if (!pishockAvatarUrl && !pishockBannerUrl) {
+          const local = await localProfileUrls(req.pishockCreds.userId);
+          pishockAvatarUrl = local.avatarUrl;
+          pishockBannerUrl = local.bannerUrl;
+        }
+        profileCache.set(cacheKey, {
+          at: Date.now(),
+          username: pishockUsername,
+          avatarUrl: pishockAvatarUrl,
+          bannerUrl: pishockBannerUrl,
+        });
       }
     }
 

@@ -40,5 +40,8 @@ fi
 echo "Applying database migrations…"
 npx prisma migrate deploy
 
+DATA_ROOT="${DATA_DIR:-/app/data}"
+mkdir -p "$DATA_ROOT/pishock-profiles" 2>/dev/null || true
+
 echo "Starting PiShock Activity on :${PORT:-3000}…"
 exec node dist/server.js

@@ -330,6 +330,23 @@ describe('command queue', () => {
     );
   });
 
+  it('snapshot reports next waiting item and start ETA', async () => {
+    const h = makeHarness({ progressMs: 1_000 });
+    const first = await h.queue.enqueue(
+      baseInput({ ownerDiscordUserId: 'owner', executorDiscordUserId: 'a', durationMs: 40 }),
+    );
+    const second = await h.queue.enqueue(
+      baseInput({ ownerDiscordUserId: 'owner', executorDiscordUserId: 'b', durationMs: 40 }),
+    );
+    await h.flush();
+    const state = await h.queue.snapshot('owner');
+    assert.equal(state.active?.id, first.itemId);
+    assert.equal(state.next?.id, second.itemId);
+    assert.ok(state.nextStartsInMs != null && state.nextStartsInMs > 0);
+    assert.ok(state.nextEstimatedStartAt != null);
+    assert.equal(state.waiting[0]?.id, second.itemId);
+  });
+
   it('returns an arrival estimate when enqueueing', async () => {
     const h = makeHarness({ progressMs: 1_000 });
     await h.queue.setPaused('owner', true);

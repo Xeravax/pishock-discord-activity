@@ -14,6 +14,10 @@ export type RealtimeEvent =
   | {
       type: 'activity_share_changed';
       ownerDiscordUserId: string;
+      ownerUsername?: string | null;
+      ownerGlobalName?: string | null;
+      /** What changed — clients may show a notice for limits/share edits. */
+      reason?: 'limits' | 'availability' | 'shares';
       at: number;
     }
   | {
@@ -77,6 +81,23 @@ export type RealtimeEvent =
         enqueuedAt: number;
         priority: boolean;
       }>;
+      next: {
+        id: string;
+        executorDiscordUserId: string;
+        executorUsername: string | null;
+        executorGlobalName: string | null;
+        executorAvatar: string | null;
+        operation: string;
+        intensity: number;
+        durationMs: number;
+        hold: boolean;
+        warning: boolean;
+        shockerId: number;
+        enqueuedAt: number;
+        priority: boolean;
+      } | null;
+      nextStartsInMs: number | null;
+      nextEstimatedStartAt: number | null;
       at: number;
     }
   | {

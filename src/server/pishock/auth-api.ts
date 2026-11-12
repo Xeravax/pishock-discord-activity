@@ -5,6 +5,7 @@ import {
   PISHOCK_AUTH,
 } from '../../shared/constants.js';
 import { PiShockApiError, type PiShockCreds } from './client.js';
+import { localProfileUrls, persistAccountImages } from './profile-images.js';
 
 export type SessionCreds = { userId: number; token: string };
 
@@ -104,9 +105,19 @@ export async function getAccount(creds: SessionCreds): Promise<PiShockAccount> {
 /** Soft profile for session login confirm (auth.pishock.com /Account). */
 export async function softAccountProfile(creds: SessionCreds): Promise<PiShockAccountProfile> {
   try {
-    return profileFromAccount(await getAccount(creds));
+    const account = await getAccount(creds);
+    const profile = profileFromAccount(account);
+    const stored = await persistAccountImages(account.UserId || creds.userId, profile);
+    if (stored.avatarUrl || stored.bannerUrl) return stored;
+    const local = await localProfileUrls(account.UserId || creds.userId);
+    return { username: profile.username, ...local };
   } catch {
-    return { username: '', avatarUrl: null, bannerUrl: null };
+    try {
+      const local = await localProfileUrls(creds.userId);
+      return { username: '', ...local };
+    } catch {
+      return { username: '', avatarUrl: null, bannerUrl: null };
+    }
   }
 }
 
@@ -153,8 +164,21 @@ export async function softApiKeyProfile(
   userId?: number,
 ): Promise<PiShockAccountProfile | null> {
   const account = await getAccountWithApiKey(apiKey, userId);
-  if (!account) return null;
-  return profileFromAccount(account);
+  if (!account) {
+    if (userId && userId > 0) {
+      const local = await localProfileUrls(userId);
+      if (local.avatarUrl || local.bannerUrl) {
+        return { username: '', ...local };
+      }
+    }
+    return null;
+  }
+  const profile = profileFromAccount(account);
+  const pishockUserId = Number(account.UserId) || userId || 0;
+  const stored = await persistAccountImages(pishockUserId, profile);
+  if (stored.avatarUrl || stored.bannerUrl) return stored;
+  const local = await localProfileUrls(pishockUserId);
+  return { username: profile.username, ...local };
 }
 
 function parseAccountJson(raw: string): { userId: number; username: string } | null {

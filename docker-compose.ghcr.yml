@@ -41,6 +41,9 @@ services:
       DATABASE_URL: ${DATABASE_URL:-postgresql://pishock:pishock@db:5432/pishock?schema=public}
       PORT: "3000"
       NODE_ENV: production
+      DATA_DIR: /app/data
+    volumes:
+      - ./data/app:/app/data
     depends_on:
       db:
         condition: service_healthy

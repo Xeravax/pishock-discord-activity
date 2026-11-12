@@ -9,6 +9,7 @@ import {
   type PiShockCreds,
 } from './pishock/client.js';
 import { disconnectBroker, disconnectBrokerSessionsForToken } from './pishock/broker.js';
+import { deleteStoredProfileImages } from './pishock/profile-images.js';
 import {
   QUEUE_PROGRESS_MAX_MS,
   QUEUE_PROGRESS_MIN_MS,
@@ -137,6 +138,15 @@ export async function clearPiShockSession(discordUserId: string) {
   if (row) invalidateControlSnapshot(row.pishockUserId);
   disconnectBroker(discordUserId);
   await prisma.piShockSession.deleteMany({ where: { discordUserId } });
+  if (row) {
+    const stillLinked = await prisma.piShockSession.findFirst({
+      where: { pishockUserId: row.pishockUserId },
+      select: { id: true },
+    });
+    if (!stillLinked) {
+      await deleteStoredProfileImages(row.pishockUserId);
+    }
+  }
 }
 
 let rejectionHandlerInstalled = false;
@@ -158,6 +168,7 @@ export function installPiShockKeyRejectionHandler(env: AppEnv) {
 
 async function deleteRejectedKeySession(
   discordUserId: string,
+  pishockUserId: number,
   where: {
     apiKeyHash: string | null;
     encryptedToken?: string;
@@ -171,6 +182,11 @@ async function deleteRejectedKeySession(
   if (removed.count < 1) return;
   console.warn(`[pishock] clearing session for ${discordUserId} after API key 401`);
   disconnectBroker(discordUserId);
+  const stillLinked = await prisma.piShockSession.findFirst({
+    where: { pishockUserId },
+    select: { id: true },
+  });
+  if (!stillLinked) await deleteStoredProfileImages(pishockUserId);
 }
 
 async function purgePiShockSessionsForRejectedKey(env: AppEnv, token: string) {
@@ -179,6 +195,7 @@ async function purgePiShockSessionsForRejectedKey(env: AppEnv, token: string) {
     where: { OR: [{ apiKeyHash: hash }, { apiKeyHash: null }] },
     select: {
       discordUserId: true,
+      pishockUserId: true,
       encryptedToken: true,
       tokenIv: true,
       tokenAuthTag: true,
@@ -187,7 +204,7 @@ async function purgePiShockSessionsForRejectedKey(env: AppEnv, token: string) {
   });
   for (const row of rows) {
     if (row.apiKeyHash === hash) {
-      await deleteRejectedKeySession(row.discordUserId, { apiKeyHash: hash });
+      await deleteRejectedKeySession(row.discordUserId, row.pishockUserId, { apiKeyHash: hash });
       continue;
     }
     let stored = '';
@@ -197,7 +214,7 @@ async function purgePiShockSessionsForRejectedKey(env: AppEnv, token: string) {
       continue;
     }
     if (stored === token) {
-      await deleteRejectedKeySession(row.discordUserId, {
+      await deleteRejectedKeySession(row.discordUserId, row.pishockUserId, {
         apiKeyHash: null,
         encryptedToken: row.encryptedToken,
         tokenIv: row.tokenIv,

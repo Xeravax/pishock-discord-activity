@@ -34,6 +34,8 @@ export function loadEnv() {
      */
     allowMissingBotInstanceCheck:
       process.env.ALLOW_MISSING_BOT_INSTANCE_CHECK === '1' && process.env.NODE_ENV !== 'production',
+    /** Root for durable local files (PiShock profile images, etc.). Defaults to ./data */
+    dataDir: process.env.DATA_DIR?.trim() || null,
   };
 }
 

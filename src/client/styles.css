@@ -297,16 +297,34 @@ html.pip-mode #root > * {
   min-height: 100vh;
   min-height: 100dvh;
   display: flex;
-  flex-direction: row;
-  align-items: center;
+  flex-direction: column;
+  align-items: stretch;
   justify-content: center;
-  gap: 10px;
+  gap: 6px;
   padding: 6px 8px;
   box-sizing: border-box;
   margin: 0;
   background: #121212;
   color: #e8e8e8;
   overflow: hidden;
+}
+
+.pip-incoming__hit {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.pip-incoming__hit--empty {
+  justify-content: center;
+}
+
+.pip-incoming--with-queue .pip-incoming__hit {
+  flex: 1 1 58%;
 }
 
 .pip-incoming--failed {
@@ -326,12 +344,96 @@ html.pip-mode #root > * {
   background: #1e1e1e;
 }
 
+.pip-incoming--with-queue .pip-incoming__avatar {
+  width: min(36%, 64px);
+  height: min(36%, 64px);
+  max-width: 64px;
+  max-height: 64px;
+}
+
 .pip-incoming__copy {
   min-width: 0;
   display: flex;
   flex-direction: column;
   justify-content: center;
   gap: 1px;
+}
+
+.pip-incoming__queue {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 5px 6px 4px;
+  border-top: 1px solid rgba(121, 198, 219, 0.28);
+  background: rgba(18, 28, 32, 0.72);
+  min-width: 0;
+}
+
+.pip-incoming__queue-label {
+  font-size: clamp(8px, 2.8vw, 10px);
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: #79c6db;
+  line-height: 1;
+}
+
+.pip-incoming__queue-row {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.pip-incoming__queue-avatar {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  object-fit: cover;
+  border: 1px solid rgba(121, 198, 219, 0.55);
+  flex-shrink: 0;
+  background: #1e1e1e;
+}
+
+.pip-incoming__queue-copy {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.pip-incoming__queue-name {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: clamp(11px, 3.6vw, 13px);
+  font-weight: 600;
+  color: #e8e8e8;
+  max-width: 22ch;
+}
+
+.pip-incoming__queue-star {
+  font-size: 12px;
+  color: #f4d600;
+  flex-shrink: 0;
+}
+
+.pip-incoming__queue-op {
+  font-family: Oxanium, geo, sans-serif;
+  font-size: clamp(10px, 3.2vw, 12px);
+  font-weight: 600;
+  color: #9aa0a6;
+  line-height: 1.15;
+}
+
+.pip-incoming__queue-eta {
+  font-family: Oxanium, geo, sans-serif;
+  font-size: clamp(11px, 3.6vw, 13px);
+  font-weight: 700;
+  color: #79c6db;
+  line-height: 1.15;
 }
 
 .pip-incoming__eyebrow {
@@ -458,6 +560,11 @@ html.pip-mode #root > * {
   gap: 8px;
   padding: 8px 12px;
   border-radius: 4px;
+}
+
+.official-error-toast--ok {
+  border: 1px solid rgba(18, 28, 32, 0.2);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.28);
 }
 
 .official-friends-list {
