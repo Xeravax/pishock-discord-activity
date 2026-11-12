@@ -48,6 +48,7 @@ function makeHarness(opts?: {
   validate?: (item: QueueItemInternal) => boolean | Promise<boolean>;
   progressMs?: number;
   maxPerSender?: number;
+  endActive?: (item: QueueItemInternal) => Promise<boolean | void>;
 }): Harness {
   let now = 1_000_000;
   const timers: Array<{ at: number; resolve: () => void }> = [];
@@ -91,9 +92,11 @@ function makeHarness(opts?: {
     execute: async (item) => {
       executed.push(item.id);
     },
-    endActive: async (item) => {
-      ended.push(item.id);
-    },
+    endActive:
+      opts?.endActive ??
+      (async (item) => {
+        ended.push(item.id);
+      }),
     onStateChange: () => undefined,
     onTicket: (t) => tickets.push(t),
   });
@@ -335,7 +338,29 @@ describe('command queue', () => {
     await h.flush();
     const result = await h.queue.handleSenderEnd('owner', 'a', 7);
     assert.equal(result.handled, true);
+    assert.equal(result.ended, true);
     assert.deepEqual(h.ended, [first.itemId]);
+    assert.equal((await h.queue.snapshot('owner')).active, null);
+  });
+
+  it('keeps the active command when the device end fails', async () => {
+    const h = makeHarness({
+      endActive: async () => false,
+    });
+    const first = await h.queue.enqueue(
+      baseInput({
+        ownerDiscordUserId: 'owner',
+        executorDiscordUserId: 'a',
+        operation: 'hold',
+        hold: true,
+        durationMs: 5_000,
+      }),
+    );
+    await h.flush();
+    const result = await h.queue.handleSenderEnd('owner', 'a', 7);
+    assert.equal(result.handled, true);
+    assert.equal(result.ended, false);
+    assert.equal((await h.queue.snapshot('owner')).active?.id, first.itemId);
   });
 
   it('hardClear removes waiting and active', async () => {

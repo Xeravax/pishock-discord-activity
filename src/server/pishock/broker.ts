@@ -1,7 +1,7 @@
 import WebSocket from 'ws';
 import { AGENT_NAME, PISHOCK_BROKER, ShockerOp } from '../../shared/constants.js';
 import { ingestBrokerDeviceLog } from './broker-log-ingest.js';
-import { isPiShockApiKeyRejected, type PiShockCreds } from './client.js';
+import { isPiShockApiKeyRejected, redactPiShockSecrets, type PiShockCreds } from './client.js';
 
 export type BrokerEvent =
   | { type: 'online'; clientId: string; online: boolean; at: number }
@@ -29,6 +29,7 @@ const IDLE_TEARDOWN_MS = 90_000;
 /** Keep `-log` capture warm between Discord activity polls without holding forever. */
 const LOG_CAPTURE_IDLE_MS = 15 * 60 * 1000;
 
+/** PiShock's broker accepts credentials only on this query string. */
 function brokerUrl(creds: PiShockCreds): string {
   return `${PISHOCK_BROKER}?Username=${encodeURIComponent(creds.username)}&ApiKey=${encodeURIComponent(creds.token)}`;
 }
@@ -172,7 +173,7 @@ export function ensureLogCapture(
       }).catch((err) => {
         console.warn(
           '[broker] log ingest failed',
-          err instanceof Error ? err.message : err,
+          redactPiShockSecrets(err instanceof Error ? err.message : String(err)),
         );
       });
     };
@@ -399,7 +400,10 @@ function publishPayload(creds: PiShockCreds, payload: string): Promise<boolean> 
       }
     });
     ws.on('error', (err) => {
-      console.warn('[broker] publish socket error', err instanceof Error ? err.message : err);
+      console.warn(
+        '[broker] publish socket error',
+        redactPiShockSecrets(err instanceof Error ? err.message : String(err)),
+      );
       done(false);
     });
     ws.on('close', () => {

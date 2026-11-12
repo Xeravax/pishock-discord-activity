@@ -1,5 +1,5 @@
 import { prisma } from './db.js';
-import { decryptToken, encryptToken } from './crypto.js';
+import { decryptToken, encryptToken, hashApiKey } from './crypto.js';
 import type { AppEnv } from './env.js';
 import {
   allowPiShockApiKey,
@@ -29,29 +29,51 @@ export async function savePiShockSession(
   },
 ) {
   const enc = encryptToken(env.tokenKey, input.apiKey);
+  const apiKeyHash = hashApiKey(input.apiKey);
   allowPiShockApiKey(input.apiKey);
-  await prisma.piShockSession.upsert({
-    where: { discordUserId },
-    create: {
-      discordUserId,
-      pishockUserId: input.userId,
-      pishockUsername: input.username,
-      encryptedToken: enc.encryptedToken,
-      tokenIv: enc.tokenIv,
-      tokenAuthTag: enc.tokenAuthTag,
-      expiresAt: input.expiresAt ?? null,
-      apiKeyId: input.apiKeyId ?? null,
-    },
-    update: {
-      pishockUserId: input.userId,
-      pishockUsername: input.username,
-      encryptedToken: enc.encryptedToken,
-      tokenIv: enc.tokenIv,
-      tokenAuthTag: enc.tokenAuthTag,
-      expiresAt: input.expiresAt ?? null,
-      apiKeyId: input.apiKeyId ?? null,
-    },
+  const displaced = await prisma.$transaction(async (tx) => {
+    const conflicts = await tx.piShockSession.findMany({
+      where: {
+        discordUserId: { not: discordUserId },
+        OR: [{ pishockUserId: input.userId }, { apiKeyHash }],
+      },
+      select: { discordUserId: true },
+    });
+    if (conflicts.length > 0) {
+      await tx.piShockSession.deleteMany({
+        where: { discordUserId: { in: conflicts.map((row) => row.discordUserId) } },
+      });
+    }
+    await tx.piShockSession.upsert({
+      where: { discordUserId },
+      create: {
+        discordUserId,
+        pishockUserId: input.userId,
+        pishockUsername: input.username,
+        encryptedToken: enc.encryptedToken,
+        tokenIv: enc.tokenIv,
+        tokenAuthTag: enc.tokenAuthTag,
+        expiresAt: input.expiresAt ?? null,
+        apiKeyId: input.apiKeyId ?? null,
+        apiKeyHash,
+      },
+      update: {
+        pishockUserId: input.userId,
+        pishockUsername: input.username,
+        encryptedToken: enc.encryptedToken,
+        tokenIv: enc.tokenIv,
+        tokenAuthTag: enc.tokenAuthTag,
+        expiresAt: input.expiresAt ?? null,
+        apiKeyId: input.apiKeyId ?? null,
+        apiKeyHash,
+      },
+    });
+    return conflicts.map((row) => row.discordUserId);
   });
+  for (const otherId of displaced) {
+    console.warn(`[pishock] unlinked ${otherId} because PiShock account ${input.userId} was linked elsewhere`);
+    disconnectBroker(otherId);
+  }
 }
 
 export async function loadPiShockCreds(
@@ -65,6 +87,23 @@ export async function loadPiShockCreds(
   if (isPiShockApiKeyRejected(token)) {
     await clearPiShockSession(discordUserId);
     return null;
+  }
+  const apiKeyHash = hashApiKey(token);
+  if (row.apiKeyHash !== apiKeyHash) {
+    const displaced = await prisma.piShockSession.findMany({
+      where: { apiKeyHash, discordUserId: { not: discordUserId } },
+      select: { discordUserId: true },
+    });
+    if (displaced.length > 0) {
+      await prisma.piShockSession.deleteMany({
+        where: { discordUserId: { in: displaced.map((other) => other.discordUserId) } },
+      });
+      for (const other of displaced) disconnectBroker(other.discordUserId);
+    }
+    await prisma.piShockSession.update({
+      where: { discordUserId },
+      data: { apiKeyHash },
+    });
   }
   return {
     userId: row.pishockUserId,
@@ -96,24 +135,42 @@ export function installPiShockKeyRejectionHandler(env: AppEnv) {
 }
 
 async function purgePiShockSessionsForRejectedKey(env: AppEnv, token: string) {
+  const hash = hashApiKey(token);
   const rows = await prisma.piShockSession.findMany({
+    where: { OR: [{ apiKeyHash: hash }, { apiKeyHash: null }] },
     select: {
       discordUserId: true,
       encryptedToken: true,
       tokenIv: true,
       tokenAuthTag: true,
+      apiKeyHash: true,
     },
   });
   for (const row of rows) {
+    if (row.apiKeyHash === hash) {
+      console.warn(`[pishock] clearing session for ${row.discordUserId} after API key 401`);
+      await clearPiShockSession(row.discordUserId);
+      continue;
+    }
     let stored = '';
     try {
       stored = decryptToken(env.tokenKey, row.encryptedToken, row.tokenIv, row.tokenAuthTag);
     } catch {
       continue;
     }
-    if (stored !== token) continue;
-    console.warn(`[pishock] clearing session for ${row.discordUserId} after API key 401`);
-    await clearPiShockSession(row.discordUserId);
+    if (stored === token) {
+      console.warn(`[pishock] clearing session for ${row.discordUserId} after API key 401`);
+      await clearPiShockSession(row.discordUserId);
+      continue;
+    }
+    await prisma.piShockSession
+      .update({
+        where: { discordUserId: row.discordUserId },
+        data: { apiKeyHash: hashApiKey(stored) },
+      })
+      .catch(() => {
+        // Another row already owns this hash.
+      });
   }
 }
 

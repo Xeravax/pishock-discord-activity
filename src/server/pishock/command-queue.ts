@@ -122,8 +122,11 @@ export type CommandQueueDeps = {
   validateBeforeRun: (item: QueueItemInternal) => boolean | Promise<boolean>;
   /** Publish the command to the device. */
   execute: (item: QueueItemInternal) => Promise<void>;
-  /** Cut an active command short (broker end). */
-  endActive: (item: QueueItemInternal) => Promise<void>;
+  /**
+   * Cut an active command short.
+   * Return false when the device was not stopped; void/true means it was.
+   */
+  endActive: (item: QueueItemInternal) => Promise<boolean | void>;
   onStateChange: (state: QueueStatePublic) => void;
   onTicket: (ticket: QueueTicketEvent) => void;
   now?: () => number;
@@ -536,26 +539,32 @@ export function createCommandQueue(deps: CommandQueueDeps) {
     return snapshot(ownerDiscordUserId);
   }
 
-  async function skipActive(ownerDiscordUserId: string): Promise<QueueStatePublic> {
+  async function skipActive(
+    ownerDiscordUserId: string,
+  ): Promise<{ ended: boolean; state: QueueStatePublic }> {
     const q = ensure(ownerDiscordUserId);
     const active = q.active;
     if (!active) {
-      return emitState(ownerDiscordUserId);
+      return { ended: false, state: await emitState(ownerDiscordUserId) };
+    }
+    let ended = false;
+    try {
+      ended = (await deps.endActive(active)) !== false;
+    } catch {
+      ended = false;
+    }
+    if (!ended) {
+      return { ended: false, state: await snapshot(ownerDiscordUserId) };
     }
     bumpGeneration(q);
     clearActiveSlot(q);
-    try {
-      await deps.endActive(active);
-    } catch {
-      // Device may already be idle.
-    }
     emitTicket(active, 'removed', null, q.paused, {
       estimatedWaitMs: null,
       estimatedStartAt: null,
     });
     const state = await emitState(ownerDiscordUserId);
     if (!q.paused) void pump(ownerDiscordUserId);
-    return state;
+    return { ended: true, state };
   }
 
   /**
@@ -601,15 +610,15 @@ export function createCommandQueue(deps: CommandQueueDeps) {
     ownerDiscordUserId: string,
     executorDiscordUserId: string,
     shockerId: number,
-  ): Promise<{ handled: boolean; state: QueueStatePublic }> {
+  ): Promise<{ handled: boolean; ended: boolean; state: QueueStatePublic }> {
     const q = ensure(ownerDiscordUserId);
     if (
       q.active &&
       q.active.executorDiscordUserId === executorDiscordUserId &&
       q.active.shockerId === shockerId
     ) {
-      await skipActive(ownerDiscordUserId);
-      return { handled: true, state: await snapshot(ownerDiscordUserId) };
+      const skipped = await skipActive(ownerDiscordUserId);
+      return { handled: true, ended: skipped.ended, state: skipped.state };
     }
 
     const waitingMatch = q.waiting.find(
@@ -620,10 +629,10 @@ export function createCommandQueue(deps: CommandQueueDeps) {
     );
     if (waitingMatch) {
       await removeItem(ownerDiscordUserId, waitingMatch.id);
-      return { handled: true, state: await snapshot(ownerDiscordUserId) };
+      return { handled: true, ended: true, state: await snapshot(ownerDiscordUserId) };
     }
 
-    return { handled: false, state: await snapshot(ownerDiscordUserId) };
+    return { handled: false, ended: false, state: await snapshot(ownerDiscordUserId) };
   }
 
   function getPaused(ownerDiscordUserId: string): boolean {

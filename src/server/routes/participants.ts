@@ -10,7 +10,10 @@ import {
 import {
   agentNameForExecutor,
   operateById,
+  piShockLogError,
   PiShockApiError,
+  publicPiShockError,
+  redactPiShockSecrets,
 } from '../pishock/client.js';
 import { publishOperate } from '../pishock/broker.js';
 import {
@@ -392,6 +395,36 @@ export const participantRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app
           shockerId,
         );
         if (handled.handled) {
+          if (!handled.ended) {
+            await auditParticipantCommand({
+              executorDiscordUserId: req.discordUser.id,
+              executorUsername: req.discordUser.username,
+              executorGlobalName: req.discordUser.global_name ?? null,
+              executorAvatar: req.discordUser.avatar ?? null,
+              targetDiscordUserId,
+              action: 'participant_end',
+              shockerId,
+              shockerName: share.shockerName,
+              hubClientId: share.hubClientId ?? clientId ?? null,
+              hubName: share.hubName ?? null,
+              shareCode: null,
+              intensity: 0,
+              durationMs: 0,
+              success: false,
+              location,
+              detail: JSON.stringify({
+                via: 'queue',
+                path: 'queue_end',
+                ended: false,
+                agent,
+                instanceId,
+              }),
+            });
+            return reply.code(502).send({
+              error: 'Failed to end the command on the device',
+              code: 'END_FAILED',
+            });
+          }
           await auditParticipantCommand({
             executorDiscordUserId: req.discordUser.id,
             executorUsername: req.discordUser.username,
@@ -710,7 +743,7 @@ export const participantRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app
         success: false,
         location,
         detail: JSON.stringify({
-          error: err instanceof Error ? err.message : String(err),
+          error: piShockLogError(err),
           agent,
           executor: req.discordUser.id,
           target: targetDiscordUserId,
@@ -718,15 +751,16 @@ export const participantRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app
         }),
       });
       if (err instanceof PiShockApiError) {
+        console.warn(
+          `[pishock] participant operate ${err.status}: ${redactPiShockSecrets(err.body).slice(0, 200)}`,
+        );
         if (err.status === 503) {
           rememberPiShockPaused(targetDiscordUserId, { shockerId, shareCode: null });
-          return reply.code(503).send({
-            error: 'This shocker or share is paused on PiShock',
-            code: 'PISHOCK_PAUSED',
-            body: err.body,
-          });
         }
-        return reply.code(err.status).send({ error: err.message, body: err.body });
+        const pub = publicPiShockError(err, { relink: false });
+        return reply.code(pub.status).send(
+          pub.code ? { error: pub.error, code: pub.code } : { error: pub.error },
+        );
       }
       throw err;
     }

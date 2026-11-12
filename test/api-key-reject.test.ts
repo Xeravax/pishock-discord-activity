@@ -56,6 +56,24 @@ describe('rejected PiShock API keys', () => {
     assert.equal(calls, afterConfirm);
   });
 
+  it('retires a key when the legacy device list returns 401', async () => {
+    let calls = 0;
+    globalThis.fetch = async () => {
+      calls += 1;
+      return unauthorized();
+    };
+    const legacyOnly = creds('legacy-revoked');
+    await assert.rejects(() => getUserDevices(legacyOnly), (err: unknown) => {
+      assert.ok(err instanceof PiShockApiError);
+      assert.equal(err.needsRelogin, true);
+      return true;
+    });
+    assert.equal(isPiShockApiKeyRejected(legacyOnly.token), true);
+    const afterLegacy = calls;
+    await assert.rejects(() => getUserDevices(legacyOnly));
+    assert.equal(calls, afterLegacy);
+  });
+
   it('does not retire a key when only share creation returns 401', async () => {
     let calls = 0;
     globalThis.fetch = async () => {

@@ -3,6 +3,9 @@ import { ShockerOp } from '../../shared/constants.js';
 import type { AppEnv } from '../env.js';
 import {
   PiShockApiError,
+  piShockLogError,
+  publicPiShockError,
+  redactPiShockSecrets,
   claimShareCodes,
   createShare,
   deleteShare,
@@ -113,25 +116,16 @@ async function handlePiShockError(
   reply: { code: (n: number) => { send: (b: unknown) => unknown } },
 ) {
   if (err instanceof PiShockApiError) {
+    console.warn(
+      `[pishock] ${discordUserId} ${err.status}: ${redactPiShockSecrets(err.body).slice(0, 200)}`,
+    );
     if (err.needsRelogin) {
-      console.warn(
-        `[pishock] clearing session for ${discordUserId} after 401: ${err.body.slice(0, 200)}`,
-      );
       await clearPiShockSession(discordUserId);
-      return reply.code(401).send({
-        error: 'PiShock API key rejected — link again',
-        code: 'PISHOCK_RELOGIN',
-        body: err.body,
-      });
     }
-    if (err.status === 503) {
-      return reply.code(503).send({
-        error: 'This shocker or share is paused on PiShock',
-        code: 'PISHOCK_PAUSED',
-        body: err.body,
-      });
-    }
-    return reply.code(err.status).send({ error: err.message, body: err.body });
+    const pub = publicPiShockError(err);
+    return reply.code(pub.status).send(
+      pub.code ? { error: pub.error, code: pub.code } : { error: pub.error },
+    );
   }
   throw err;
 }
@@ -608,7 +602,7 @@ export const controlRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app, op
         intensity,
         durationMs,
         success: false,
-        detail: err instanceof Error ? err.message : String(err),
+        detail: piShockLogError(err),
         location,
       });
       if (err instanceof PiShockApiError && err.status === 503) {

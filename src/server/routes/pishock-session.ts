@@ -2,12 +2,14 @@ import type { FastifyPluginAsync } from 'fastify';
 import { PISHOCK_API_KEY_NAME } from '../../shared/constants.js';
 import type { AppEnv } from '../env.js';
 import { createApiKey, getAccount, validateApiKey } from '../pishock/auth-api.js';
-import { getHubs, PiShockApiError } from '../pishock/client.js';
+import { getHubs, PiShockApiError, redactPiShockSecrets } from '../pishock/client.js';
+import { ManualLinkRateError, assertManualApiKeyRateLimit } from '../pishock/manual-link-rate.js';
 import {
   clearPendingConfirm,
   getPendingConfirm,
   setPendingConfirm,
   takePendingConfirm,
+  type CreatedApiKeyDraft,
 } from '../pishock/pending-confirm.js';
 import { awaitRelayLogin, getPendingLogin, startRelayLogin } from '../pishock/relay.js';
 import { clearPiShockSession, savePiShockSession } from '../session.js';
@@ -119,6 +121,24 @@ export const pishockSessionRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (
     }
 
     const session = { userId: pending.userId, token: pending.token };
+    const restore = (created: CreatedApiKeyDraft | null) => {
+      setPendingConfirm(
+        req.discordUser.id,
+        { UserId: pending.userId, Token: pending.token },
+        pending.hubNames,
+        pending.username,
+        created,
+      );
+    };
+    // Reuse a key minted by an earlier confirm so a failed save does not
+    // leave another orphan on the PiShock account.
+    let created: CreatedApiKeyDraft | null = pending.createdApiKey
+      ? {
+          apiKey: pending.createdApiKey,
+          apiKeyId: pending.createdApiKeyId,
+          expiry: pending.createdExpiry,
+        }
+      : null;
 
     try {
       let username = pending.username.trim();
@@ -126,21 +146,28 @@ export const pishockSessionRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (
         username = (await getAccount(session)).Username;
       }
       if (!username) {
+        restore(created);
         return reply.code(502).send({ error: 'PiShock account username unavailable' });
       }
 
-      // No forced Expiry — key lasts until revoked or PiShock rejects it.
-      const created = await createApiKey(session, { name: PISHOCK_API_KEY_NAME });
+      if (!created) {
+        const minted = await createApiKey(session, { name: PISHOCK_API_KEY_NAME });
+        created = {
+          apiKey: minted.apiKey,
+          apiKeyId: minted.apiKeyId,
+          expiry: minted.expiry,
+        };
+      }
 
-      await validateApiKey({
+      const account = await validateApiKey({
         userId: pending.userId,
         username,
         apiKey: created.apiKey,
       });
 
       await savePiShockSession(opts.env, req.discordUser.id, {
-        userId: pending.userId,
-        username,
+        userId: account.userId,
+        username: account.username,
         apiKey: created.apiKey,
         expiresAt: created.expiry,
         apiKeyId: created.apiKeyId,
@@ -148,29 +175,20 @@ export const pishockSessionRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (
 
       return {
         ok: true,
-        pishockUserId: pending.userId,
-        pishockUsername: username,
+        pishockUserId: account.userId,
+        pishockUsername: account.username,
         hubNames: pending.hubNames,
         apiKey: created.apiKey,
         apiKeyName: PISHOCK_API_KEY_NAME,
         expiresAt: created.expiry ? created.expiry.toISOString() : null,
       };
     } catch (err) {
-      // Put pending back so the user can retry confirm without re-logging in.
-      setPendingConfirm(
-        req.discordUser.id,
-        { UserId: pending.userId, Token: pending.token },
-        pending.hubNames,
-        pending.username,
-      );
+      restore(created);
       if (err instanceof PiShockApiError) {
-        return reply.code(err.status >= 400 && err.status < 600 ? err.status : 502).send({
-          error: err.body || err.message,
-          code: err.needsRelogin ? 'PISHOCK_RELOGIN' : 'PISHOCK_API_KEY_CREATE_FAILED',
-        });
+        return sendPiShockFailure(reply, err, 'PISHOCK_API_KEY_CREATE_FAILED');
       }
       return reply.code(502).send({
-        error: err instanceof Error ? err.message : 'Failed to create PiShock API key',
+        error: 'Failed to create PiShock API key',
         code: 'PISHOCK_API_KEY_CREATE_FAILED',
       });
     }
@@ -185,6 +203,14 @@ export const pishockSessionRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (
   app.post('/api/pishock/session/api-key', async (req, reply) => {
     if (!req.hasConsent) {
       return reply.code(403).send({ error: 'Consent required' });
+    }
+    try {
+      assertManualApiKeyRateLimit(req.discordUser.id);
+    } catch (err) {
+      if (err instanceof ManualLinkRateError) {
+        return reply.code(err.status).send({ error: err.message, code: err.code });
+      }
+      throw err;
     }
     const parsed = parseManualApiKeyBody(req.body);
     if (!parsed) {
@@ -218,13 +244,10 @@ export const pishockSessionRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (
       };
     } catch (err) {
       if (err instanceof PiShockApiError) {
-        return reply.code(err.status >= 400 && err.status < 600 ? err.status : 502).send({
-          error: err.body || err.message,
-          code: err.needsRelogin ? 'PISHOCK_RELOGIN' : 'PISHOCK_API_KEY_INVALID',
-        });
+        return sendPiShockFailure(reply, err, 'PISHOCK_API_KEY_INVALID');
       }
       return reply.code(502).send({
-        error: err instanceof Error ? err.message : 'Failed to validate PiShock API key',
+        error: 'Failed to validate PiShock API key',
         code: 'PISHOCK_API_KEY_INVALID',
       });
     }
@@ -236,6 +259,36 @@ export const pishockSessionRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (
     return { ok: true };
   });
 };
+
+const SAFE_LINK_ERRORS = new Set([
+  'API key required',
+  'API key does not belong to that username',
+  'API key does not belong to that PiShock account',
+  'PiShock Account response missing UserId/Username',
+]);
+
+function sendPiShockFailure(
+  reply: { code: (status: number) => { send: (body: unknown) => unknown } },
+  err: PiShockApiError,
+  code: string,
+) {
+  console.warn(
+    `[pishock] ${code} ${err.status}: ${redactPiShockSecrets(err.body).slice(0, 200)}`,
+  );
+  const status = err.status >= 400 && err.status < 600 ? err.status : 502;
+  const safeBody = SAFE_LINK_ERRORS.has(err.body) ? err.body : null;
+  const error =
+    safeBody ??
+    (status === 401
+      ? 'PiShock rejected that API key'
+      : status === 502
+        ? 'PiShock Account response could not be verified'
+        : 'PiShock rejected the request');
+  return reply.code(status).send({
+    error,
+    code: err.needsRelogin ? 'PISHOCK_RELOGIN' : code,
+  });
+}
 
 async function softHubNames(creds: { userId: number; token: string }): Promise<string[]> {
   try {

@@ -209,8 +209,16 @@ export const queueRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app) => {
       return reply.code(409).send({ error: 'Command queue is disabled', code: 'QUEUE_DISABLED' });
     }
 
-    const state = await commandQueue.skipActive(req.discordUser.id);
-    return { ok: true, ...settings, ...state };
+    const skipped = await commandQueue.skipActive(req.discordUser.id);
+    if (skipped.state.active) {
+      return reply.code(502).send({
+        error: 'Failed to end the active command',
+        code: 'END_FAILED',
+        ...settings,
+        ...skipped.state,
+      });
+    }
+    return { ok: true, ...settings, ...skipped.state };
   });
 
   app.post('/api/queue/clear', async (req, reply) => {

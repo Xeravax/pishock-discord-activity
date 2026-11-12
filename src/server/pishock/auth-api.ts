@@ -75,9 +75,70 @@ function parseAccountJson(raw: string): { userId: number; username: string } | n
   }
 }
 
+function accountFromResponse(
+  raw: string,
+  style: 'apiKeyHeader' | 'apiKeyAsToken',
+  usernameHint: string,
+  expectedUserId?: number,
+): {
+  userId: number;
+  username: string;
+  style: 'apiKeyHeader' | 'apiKeyAsToken';
+} {
+  const account = parseAccountJson(raw);
+  if (!account) {
+    throw new PiShockApiError(502, 'PiShock Account response missing UserId/Username');
+  }
+  if (expectedUserId && expectedUserId > 0 && expectedUserId !== account.userId) {
+    throw new PiShockApiError(401, 'API key does not belong to that PiShock account', false);
+  }
+  if (usernameHint && usernameHint.toLowerCase() !== account.username.toLowerCase()) {
+    throw new PiShockApiError(401, 'API key does not belong to that username', false);
+  }
+  console.info(`[pishock] API key validated via ${style}`);
+  return { userId: account.userId, username: account.username, style };
+}
+
+async function readAccount(
+  headers: Record<string, string>,
+): Promise<{ ok: boolean; status: number; raw: string }> {
+  const res = await fetch(`${PISHOCK_API}/Account`, { method: 'GET', headers });
+  const raw = await res.text();
+  return { ok: res.ok, status: res.status, raw };
+}
+
+/**
+ * PiShock documents this lookup as a query string only. Used after header
+ * auth fails, so a successful link never puts the key in a URL.
+ */
+async function probeUserId(apiKey: string, username: string): Promise<number> {
+  const probe = new URL(`${PISHOCK_AUTH}/Auth/GetUserIfAPIKeyValid`);
+  probe.searchParams.set('apikey', apiKey);
+  probe.searchParams.set('username', username);
+  const probeRes = await fetch(probe);
+  const probeRaw = await probeRes.text();
+  if (!probeRes.ok) {
+    console.warn(`[pishock] GetUserIfAPIKeyValid → ${probeRes.status}`);
+    return 0;
+  }
+  const asNum = Number(probeRaw.trim());
+  if (Number.isFinite(asNum) && asNum > 0) return asNum;
+  try {
+    const parsed = JSON.parse(probeRaw) as Record<string, unknown>;
+    const id = Number(parsed.UserId ?? parsed.userId ?? parsed.UserID ?? parsed);
+    if (Number.isFinite(id) && id > 0) return id;
+  } catch {
+    // opaque body
+  }
+  return 0;
+}
+
 /**
  * Prove an API key works against api.pishock.com and return the owning account.
- * Tries X-PiShock-Api-Key, then UserId+Token=<apiKey> when userId is known.
+ * Header auth is tried first. The query-string user lookup runs only if that
+ * fails and a UserId is still required for the Token fallback.
+ * The Account username must match the caller's username; a client-supplied
+ * name is never stored when the Account payload cannot be parsed.
  */
 export async function validateApiKey(input: {
   apiKey: string;
@@ -94,89 +155,35 @@ export async function validateApiKey(input: {
     throw new PiShockApiError(400, 'API key required');
   }
 
+  const headerRes = await readAccount({
+    Accept: 'application/json',
+    'X-PiShock-Api-Key': apiKey,
+  });
+  if (headerRes.ok) {
+    return accountFromResponse(headerRes.raw, 'apiKeyHeader', usernameHint, input.userId);
+  }
+  if (headerRes.status !== 401) {
+    console.warn(`[pishock] API key validate apiKeyHeader → ${headerRes.status}`);
+  }
+
   let userId = input.userId && Number.isFinite(input.userId) ? input.userId : 0;
-
-  if (usernameHint) {
-    const probe = new URL(`${PISHOCK_AUTH}/Auth/GetUserIfAPIKeyValid`);
-    probe.searchParams.set('apikey', apiKey);
-    probe.searchParams.set('username', usernameHint);
-    const probeRes = await fetch(probe);
-    const probeRaw = await probeRes.text();
-    if (probeRes.ok) {
-      const asNum = Number(probeRaw.trim());
-      if (Number.isFinite(asNum) && asNum > 0) {
-        userId = asNum;
-      } else {
-        try {
-          const parsed = JSON.parse(probeRaw) as Record<string, unknown>;
-          const id = Number(parsed.UserId ?? parsed.userId ?? parsed.UserID ?? parsed);
-          if (Number.isFinite(id) && id > 0) userId = id;
-        } catch {
-          // keep userId from input if probe body is opaque
-        }
-      }
-      console.info(`[pishock] GetUserIfAPIKeyValid ok userId=${userId || '?'}`);
-    } else {
-      console.warn(
-        `[pishock] GetUserIfAPIKeyValid → ${probeRes.status}: ${probeRaw.slice(0, 200)}`,
-      );
-    }
+  if (!(userId > 0) && usernameHint) {
+    userId = await probeUserId(apiKey, usernameHint);
+  }
+  if (!(userId > 0)) {
+    throw new PiShockApiError(401, 'API key was rejected by api.pishock.com');
   }
 
-  const attempts: Array<{
-    style: 'apiKeyHeader' | 'apiKeyAsToken';
-    headers: Record<string, string>;
-  }> = [
-    {
-      style: 'apiKeyHeader',
-      headers: {
-        Accept: 'application/json',
-        'X-PiShock-Api-Key': apiKey,
-      },
-    },
-  ];
-  if (userId > 0) {
-    attempts.push({
-      style: 'apiKeyAsToken',
-      headers: {
-        Accept: 'application/json',
-        'X-PiShock-UserId': String(userId),
-        'X-PiShock-Token': apiKey,
-      },
-    });
+  const tokenRes = await readAccount({
+    Accept: 'application/json',
+    'X-PiShock-UserId': String(userId),
+    'X-PiShock-Token': apiKey,
+  });
+  if (tokenRes.ok) {
+    return accountFromResponse(tokenRes.raw, 'apiKeyAsToken', usernameHint, input.userId);
   }
-
-  let lastBody = 'Unauthorized';
-  for (const attempt of attempts) {
-    const res = await fetch(`${PISHOCK_API}/Account`, {
-      method: 'GET',
-      headers: attempt.headers,
-    });
-    const raw = await res.text();
-    if (res.ok) {
-      const account = parseAccountJson(raw);
-      const resolvedUserId = account?.userId || userId;
-      const resolvedUsername = account?.username || usernameHint;
-      if (!resolvedUserId || !resolvedUsername) {
-        throw new PiShockApiError(502, 'PiShock Account response missing UserId/Username');
-      }
-      console.info(`[pishock] API key validated via ${attempt.style}`);
-      return {
-        userId: resolvedUserId,
-        username: resolvedUsername,
-        style: attempt.style,
-      };
-    }
-    lastBody = raw || res.statusText || 'Unauthorized';
-    console.warn(
-      `[pishock] API key validate ${attempt.style} → ${res.status}: ${lastBody.slice(0, 200)}`,
-    );
-  }
-
-  throw new PiShockApiError(
-    401,
-    `API key was rejected by api.pishock.com (${lastBody.slice(0, 180)})`,
-  );
+  console.warn(`[pishock] API key validate apiKeyAsToken → ${tokenRes.status}`);
+  throw new PiShockApiError(401, 'API key was rejected by api.pishock.com');
 }
 
 /**

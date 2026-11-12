@@ -1,5 +1,11 @@
 import type { RelayCredentials } from './relay.js';
 
+export type CreatedApiKeyDraft = {
+  apiKey: string;
+  apiKeyId: number | null;
+  expiry: Date | null;
+};
+
 export type PendingPiShockConfirm = {
   userId: number;
   /** Short-lived website session token — never persisted. */
@@ -7,6 +13,10 @@ export type PendingPiShockConfirm = {
   username: string;
   createdAt: number;
   hubNames: string[];
+  /** Key already minted for this confirm. Retries must reuse it. */
+  createdApiKey: string | null;
+  createdApiKeyId: number | null;
+  createdExpiry: Date | null;
 };
 
 const pendingConfirmByDiscordUser = new Map<string, PendingPiShockConfirm>();
@@ -18,13 +28,29 @@ export function setPendingConfirm(
   creds: RelayCredentials,
   hubNames: string[] = [],
   username = '',
+  created?: CreatedApiKeyDraft | null,
 ) {
+  const prev = pendingConfirmByDiscordUser.get(discordUserId);
+  const sameUser = prev != null && prev.userId === creds.UserId;
+  const drafted =
+    created === undefined
+      ? sameUser && prev?.createdApiKey
+        ? {
+            apiKey: prev.createdApiKey,
+            apiKeyId: prev.createdApiKeyId,
+            expiry: prev.createdExpiry,
+          }
+        : null
+      : created;
   pendingConfirmByDiscordUser.set(discordUserId, {
     userId: creds.UserId,
     token: creds.Token,
     username,
     createdAt: Date.now(),
     hubNames,
+    createdApiKey: drafted?.apiKey ?? null,
+    createdApiKeyId: drafted?.apiKeyId ?? null,
+    createdExpiry: drafted?.expiry ?? null,
   });
 }
 

@@ -53,7 +53,8 @@ model PiShockSession {
   id              String     @id @default(cuid())
   discordUserId   String     @unique
   discordUser     DiscordUser @relation(fields: [discordUserId], references: [id], onDelete: Cascade)
-  pishockUserId   Int
+  /// One PiShock account can be linked to only one Discord user.
+  pishockUserId   Int        @unique
   pishockUsername String
   /// AES-256-GCM ciphertext of the PiShock API key (never returned to the browser after confirm)
   encryptedToken  String
@@ -62,6 +63,8 @@ model PiShockSession {
   /// Optional soft hint (PiShock-reported). Null = no app clock expiry; wipe only on API reject.
   expiresAt       DateTime?
   apiKeyId        Int?
+  /// SHA-256 of the API key, so a rejected key can be found without decrypting every row.
+  apiKeyHash      String?    @unique
   createdAt       DateTime   @default(now())
   updatedAt       DateTime   @updatedAt
 }

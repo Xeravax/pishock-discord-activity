@@ -1,6 +1,10 @@
 import type { AppEnv } from '../env.js';
 import { broadcastRealtime } from '../realtime.js';
-import { clearHoldAutoEnd, scheduleHoldAutoEnd } from '../operate-policy.js';
+import {
+  clearHoldAutoEnd,
+  resolveDeviceCeilingsFromPiShock,
+  scheduleHoldAutoEnd,
+} from '../operate-policy.js';
 import {
   findActivityShareByShocker,
   getCommandQueueSettings,
@@ -15,7 +19,10 @@ import {
 import {
   agentNameForExecutor,
   operateById,
+  piShockLogError,
   PiShockApiError,
+  redactPiShockSecrets,
+  type PiShockCreds,
 } from './client.js';
 import { getPiShockPausedShockerIds, rememberPiShockPaused } from './pause.js';
 import { publishOperate } from './broker.js';
@@ -160,13 +167,41 @@ async function validateQueuedItem(item: QueueItemInternal): Promise<boolean> {
   return shares.length > 0;
 }
 
-async function endQueuedItem(item: QueueItemInternal): Promise<void> {
-  clearHoldAutoEnd(item.ownerDiscordUserId, item.shockerId);
+async function resolveQueueHubClientId(
+  item: QueueItemInternal,
+  creds: PiShockCreds,
+): Promise<string | null> {
+  const stored = item.hubClientId?.trim();
+  if (stored) return stored;
+  const share = await findActivityShareByShocker(item.ownerDiscordUserId, item.shockerId);
+  const fromShare = share?.hubClientId?.trim();
+  if (fromShare) return fromShare;
+  try {
+    const ceilings = await resolveDeviceCeilingsFromPiShock(creds, item.shockerId);
+    return ceilings.hubClientId?.trim() || null;
+  } catch (err) {
+    console.warn(
+      '[queue] hub lookup failed',
+      redactPiShockSecrets(err instanceof Error ? err.message : String(err)),
+    );
+    return null;
+  }
+}
+
+async function endQueuedItem(item: QueueItemInternal): Promise<boolean> {
   const payload = item.payload as QueuedOperatePayload | undefined;
-  if (!payload?.env || !item.hubClientId) return;
+  if (!payload?.env) return false;
 
   const targetCreds = await loadPiShockCreds(payload.env, item.ownerDiscordUserId);
-  if (!targetCreds) return;
+  if (!targetCreds) return false;
+
+  const clientId = await resolveQueueHubClientId(item, targetCreds);
+  if (!clientId) {
+    console.warn(
+      `[queue] cannot end shocker ${item.shockerId} without a hub client id`,
+    );
+    return false;
+  }
 
   const agent = agentNameForExecutor(
     executorLabel({
@@ -176,8 +211,8 @@ async function endQueuedItem(item: QueueItemInternal): Promise<void> {
     }),
   );
 
-  await publishOperate(targetCreds, {
-    clientId: item.hubClientId,
+  const published = await publishOperate(targetCreds, {
+    clientId,
     shockerId: item.shockerId,
     operation: 'e',
     intensity: 0,
@@ -185,6 +220,8 @@ async function endQueuedItem(item: QueueItemInternal): Promise<void> {
     end: true,
     agentName: agent,
   });
+  if (published) clearHoldAutoEnd(item.ownerDiscordUserId, item.shockerId);
+  return published;
 }
 
 async function executeQueuedItem(item: QueueItemInternal): Promise<void> {
@@ -198,7 +235,7 @@ async function executeQueuedItem(item: QueueItemInternal): Promise<void> {
     throw new Error('Target unlinked');
   }
 
-  const clientId = item.hubClientId ?? undefined;
+  const clientId = await resolveQueueHubClientId(item, targetCreds);
   const agent = agentNameForExecutor(
     executorLabel({
       id: item.executorDiscordUserId,
@@ -224,7 +261,7 @@ async function executeQueuedItem(item: QueueItemInternal): Promise<void> {
     action: `participant_${item.operation}`,
     shockerId: item.shockerId,
     shockerName: shareMeta?.shockerName ?? null,
-    hubClientId: item.hubClientId ?? shareMeta?.hubClientId ?? null,
+    hubClientId: clientId ?? shareMeta?.hubClientId ?? null,
     hubName: shareMeta?.hubName ?? null,
     shareCode: null as string | null,
     intensity: item.intensity,
@@ -273,6 +310,13 @@ async function executeQueuedItem(item: QueueItemInternal): Promise<void> {
       }
     }
 
+    if (hold) {
+      throw new Error(
+        clientId
+          ? 'Failed to start hold on the hub'
+          : 'Hold requires a hub client id so it can be ended',
+      );
+    }
     await operateById(targetCreds, item.shockerId, op, intensity, durationMs, agent);
     await auditParticipantCommand({
       ...auditBase,
@@ -298,7 +342,7 @@ async function executeQueuedItem(item: QueueItemInternal): Promise<void> {
       ...auditBase,
       success: false,
       detail: JSON.stringify({
-        error: err instanceof Error ? err.message : String(err),
+        error: piShockLogError(err),
         agent,
         executor: item.executorDiscordUserId,
         target: item.ownerDiscordUserId,

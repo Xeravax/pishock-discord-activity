@@ -29,6 +29,43 @@ export class PiShockApiError extends Error {
   }
 }
 
+/** Strip credentials before anything is written to logs. */
+export function redactPiShockSecrets(text: string): string {
+  return text
+    .replace(/([?&](?:ApiKey|apikey|Token|token|key)=)[^&\s'"]+/gi, '$1[redacted]')
+    .replace(/(Bearer\s+)\S+/gi, '$1[redacted]');
+}
+
+/** Client-facing PiShock failure. Upstream bodies stay on the server. */
+export function publicPiShockError(
+  err: PiShockApiError,
+  opts?: { relink?: boolean },
+): { status: number; error: string; code?: string } {
+  if (err.status === 503) {
+    return {
+      status: 503,
+      error: 'This shocker or share is paused on PiShock',
+      code: 'PISHOCK_PAUSED',
+    };
+  }
+  if (opts?.relink !== false && err.needsRelogin) {
+    return {
+      status: 401,
+      error: 'PiShock API key rejected — link again',
+      code: 'PISHOCK_RELOGIN',
+    };
+  }
+  const status = err.status >= 400 && err.status < 600 ? err.status : 502;
+  return { status, error: 'PiShock rejected the command' };
+}
+
+/** Short error string safe to store in command logs shown in the UI. */
+export function piShockLogError(err: unknown): string {
+  if (err instanceof PiShockApiError) return `PiShock API ${err.status}`;
+  const message = err instanceof Error ? err.message : String(err);
+  return redactPiShockSecrets(message).slice(0, 180);
+}
+
 /**
  * API keys PiShock has already rejected with 401. Further calls with the same
  * token must not leave the process — device polls and pause sync were retrying
@@ -171,7 +208,7 @@ async function request<T = unknown>(
       if (err instanceof PiShockApiError && err.needsRelogin && i + 1 < styles.length) {
         last401 = err;
         console.warn(
-          `[pishock] ${method} ${url} 401 with ${style}; retrying next auth style`,
+          `[pishock] ${method} ${redactPiShockSecrets(url)} 401 with ${style}; retrying next auth style`,
         );
         continue;
       }
@@ -287,10 +324,20 @@ async function createLegacyShare(
     ShockerId: String(shockerId),
     api: 'true',
   });
-  const res = await fetch(`${PISHOCK_LEGACY_API}/PiShock/CreateShare?${query}`, {
-    method: 'POST',
-    headers: { Accept: 'application/json, text/plain' },
-  });
+  // Legacy CreateShare only accepts the token on the query string.
+  let res: Response;
+  try {
+    res = await fetch(`${PISHOCK_LEGACY_API}/PiShock/CreateShare?${query}`, {
+      method: 'POST',
+      headers: { Accept: 'application/json, text/plain' },
+    });
+  } catch (err) {
+    console.warn(
+      '[pishock] CreateShare failed',
+      redactPiShockSecrets(err instanceof Error ? err.message : String(err)),
+    );
+    return { status: 502, data: null, raw: 'PiShock share creation failed' };
+  }
   const raw = await res.text();
   if (!res.ok) {
     return { status: res.status, data: null, raw };
@@ -330,16 +377,27 @@ export async function getUserDevices(creds: PiShockCreds): Promise<{
   if (isPiShockApiKeyRejected(creds.token)) {
     throw new PiShockApiError(401, 'Unauthorized');
   }
-  const res = await fetch(`${PISHOCK_LEGACY_API}/PiShock/GetUserDevices?${query}`, {
-    method: 'GET',
-    headers: {
-      Accept: 'application/json, text/plain',
-      'User-Agent': AGENT_NAME,
-    },
-  });
+  // Legacy GetUserDevices only accepts UserId+Token on the query string.
+  let res: Response;
+  try {
+    res = await fetch(`${PISHOCK_LEGACY_API}/PiShock/GetUserDevices?${query}`, {
+      method: 'GET',
+      headers: {
+        Accept: 'application/json, text/plain',
+        'User-Agent': AGENT_NAME,
+      },
+    });
+  } catch (err) {
+    console.warn(
+      '[pishock] GetUserDevices failed',
+      redactPiShockSecrets(err instanceof Error ? err.message : String(err)),
+    );
+    throw new PiShockApiError(502, 'PiShock device list failed', false);
+  }
   const raw = await res.text();
   if (res.status === 401) {
-    throw new PiShockApiError(401, raw || 'Unauthorized');
+    rejectPiShockApiKey(creds.token);
+    throw new PiShockApiError(401, 'Unauthorized');
   }
   if (!res.ok) {
     return { status: res.status, data: null, raw };
@@ -430,7 +488,10 @@ async function softList(
     }
   }
   // Prefer empty control UI over failing the whole activity after login
-  console.warn(`[pishock] ${label} failed; returning []`, lastErr);
+  console.warn(
+    `[pishock] ${label} failed; returning []`,
+    lastErr instanceof Error ? redactPiShockSecrets(lastErr.message) : lastErr,
+  );
   return [];
 }
 
