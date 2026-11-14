@@ -448,7 +448,7 @@ export function OfficialController({
   }, [shockers, multiShock]);
 
   useEffect(() => {
-    const mq = window.matchMedia('(max-width: 720px), (max-height: 640px)');
+    const mq = window.matchMedia('(max-width: 720px), (max-height: 740px)');
     const apply = () => {
       const compact = mq.matches || Boolean(pip);
       setCompactDock(compact);
@@ -1376,7 +1376,7 @@ export function OfficialController({
                 {active ? (
                   <div className="q-my-sm q-gutter-sm full-width">
                     <div className="full-width flex column">
-                      <div className="flex column q-ma-xl" style={{ scale: '1.25' }}>
+                      <div className="flex column official-remote-cluster">
                         <div className="full-width flex row justify-center q-px-md">
                           <div className="q-my-sm q-card q-card--dark q-dark q-card--flat no-shadow col-sm-9 col-xs-12">
                             <div className="full-width no-padding q-card__section q-card__section--vert">

@@ -45,6 +45,17 @@
   color: #1a1500;
 }
 
+/* Discord mobile activity chrome (Leave / Invite / minimize) + iOS notches */
+:root {
+  --sait: var(
+    --discord-safe-area-inset-top,
+    var(--ps-safe-area-fallback-top, env(safe-area-inset-top, 0px))
+  );
+  --saib: var(--discord-safe-area-inset-bottom, env(safe-area-inset-bottom, 0px));
+  --sail: var(--discord-safe-area-inset-left, env(safe-area-inset-left, 0px));
+  --sair: var(--discord-safe-area-inset-right, env(safe-area-inset-right, 0px));
+}
+
 html,
 body {
   margin: 0;
@@ -61,26 +72,35 @@ body {
   max-height: 100%;
   background: #121212;
   color: #e8e8e8;
-  overflow: auto;
+  overflow: hidden;
   -webkit-overflow-scrolling: touch;
 }
 
 .official-root,
 .official-activity-root {
-  min-height: 100vh;
+  min-height: 0;
   height: 100%;
-  max-height: 100dvh;
+  max-height: 100%;
   background: #121212;
   position: relative;
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  box-sizing: border-box;
+}
+
+.official-activity-root {
+  padding-top: var(--sait);
+  padding-right: var(--sair);
+  padding-bottom: var(--saib);
+  padding-left: var(--sail);
 }
 
 .official-activity-root .official-root {
   min-height: 0;
   flex: 1 1 auto;
   max-height: 100%;
+  padding: 0;
 }
 
 .official-root > .q-header.custom-header {
@@ -149,7 +169,8 @@ body {
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 16px;
+  padding: calc(16px + var(--sait)) calc(16px + var(--sair)) calc(16px + var(--saib))
+    calc(16px + var(--sail));
   background: rgba(0, 0, 0, 0.55);
   box-sizing: border-box;
 }
@@ -160,7 +181,7 @@ body {
 
 .official-safety-panel__card {
   width: min(640px, 100%);
-  max-height: min(80vh, 720px);
+  max-height: min(80%, 720px);
   overflow: auto;
   background: #1a1212;
   border: 1px solid rgba(229, 57, 53, 0.55);
@@ -220,8 +241,7 @@ body {
   align-items: flex-start;
   gap: 8px;
   pointer-events: none;
-  max-height: calc(100vh - 16px);
-  max-height: calc(100dvh - 16px);
+  max-height: calc(100% - 16px - var(--sait) - var(--saib));
 }
 
 .official-mode-dock > * {
@@ -249,8 +269,7 @@ body {
   gap: 6px;
   max-width: 196px;
   min-height: 0;
-  max-height: calc(100vh - 88px);
-  max-height: calc(100dvh - 88px);
+  max-height: calc(100% - 88px - var(--sait) - var(--saib));
   overflow: auto;
   overscroll-behavior: contain;
   -webkit-overflow-scrolling: touch;
@@ -294,8 +313,7 @@ html.pip-mode #root > * {
 .pip-incoming {
   width: 100%;
   height: 100%;
-  min-height: 100vh;
-  min-height: 100dvh;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   align-items: stretch;
@@ -849,6 +867,17 @@ html.pip-mode #root > * {
   box-sizing: border-box;
 }
 
+/* Desktop remote is intentionally oversized; phones drop the scale to fit Discord’s chrome */
+.official-remote-cluster {
+  margin: 48px;
+  scale: 1.25;
+  transform-origin: top center;
+}
+
+.official-remote-cluster .q-slider--v {
+  height: 200px;
+}
+
 .official-control-column {
   width: 100%;
 }
@@ -1195,15 +1224,15 @@ html.pip-mode .app-restart-overlay:not(.app-restart-overlay--outdated) {
 
 .official-right-rail {
   position: fixed;
-  right: 14px;
-  bottom: 14px;
+  right: calc(14px + var(--sair));
+  bottom: calc(14px + var(--saib));
   z-index: 2500;
   display: flex;
   flex-direction: column;
   align-items: flex-end;
   gap: 8px;
-  max-width: min(280px, calc(100vw - 28px));
-  max-height: calc(100vh - 28px);
+  max-width: min(280px, calc(100% - 28px - var(--sail) - var(--sair)));
+  max-height: calc(100% - 28px - var(--sait) - var(--saib));
   pointer-events: none;
 }
 
@@ -1670,19 +1699,57 @@ html.pip-mode .app-restart-overlay:not(.app-restart-overlay--outdated) {
 
 .fixed-bottom-left {
   position: fixed;
-  left: 16px;
-  bottom: 16px;
+  left: calc(16px + var(--sail));
+  bottom: calc(16px + var(--saib));
+}
+
+@media (max-width: 720px), (max-height: 740px) {
+  .official-remote-cluster {
+    margin: 8px 4px;
+    scale: 1;
+  }
+
+  .official-remote-cluster .q-slider--v {
+    height: min(200px, 32dvh);
+  }
+
+  .official-root > .q-header.custom-header {
+    min-height: 40px;
+  }
+
+  .official-header-toolbar {
+    min-height: 40px;
+  }
+
+  .official-safety-banner {
+    padding: 4px 10px;
+  }
+
+  .official-control-surface {
+    padding-left: 10px !important;
+    padding-right: 10px !important;
+    padding-top: 4px !important;
+    padding-bottom: 4px !important;
+  }
+
+  .official-shocker-chips {
+    max-height: min(16vh, 96px);
+  }
+
+  .official-hub-status__name {
+    font-size: 0.95rem;
+  }
 }
 
 @media (max-width: 520px) {
   .fixed-bottom-left {
-    left: 12px;
-    bottom: 12px;
+    left: calc(12px + var(--sail));
+    bottom: calc(12px + var(--saib));
   }
 
   .official-control-surface {
-    padding-left: 14px !important;
-    padding-right: 14px !important;
+    padding-left: 10px !important;
+    padding-right: 10px !important;
   }
 }
 
@@ -1697,7 +1764,8 @@ html.pip-mode .app-restart-overlay:not(.app-restart-overlay--outdated) {
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 12px;
+  padding: calc(12px + var(--sait)) calc(12px + var(--sair)) calc(12px + var(--saib))
+    calc(12px + var(--sail));
   box-sizing: border-box;
 }
 
@@ -1712,8 +1780,7 @@ html.pip-mode .app-restart-overlay:not(.app-restart-overlay--outdated) {
   position: relative;
   z-index: 1;
   width: min(420px, 100%);
-  max-height: min(88vh, calc(100vh - 24px));
-  max-height: min(88dvh, calc(100dvh - 24px));
+  max-height: min(88%, calc(100% - 24px));
   pointer-events: auto;
   display: flex;
   flex-direction: column;
@@ -1725,7 +1792,8 @@ html.pip-mode .app-restart-overlay:not(.app-restart-overlay--outdated) {
 }
 
 .ps-dialog-root.is-fill {
-  padding: 6px;
+  padding: calc(6px + var(--sait)) calc(6px + var(--sair)) calc(6px + var(--saib))
+    calc(6px + var(--sail));
   align-items: stretch;
   justify-content: stretch;
 }
@@ -2034,16 +2102,20 @@ html.pip-mode .app-restart-overlay:not(.app-restart-overlay--outdated) {
 
 /* Consent / login panels (pre-controller) */
 .app-shell {
-  min-height: 100%;
-  min-height: 100dvh;
+  min-height: 0;
+  height: 100%;
+  max-height: 100%;
   display: flex;
   flex-direction: column;
-  padding: 12px;
+  padding: calc(12px + var(--sait)) calc(12px + var(--sair)) calc(12px + var(--saib))
+    calc(12px + var(--sail));
   gap: 12px;
   background: #121212;
   color: #e8e8e8;
   font-family: Roboto, sans-serif;
   box-sizing: border-box;
+  overflow: auto;
+  -webkit-overflow-scrolling: touch;
 }
 
 .brand {
@@ -2178,7 +2250,8 @@ html.pip-mode .app-restart-overlay:not(.app-restart-overlay--outdated) {
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 24px 20px;
+  padding: calc(24px + var(--sait)) calc(20px + var(--sair)) calc(24px + var(--saib))
+    calc(20px + var(--sail));
   background: radial-gradient(ellipse 80% 60% at 50% 42%, #1a2428 0%, #121212 55%, #0c0c0c 100%);
   color: #e8e8e8;
   box-sizing: border-box;
@@ -2199,7 +2272,7 @@ html.pip-mode .app-restart-overlay:not(.app-restart-overlay--outdated) {
 .auth-boot__panel {
   position: relative;
   width: min(360px, 100%);
-  max-height: min(92vh, calc(100dvh - 32px));
+  max-height: min(92%, calc(100% - 32px));
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -2317,10 +2390,10 @@ html.pip-mode .app-restart-overlay:not(.app-restart-overlay--outdated) {
 
 .auth-boot__panel--limits,
 .auth-boot__panel--setup {
-  width: min(98vw, 100%);
+  width: min(98%, 100%);
   max-width: none;
-  height: min(98vh, calc(100dvh - 8px));
-  max-height: min(98vh, calc(100dvh - 8px));
+  height: min(98%, calc(100% - 8px));
+  max-height: min(98%, calc(100% - 8px));
   overflow: hidden;
   display: flex;
   flex-direction: column;
@@ -2331,7 +2404,8 @@ html.pip-mode .app-restart-overlay:not(.app-restart-overlay--outdated) {
 }
 
 .auth-boot:has(.auth-boot__panel--setup) {
-  padding: 4px;
+  padding: calc(4px + var(--sait)) calc(4px + var(--sair)) calc(4px + var(--saib))
+    calc(4px + var(--sail));
   align-items: stretch;
   justify-content: stretch;
 }
@@ -3284,8 +3358,9 @@ button.auth-boot__api-key:not(.secret-value--shown) {
 }
 
 .consent-shell {
-  min-height: 100%;
-  min-height: 100dvh;
+  min-height: 0;
+  height: 100%;
+  max-height: 100%;
   align-items: center;
   justify-content: center;
   gap: 16px;
@@ -3320,7 +3395,8 @@ button.auth-boot__api-key:not(.secret-value--shown) {
   align-items: center;
   justify-content: center;
   padding: 16px 12px;
-  min-height: 70vh;
+  min-height: 0;
+  flex: 1 1 auto;
 }
 
 .safety-gate-card {

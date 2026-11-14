@@ -1,6 +1,10 @@
 import { DiscordSDK, Common, Events } from '@discord/embedded-app-sdk';
 import { apiFetch, isEmbedded } from './api';
 import { normalizeParticipant, type DiscordParticipant } from './participants';
+import {
+  applyDiscordSafeAreaFallback,
+  installDiscordSafeAreaFallback,
+} from './safeArea';
 
 export type AuthState = {
   accessToken: string;
@@ -183,6 +187,7 @@ export async function bootstrapDiscord(
   const discordSdk = getDiscordSdk();
   await discordSdk.ready();
   report(22, 'Preparing activity…');
+  installDiscordSafeAreaFallback();
 
   try {
     await discordSdk.commands.setOrientationLockState({
@@ -195,6 +200,7 @@ export async function bootstrapDiscord(
   }
 
   const applyLayout = (layoutMode: number) => {
+    applyDiscordSafeAreaFallback();
     onLayout(layoutMode === Common.LayoutModeTypeObject.PIP);
   };
 
