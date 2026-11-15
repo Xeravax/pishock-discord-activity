@@ -1,5 +1,14 @@
 # Changelog
 
+## v2.2.1 — 2026-11-15
+
+## What's changed
+
+- #patch Merge pull request #11 from Xeravax/develop (36dffd8)
+- Enhance logShareCard functionality and styles for improved Discord integration (97d930f)
+
+**Full changelog**: https://github.com/Xeravax/pishock-discord-activity/compare/v2.2.0...v2.2.1
+
 ## v2.2.0 — 2026-11-15
 
 ## What's changed
