@@ -1,7 +1,7 @@
 {
-  "version": "v2.1.1",
-  "notes": "## What's changed\n\n- #patch Refactor responsive design and UI components for better compatibility (a637006)\n- Refactor responsive design and UI components for better compatibility (3f88763)\n\n**Full changelog**: https://github.com/Xeravax/pishock-discord-activity/compare/v2.1.0...v2.1.1\n",
-  "url": "https://github.com/Xeravax/pishock-discord-activity/releases/tag/v2.1.1",
-  "publishedAt": "2026-11-15T14:15:38.912Z",
-  "updatedAt": "2026-11-15T14:15:38.916Z"
+  "version": "v2.2.0",
+  "notes": "## What's changed\n\n- #minor Enhance App component with Discord integration and log sharing features (d82605a)\n- Merge branch 'release' into develop (6edc568)\n- Update CHANGELOG for version 2.2.0 and enhance AppVersionBadge component with ChangelogView (6b5b978)\n- Refactor styles and layout for improved responsiveness and visual consistency (d511403)\n- Implement enhanced Discord authorization flow and layout handling (d2e08c1)\n- Add Discord command timeout handling and optional activity configuration (9d7a878)\n- Add grapheme handling and text measurement functions for improved rendering (09103e0)\n- Add warning level support to CommandLog and OfficialLogEntry models (a88426b)\n- Remove share-preview.html file as part of the refactoring process to streamline log sharing functionality. This deletion eliminates outdated code related to rendering share cards, contributing to a cleaner codebase and improved maintainability. (78c19a4)\n- Refactor logShareCard rendering logic for improved layout and visual effects (4141582)\n- Add gifenc package and update log sharing functionality (1ea4ddc)\n- Implement activity invitation and log sharing features in App component (9e0a1c1)\n- Enhance App component with Discord user profile integration and voice indicators (0a9c934)\n\n**Full changelog**: https://github.com/Xeravax/pishock-discord-activity/compare/v2.1.1...v2.2.0\n",
+  "url": "https://github.com/Xeravax/pishock-discord-activity/releases/tag/v2.2.0",
+  "publishedAt": "2026-11-15T18:14:24.157Z",
+  "updatedAt": "2026-11-15T18:14:24.160Z"
 }
