@@ -89,6 +89,49 @@ class DiscordCommandTimeoutError extends Error {
   }
 }
 
+class DiscordFrameLostError extends Error {
+  constructor() {
+    super('Discord closed this activity window. Close the activity and launch it again.');
+    this.name = 'DiscordFrameLostError';
+  }
+}
+
+/** Set before a one-time reload so the next boot skips the scope that wedged authorize. */
+const AUTH_RELOAD_KEY = 'pishock.discordAuthReload';
+
+function isDeadIframeError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /unrecognized iframe|iframe id\b/i.test(message);
+}
+
+function authReloadUsed(): boolean {
+  try {
+    return sessionStorage.getItem(AUTH_RELOAD_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
+function clearAuthReload(): void {
+  try {
+    sessionStorage.removeItem(AUTH_RELOAD_KEY);
+  } catch {
+    // private mode / disabled storage
+  }
+}
+
+/** Reload the activity document once. sdk.close() makes Canary forget the frame id. */
+function reloadActivityOnce(): boolean {
+  try {
+    if (sessionStorage.getItem(AUTH_RELOAD_KEY) === '1') return false;
+    sessionStorage.setItem(AUTH_RELOAD_KEY, '1');
+  } catch {
+    return false;
+  }
+  window.location.reload();
+  return true;
+}
+
 /** Swallow a Discord RPC that rejects or never settles. Boot must not wait on it. */
 function ignoreRejection(work: Promise<unknown> | unknown): void {
   if (work && typeof (work as Promise<unknown>).then === 'function') {
@@ -201,10 +244,11 @@ function isVoiceMuted(state: VoiceStateUpdate['voice_state'], topLevelMute?: boo
 }
 
 let sdk: DiscordSDK | null = null;
+let readyPromise: Promise<DiscordSDK> | null = null;
+let bootPromise: Promise<AuthState> | null = null;
 
-/** Drop cached SDK / location state so a reload always re-auths cleanly. */
+/** Drop the cached guild/channel lookup. The live SDK is kept; replacing it drops the iframe. */
 export function resetDiscordClient() {
-  sdk = null;
   locationHintCache = null;
 }
 
@@ -260,42 +304,52 @@ async function tryAuthorize(
   }
 }
 
-/** New handshake. Closes a previous SDK so a stuck consent command cannot linger. */
-async function connectDiscordSdk(): Promise<DiscordSDK> {
-  if (sdk) {
-    try {
-      sdk.close(1000, 'reconnect');
-    } catch {
-      // already closed
-    }
+/**
+ * One handshake per document. A second DiscordSDK, or sdk.close() followed by
+ * a new one, reuses this iframe's frame_id. Canary then rejects it with
+ * "Unrecognized iframe ID" and the following AUTHORIZE fails.
+ */
+function connectDiscordSdk(): Promise<DiscordSDK> {
+  if (!readyPromise) {
+    const discordSdk = getDiscordSdk();
+    readyPromise = withDeadline(discordSdk.ready(), DISCORD_AUTH_TIMEOUT_MS, 'connecting')
+      .then(() => discordSdk)
+      .catch((error: unknown) => {
+        throw isDeadIframeError(error) ? new DiscordFrameLostError() : error;
+      });
   }
-  resetDiscordClient();
-  const discordSdk = getDiscordSdk();
-  await withDeadline(discordSdk.ready(), DISCORD_AUTH_TIMEOUT_MS, 'connecting');
-  return discordSdk;
+  return readyPromise;
 }
 
 /**
- * Authorize is the first RPC after ready(). Voice is optional: if Discord
- * opens a consent sheet and never answers, reconnect and continue without it.
+ * Authorize is the first RPC after ready(). Voice is optional. A stuck consent
+ * sheet is recovered by reloading this document once, not by opening a second
+ * RPC socket. A dead frame_id cannot be repaired from inside the iframe.
  */
 async function authorizeDiscord(discordSdk: DiscordSDK): Promise<{
   sdk: DiscordSDK;
   code: string;
   voiceRead: boolean;
 }> {
-  const voice = await tryAuthorize(discordSdk, VOICE_SCOPES, VOICE_AUTHORIZE_TIMEOUT_MS);
-  if (voice.ok) return { sdk: discordSdk, code: voice.code, voiceRead: true };
-
-  if (!voice.timedOut) {
-    const base = await tryAuthorize(discordSdk, BASE_SCOPES, DISCORD_AUTH_TIMEOUT_MS);
-    if (base.ok) return { sdk: discordSdk, code: base.code, voiceRead: false };
-    if (!base.timedOut) throw base.error;
+  if (!authReloadUsed()) {
+    const voice = await tryAuthorize(discordSdk, VOICE_SCOPES, VOICE_AUTHORIZE_TIMEOUT_MS);
+    if (voice.ok) {
+      clearAuthReload();
+      return { sdk: discordSdk, code: voice.code, voiceRead: true };
+    }
+    if (isDeadIframeError(voice.error)) throw new DiscordFrameLostError();
+    // The consent sheet never answered. Reload once and authorize without voice
+    // on the same frame id. Closing the socket here is what drops the iframe.
+    if (voice.timedOut && reloadActivityOnce()) return new Promise(() => {});
   }
 
-  const retrySdk = await connectDiscordSdk();
-  const base = await tryAuthorize(retrySdk, BASE_SCOPES, DISCORD_AUTH_TIMEOUT_MS);
-  if (base.ok) return { sdk: retrySdk, code: base.code, voiceRead: false };
+  const base = await tryAuthorize(discordSdk, BASE_SCOPES, DISCORD_AUTH_TIMEOUT_MS);
+  if (base.ok) {
+    clearAuthReload();
+    return { sdk: discordSdk, code: base.code, voiceRead: false };
+  }
+  if (isDeadIframeError(base.error)) throw new DiscordFrameLostError();
+  if (base.timedOut && reloadActivityOnce()) return new Promise(() => {});
   throw base.error;
 }
 
@@ -413,38 +467,53 @@ export type BootstrapProgress = {
   label: string;
 };
 
-export async function bootstrapDiscord(
+let layoutListener: (pip: boolean) => void = () => undefined;
+let progressListener: ((update: BootstrapProgress) => void) | undefined;
+
+function reportBoot(progress: number, label: string) {
+  progressListener?.({ progress, label });
+}
+
+/**
+ * React Strict Mode runs the boot effect twice. A second call must join the
+ * handshake already in flight — starting another one drops the iframe id.
+ * Later callers replace the progress/layout listeners so the live mount updates.
+ */
+export function bootstrapDiscord(
   onLayout: (pip: boolean) => void,
   onProgress?: (update: BootstrapProgress) => void,
 ): Promise<AuthState> {
-  const report = (progress: number, label: string) => {
-    onProgress?.({ progress, label });
+  layoutListener = onLayout;
+  progressListener = onProgress;
+
+  if (!isEmbedded) return bootstrapOutsideDiscord();
+  if (!bootPromise) bootPromise = bootstrapEmbedded();
+  return bootPromise;
+}
+
+async function bootstrapOutsideDiscord(): Promise<AuthState> {
+  reportBoot(40, 'Local preview…');
+  return {
+    accessToken: 'dev-token',
+    user: {
+      id: 'dev-user',
+      username: 'DevUser',
+      global_name: 'Local Dev',
+    },
+    voiceRead: false,
   };
+}
 
-  if (!isEmbedded) {
-    report(40, 'Local preview…');
-    return {
-      accessToken: 'dev-token',
-      user: {
-        id: 'dev-user',
-        username: 'DevUser',
-        global_name: 'Local Dev',
-      },
-      voiceRead: false,
-    };
-  }
-
-  report(8, 'Connecting to Discord…');
-  // Always start from a fresh SDK instance after reload / version bump.
-  let discordSdk = await connectDiscordSdk();
-  report(22, 'Preparing activity…');
+async function bootstrapEmbedded(): Promise<AuthState> {
+  reportBoot(8, 'Connecting to Discord…');
+  const discordSdk = await connectDiscordSdk();
+  reportBoot(22, 'Preparing activity…');
   installDiscordSafeAreaFallback();
 
-  report(38, 'Authorizing with Discord…');
+  reportBoot(38, 'Authorizing with Discord…');
   const authorized = await authorizeDiscord(discordSdk);
-  discordSdk = authorized.sdk;
 
-  report(58, 'Exchanging session…');
+  reportBoot(58, 'Exchanging session…');
   const result = await apiFetch<{
     access_token: string;
     user: AuthState['user'];
@@ -453,14 +522,14 @@ export async function bootstrapDiscord(
     body: JSON.stringify({ code: authorized.code }),
   });
 
-  report(72, 'Signing into activity…');
+  reportBoot(72, 'Signing into activity…');
   await withDeadline(
-    discordSdk.commands.authenticate({ access_token: result.access_token }),
+    authorized.sdk.commands.authenticate({ access_token: result.access_token }),
     DISCORD_AUTH_TIMEOUT_MS,
     'signing in',
   );
-  applyOptionalActivityChrome(discordSdk, onLayout);
-  report(82, 'Authenticated');
+  applyOptionalActivityChrome(authorized.sdk, (pip) => layoutListener(pip));
+  reportBoot(82, 'Authenticated');
 
   return {
     accessToken: result.access_token,
