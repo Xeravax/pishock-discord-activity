@@ -1,5 +1,15 @@
 # Changelog
 
+## v2.3.0 — 2026-11-15
+
+## What's changed
+
+- #minor Update release notes and refine CSS styles for improved layout and re… (a03773c)
+- Merge branch 'release' into develop (4fee25e)
+- Update release notes and refine CSS styles for improved layout and responsiveness (3d31e36)
+
+**Full changelog**: https://github.com/Xeravax/pishock-discord-activity/compare/v2.2.2...v2.3.0
+
 ## v2.2.2 — 2026-11-15
 
 ## What's changed

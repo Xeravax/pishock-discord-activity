@@ -1,7 +1,7 @@
 {
-  "version": "v2.2.2",
-  "notes": "## What's changed\n\n- #patch Add error handling and session management for Discord SDK integration (bce1853)\n- Add error handling and session management for Discord SDK integration (131a7c8)\n\n**Full changelog**: https://github.com/Xeravax/pishock-discord-activity/compare/v2.2.1...v2.2.2\n",
-  "url": "https://github.com/Xeravax/pishock-discord-activity/releases/tag/v2.2.2",
-  "publishedAt": "2026-11-15T19:20:32.693Z",
-  "updatedAt": "2026-11-15T19:20:32.841Z"
+  "version": "v2.3.0",
+  "notes": "## What's changed\n\n- #minor Update release notes and refine CSS styles for improved layout and re… (a03773c)\n- Merge branch 'release' into develop (4fee25e)\n- Update release notes and refine CSS styles for improved layout and responsiveness (3d31e36)\n\n**Full changelog**: https://github.com/Xeravax/pishock-discord-activity/compare/v2.2.2...v2.3.0\n",
+  "url": "https://github.com/Xeravax/pishock-discord-activity/releases/tag/v2.3.0",
+  "publishedAt": "2026-11-15T19:47:57.052Z",
+  "updatedAt": "2026-11-15T19:47:57.129Z"
 }
