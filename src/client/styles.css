@@ -870,7 +870,8 @@ html.pip-mode #root > * {
 }
 
 /* Card stays shrink-wrapped to the controls so the title and Pair
-   stay attached. Size changes below use real layout, not zoom/scale. */
+   stay attached. The site scales this card by 1.25; zoom is on the
+   shrink-wrapped card so the layout box grows with it. */
 .official-remote-cluster {
   margin: 8px auto 16px;
   width: 100%;
@@ -894,6 +895,7 @@ html.pip-mode #root > * {
   margin: 0 auto;
   overflow: visible;
   box-sizing: border-box;
+  zoom: 1.25;
 }
 
 .official-remote-head {
@@ -945,11 +947,11 @@ html.pip-mode #root > * {
   flex-flow: row nowrap;
   align-items: stretch;
   justify-content: center;
-  gap: 18px;
+  gap: 8px;
   width: max-content;
   max-width: none;
-  margin: 10px auto 0;
-  padding: 0 16px 4px;
+  margin: 8px auto 0;
+  padding: 0 8px 4px;
   box-sizing: border-box;
 }
 
@@ -970,12 +972,12 @@ html.pip-mode #root > * {
   display: flex;
   flex-direction: column;
   align-items: center;
-  align-self: center;
-  justify-content: center;
+  align-self: stretch;
+  justify-content: space-around;
   flex-shrink: 0;
-  gap: 8px;
-  min-width: 76px;
-  padding-top: 22px;
+  gap: 4px;
+  min-width: 64px;
+  padding-top: 18px;
   box-sizing: border-box;
 }
 
@@ -1004,7 +1006,7 @@ html.pip-mode #root > * {
 }
 
 .official-remote-cluster .q-slider--v {
-  height: 220px;
+  height: 200px;
 }
 
 .official-control-column {
@@ -2060,83 +2062,15 @@ html.pip-mode .app-restart-overlay:not(.app-restart-overlay--outdated) {
   bottom: calc(16px + var(--saib));
 }
 
-/* Large monitors grow the whole remote. A short window keeps the
-   phone-safe stack so buttons are not crushed into the sliders. */
-@media (min-width: 1200px) {
-  .official-remote-cluster .q-slider--v {
-    height: 320px;
-  }
-
-  .official-remote-head__name {
-    font-size: 1.45rem;
-  }
-
-  .official-remote-row {
-    gap: 24px;
-  }
-
-  .official-remote-cluster .q-btn__wrapper {
-    min-height: 3.1em;
-  }
-
-  .official-remote-cluster .q-btn__content.column > .q-icon,
-  .official-slider-col > .q-icon {
-    font-size: 26px;
-    width: 26px;
-    height: 26px;
-  }
-}
-
-@media (min-width: 1700px) {
-  .official-remote-cluster .q-slider--v {
-    height: 420px;
-  }
-
-  .official-remote-head__name {
-    font-size: 1.7rem;
-  }
-
-  .official-remote-row {
-    gap: 32px;
-  }
-
-  .official-remote-cluster .q-btn__wrapper {
-    padding: 8px 20px;
-    min-height: 3.4em;
-  }
-}
-
-@media (min-width: 2100px) {
-  .official-remote-cluster .q-slider--v {
-    height: 500px;
-  }
-
-  .official-remote-head__name {
-    font-size: 1.9rem;
-  }
-
-  .official-remote-cluster .q-btn__wrapper {
-    padding: 10px 22px;
-    min-height: 3.6em;
-  }
-}
-
+/* Short windows drop the site's 1.25 zoom and shorten the tracks so
+   the buttons are not crushed. Wide monitors keep the same proportions. */
 @media (max-height: 700px) {
+  .official-remote-card {
+    zoom: 1;
+  }
+
   .official-remote-cluster .q-slider--v {
-    height: 220px;
-  }
-
-  .official-remote-head__name {
-    font-size: 1.15rem;
-  }
-
-  .official-remote-row {
-    gap: 18px;
-  }
-
-  .official-remote-cluster .q-btn__wrapper {
-    padding: 4px 16px;
-    min-height: 2.572em;
+    height: 180px;
   }
 }
 
@@ -2147,9 +2081,9 @@ html.pip-mode .app-restart-overlay:not(.app-restart-overlay--outdated) {
   }
 
   .official-remote-center {
-    min-width: 68px;
-    padding-top: 18px;
-    gap: 6px;
+    min-width: 60px;
+    padding-top: 16px;
+    gap: 4px;
   }
 
   .official-root > .q-header.custom-header {
@@ -2367,12 +2301,11 @@ html.pip-mode .app-restart-overlay:not(.app-restart-overlay--outdated) {
 
 /* Intensity track: wide hit target for reliable drag (replaces native vertical range) */
 .official-slider-hit {
-  min-width: 28px;
-  padding: 0 10px !important;
+  min-width: 20px;
+  padding: 0 6px !important;
   box-sizing: content-box;
 }
 
-/* Official remote: step/random buttons mesh into the SHOCK/VIBRATE card border */
 .official-panel-shell {
   position: relative;
   display: inline-flex;
@@ -2383,54 +2316,63 @@ html.pip-mode .app-restart-overlay:not(.app-restart-overlay--outdated) {
   overflow: visible;
 }
 
-.official-edge-rail {
+/* A lane beside the track keeps the step buttons inside the card,
+   shock on the left of its slider and vibrate on the right. */
+.official-slider-col--shock {
+  padding: 0 5px 0 26px;
+  margin-left: 5px;
+  position: relative;
+}
+
+.official-slider-col--vibrate {
+  padding: 0 26px 0 5px;
+  margin-right: 5px;
+  position: relative;
+}
+
+.official-slider-rail {
   position: absolute;
-  top: 50%;
-  z-index: 5;
+  z-index: 6;
   display: flex;
   flex-direction: column;
-  gap: 2px;
-  transform: translateY(-50%);
-}
-
-.official-edge-rail--right {
-  right: 0;
-  transform: translate(50%, -50%);
-}
-
-.official-edge-rail--left {
-  left: 0;
-  transform: translate(-50%, -50%);
-}
-
-.official-edge-btn {
-  appearance: none;
-  width: 22px;
-  height: 22px;
-  padding: 0;
-  display: inline-flex;
   align-items: center;
-  justify-content: center;
-  border: 1px solid #79c6db;
-  background: #121212;
-  color: #79c6db;
-  cursor: pointer;
-  line-height: 1;
-  border-radius: 2px;
+  bottom: 72px;
 }
 
-.official-edge-btn .q-icon {
+.official-slider-rail--shock {
+  left: 1px;
+}
+
+.official-slider-rail--vibrate {
+  right: 1px;
+  bottom: 86px;
+}
+
+.official-slider-rail__btn {
+  font-size: 8px;
+  min-height: 0;
+}
+
+.official-slider-rail__btn .q-btn__wrapper {
+  padding: 2px 3px;
+  min-height: 0;
+  min-width: 0;
+}
+
+.official-slider-rail__btn .q-icon {
   font-size: 14px;
+  width: 14px;
+  height: 14px;
+  margin: 0;
 }
 
-.official-edge-btn:disabled {
+.official-slider-rail__btn:disabled {
   opacity: 0.35;
-  cursor: not-allowed;
 }
 
-.official-edge-btn--dice.is-active {
-  background: #79c6db;
-  color: #121212;
+.official-slider-rail__btn--dice.is-active {
+  background: #79c6db !important;
+  color: #121212 !important;
 }
 
 .official-duration-wrap {

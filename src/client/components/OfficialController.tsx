@@ -1393,7 +1393,7 @@ export function OfficialController({
                                       <span className="q-btn__wrapper col row q-anchor--skip">
                                         <span className="q-btn__content text-center col items-center q-anchor--skip justify-center row">
                                           <i className="q-icon on-left mdi mdi-share-variant" aria-hidden />
-                                          <span className="block">Code</span>
+                                          <span className="block">Share</span>
                                         </span>
                                       </span>
                                     </button>
@@ -1545,66 +1545,70 @@ export function OfficialController({
                                           onChangeMin={setShockMin}
                                           onChangeMax={setShockMax}
                                           disabled={controlsLocked || !active.canShock}
+                                          trackMargin="left"
+                                          rail={
+                                            <IntensityEdgeRail
+                                              place="shock"
+                                              disabled={controlsLocked || !active.canShock}
+                                              random={
+                                                shockRandom &&
+                                                !(individualIntensity && multiShock)
+                                              }
+                                              showRandom={!(individualIntensity && multiShock)}
+                                              onUp={() =>
+                                                nudgeIntensity({
+                                                  random:
+                                                    shockRandom &&
+                                                    !(individualIntensity && multiShock),
+                                                  value: shockIntensity,
+                                                  min: shockMin,
+                                                  max: shockMax,
+                                                  cap: shockEditCap,
+                                                  delta: 1,
+                                                  setValue: setActiveShockIntensity,
+                                                  setMin: setShockMin,
+                                                  setMax: setShockMax,
+                                                })
+                                              }
+                                              onDown={() =>
+                                                nudgeIntensity({
+                                                  random:
+                                                    shockRandom &&
+                                                    !(individualIntensity && multiShock),
+                                                  value: shockIntensity,
+                                                  min: shockMin,
+                                                  max: shockMax,
+                                                  cap: shockEditCap,
+                                                  delta: -1,
+                                                  setValue: setActiveShockIntensity,
+                                                  setMin: setShockMin,
+                                                  setMax: setShockMax,
+                                                })
+                                              }
+                                              onToggleRandom={() => {
+                                                if (individualIntensity && multiShock) return;
+                                                setShockRandom((on) => {
+                                                  if (!on) {
+                                                    // Spread thumbs full range so they aren't stacked
+                                                    setShockMin(0);
+                                                    setShockMax(shockEditCap);
+                                                  } else {
+                                                    setActiveShockIntensity(
+                                                      clamp(
+                                                        Math.round((shockMin + shockMax) / 2),
+                                                        0,
+                                                        shockEditCap,
+                                                      ),
+                                                    );
+                                                  }
+                                                  return !on;
+                                                });
+                                              }}
+                                            />
+                                          }
                                         />
                                       </div>
                                     </div>
-                                    <IntensityEdgeRail
-                                      side="right"
-                                      disabled={controlsLocked || !active.canShock}
-                                      random={
-                                        shockRandom && !(individualIntensity && multiShock)
-                                      }
-                                      showRandom={!(individualIntensity && multiShock)}
-                                      onUp={() =>
-                                        nudgeIntensity({
-                                          random:
-                                            shockRandom &&
-                                            !(individualIntensity && multiShock),
-                                          value: shockIntensity,
-                                          min: shockMin,
-                                          max: shockMax,
-                                          cap: shockEditCap,
-                                          delta: 1,
-                                          setValue: setActiveShockIntensity,
-                                          setMin: setShockMin,
-                                          setMax: setShockMax,
-                                        })
-                                      }
-                                      onDown={() =>
-                                        nudgeIntensity({
-                                          random:
-                                            shockRandom &&
-                                            !(individualIntensity && multiShock),
-                                          value: shockIntensity,
-                                          min: shockMin,
-                                          max: shockMax,
-                                          cap: shockEditCap,
-                                          delta: -1,
-                                          setValue: setActiveShockIntensity,
-                                          setMin: setShockMin,
-                                          setMax: setShockMax,
-                                        })
-                                      }
-                                      onToggleRandom={() => {
-                                        if (individualIntensity && multiShock) return;
-                                        setShockRandom((on) => {
-                                          if (!on) {
-                                            // Spread thumbs full range so they aren't stacked
-                                            setShockMin(0);
-                                            setShockMax(shockEditCap);
-                                          } else {
-                                            setActiveShockIntensity(
-                                              clamp(
-                                                Math.round((shockMin + shockMax) / 2),
-                                                0,
-                                                shockEditCap,
-                                              ),
-                                            );
-                                          }
-                                          return !on;
-                                        });
-                                      }}
-                                    />
                                   </div>
                                 </div>
 
@@ -1704,32 +1708,6 @@ export function OfficialController({
                                 {/* VIBRATE */}
                                 <div className="official-remote-side">
                                   <div className="official-panel-shell">
-                                    <IntensityEdgeRail
-                                      side="left"
-                                      disabled={controlsLocked || !active.canVibrate}
-                                      onUp={() =>
-                                        nudgeIntensity({
-                                          random: false,
-                                          value: vibIntensity,
-                                          min: 0,
-                                          max: vibIntensity,
-                                          cap: vibMaxInt,
-                                          delta: 1,
-                                          setValue: setVibIntensity,
-                                        })
-                                      }
-                                      onDown={() =>
-                                        nudgeIntensity({
-                                          random: false,
-                                          value: vibIntensity,
-                                          min: 0,
-                                          max: vibIntensity,
-                                          cap: vibMaxInt,
-                                          delta: -1,
-                                          setValue: setVibIntensity,
-                                        })
-                                      }
-                                    />
                                     <div className="border-color-secondary q-card q-card--dark q-dark q-card--bordered">
                                       <div className="q-item__label text-center bg-dark text-secondary q-mb-xs q-item__label--overline text-overline">
                                         VIBRATE
@@ -1743,6 +1721,35 @@ export function OfficialController({
                                           limitMarkers={multiLimitMarkers}
                                           onChange={setVibIntensity}
                                           disabled={controlsLocked || !active.canVibrate}
+                                          trackMargin="right"
+                                          rail={
+                                            <IntensityEdgeRail
+                                              place="vibrate"
+                                              disabled={controlsLocked || !active.canVibrate}
+                                              onUp={() =>
+                                                nudgeIntensity({
+                                                  random: false,
+                                                  value: vibIntensity,
+                                                  min: 0,
+                                                  max: vibIntensity,
+                                                  cap: vibMaxInt,
+                                                  delta: 1,
+                                                  setValue: setVibIntensity,
+                                                })
+                                              }
+                                              onDown={() =>
+                                                nudgeIntensity({
+                                                  random: false,
+                                                  value: vibIntensity,
+                                                  min: 0,
+                                                  max: vibIntensity,
+                                                  cap: vibMaxInt,
+                                                  delta: -1,
+                                                  setValue: setVibIntensity,
+                                                })
+                                              }
+                                            />
+                                          }
                                         />
                                         <div className="column justify-between items-center q-mr-xs">
                                           <div className="flex column q-gutter-sm">
@@ -2274,7 +2281,7 @@ function CenterControl({
 }
 
 function IntensityEdgeRail({
-  side,
+  place,
   disabled,
   random,
   showRandom,
@@ -2282,7 +2289,8 @@ function IntensityEdgeRail({
   onDown,
   onToggleRandom,
 }: {
-  side: 'left' | 'right';
+  /** Shock rail sits left of its track; vibrate rail sits right of its track. */
+  place: 'shock' | 'vibrate';
   disabled?: boolean;
   random?: boolean;
   showRandom?: boolean;
@@ -2290,38 +2298,52 @@ function IntensityEdgeRail({
   onDown: () => void;
   onToggleRandom?: () => void;
 }) {
+  const btnClass =
+    'q-btn q-btn-item non-selectable no-outline q-my-xs q-py-xs bg-dark q-btn--outline q-btn--rectangle text-secondary q-btn--actionable q-focusable q-hoverable q-btn--wrap q-btn--dense official-slider-rail__btn';
   return (
-    <div className={`official-edge-rail official-edge-rail--${side}`} aria-hidden={false}>
+    <div className={`official-slider-rail official-slider-rail--${place}`}>
       <button
         type="button"
-        className="official-edge-btn"
+        className={btnClass}
         disabled={disabled}
         aria-label="Increase intensity"
         onClick={onUp}
       >
-        <i className="q-icon mdi mdi-chevron-double-up" aria-hidden />
+        <span className="q-btn__wrapper col row q-anchor--skip">
+          <span className="q-btn__content text-center col items-center q-anchor--skip justify-center row">
+            <i className="q-icon mdi mdi-chevron-double-up" aria-hidden />
+          </span>
+        </span>
       </button>
       {showRandom ? (
         <button
           type="button"
-          className={`official-edge-btn official-edge-btn--dice${random ? ' is-active' : ''}`}
+          className={`${btnClass} official-slider-rail__btn--dice${random ? ' is-active' : ''}`}
           disabled={disabled}
           aria-pressed={random}
           aria-label="Random intensity"
           title="Random intensity"
           onClick={onToggleRandom}
         >
-          <i className="q-icon mdi mdi-dice-multiple" aria-hidden />
+          <span className="q-btn__wrapper col row q-anchor--skip">
+            <span className="q-btn__content text-center col items-center q-anchor--skip justify-center row">
+              <i className="q-icon mdi mdi-dice-3" aria-hidden />
+            </span>
+          </span>
         </button>
       ) : null}
       <button
         type="button"
-        className="official-edge-btn"
+        className={btnClass}
         disabled={disabled}
         aria-label="Decrease intensity"
         onClick={onDown}
       >
-        <i className="q-icon mdi mdi-chevron-double-down" aria-hidden />
+        <span className="q-btn__wrapper col row q-anchor--skip">
+          <span className="q-btn__content text-center col items-center q-anchor--skip justify-center row">
+            <i className="q-icon mdi mdi-chevron-double-down" aria-hidden />
+          </span>
+        </span>
       </button>
     </div>
   );
@@ -2340,6 +2362,8 @@ function VerticalQuasarSlider({
   onChangeMin,
   onChangeMax,
   disabled,
+  trackMargin = 'left',
+  rail,
 }: {
   value: number;
   minValue?: number;
@@ -2363,6 +2387,9 @@ function VerticalQuasarSlider({
   onChangeMin?: (n: number) => void;
   onChangeMax?: (n: number) => void;
   disabled?: boolean;
+  /** Site shock slider uses a left margin; vibrate uses a right margin. */
+  trackMargin?: 'left' | 'right';
+  rail?: ReactNode;
 }) {
   const trackRef = useRef<HTMLDivElement | null>(null);
   const dragRef = useRef<'value' | 'min' | 'max' | null>(null);
@@ -2455,9 +2482,11 @@ function VerticalQuasarSlider({
 
   return (
     <div
-      className="q-card__section q-card__section--vert official-slider-col"
-      style={{ padding: '0px 5px', marginLeft: 5, position: 'relative' }}
+      className={`q-card__section q-card__section--vert official-slider-col official-slider-col--${
+        trackMargin === 'left' ? 'shock' : 'vibrate'
+      }`}
     >
+      {rail}
       <div className="flex column items-center q-gutter-sm justify-between">
         <div
           role="slider"
