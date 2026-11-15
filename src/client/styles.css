@@ -1094,8 +1094,13 @@ button.app-version-badge--button {
   appearance: none;
   border: 1px solid transparent;
   cursor: pointer;
-  font: inherit;
-  color: inherit;
+  /* Keep badge metrics — parent .auth-boot__brand is a huge display font */
+  font-size: 11px;
+  font-weight: 600;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  letter-spacing: 0.02em;
+  line-height: 1.35;
+  color: rgba(255, 255, 255, 0.72);
 }
 
 button.app-version-badge--button:hover {
@@ -1805,7 +1810,8 @@ html.pip-mode .app-restart-overlay:not(.app-restart-overlay--outdated) {
   bottom: calc(16px + var(--saib));
 }
 
-@media (max-width: 720px), (max-height: 740px) {
+/* Width-based only: Discord desktop iframes are often <740px tall but still wide */
+@media (max-width: 720px) {
   .official-remote-cluster {
     margin: 8px 4px;
     scale: 1;
@@ -2416,9 +2422,16 @@ html.pip-mode .app-restart-overlay:not(.app-restart-overlay--outdated) {
 
 .auth-boot__brand-row {
   display: inline-flex;
-  align-items: baseline;
+  flex-wrap: wrap;
+  align-items: center;
   justify-content: center;
   gap: 10px;
+  max-width: 100%;
+}
+
+.auth-boot__brand-row .app-version-badge {
+  flex: 0 0 auto;
+  align-self: center;
 }
 
 .auth-boot__brand-name span {
