@@ -1282,31 +1282,94 @@ button.app-version-badge--button:focus-visible {
   color: #ffc9c9;
 }
 
-.app-version-panel__notes-title {
+.changelog {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  text-align: left;
+  color: #d7dde0;
+  font-family: Roboto, ui-sans-serif, system-ui, sans-serif;
+  font-size: 0.9rem;
+  line-height: 1.45;
+}
+
+.changelog__h2,
+.changelog__h3,
+.changelog__p,
+.changelog__compare {
+  margin: 0;
+}
+
+.changelog__h2 {
+  font-family: Oxanium, geo, sans-serif;
+  font-size: 1.02rem;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  color: #f2f5f6;
+}
+
+.changelog__h3 {
+  margin-top: 8px;
+  font-family: Oxanium, geo, sans-serif;
   font-size: 0.72rem;
+  font-weight: 700;
   letter-spacing: 0.08em;
   text-transform: uppercase;
   color: #79c6db;
-  font-family: Oxanium, geo, sans-serif;
-  margin-bottom: 8px;
 }
 
-.app-version-panel__notes-body {
+.changelog__list {
   margin: 0;
-  padding: 12px;
-  max-height: min(48vh, 360px);
-  overflow: auto;
-  overscroll-behavior: contain;
-  -webkit-overflow-scrolling: touch;
-  white-space: pre-wrap;
-  word-break: break-word;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.changelog__list li {
+  display: grid;
+  grid-template-columns: 10px minmax(0, 1fr);
+  column-gap: 8px;
+  align-items: start;
+}
+
+.changelog__mark {
+  width: 6px;
+  height: 6px;
+  margin-top: 0.45em;
+  border-radius: 50%;
+  background: #79c6db;
+  box-shadow: 0 0 6px rgba(121, 198, 219, 0.45);
+}
+
+.changelog strong {
+  color: #f2f5f6;
+  font-weight: 700;
+}
+
+.changelog code {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 0.78rem;
-  line-height: 1.45;
-  color: #d7dde0;
-  background: rgba(0, 0, 0, 0.35);
-  border: 1px solid rgba(121, 198, 219, 0.22);
-  border-radius: 8px;
+  font-size: 0.84em;
+  color: #e8e8e8;
+}
+
+.changelog a,
+.changelog__compare a {
+  color: #79c6db;
+  text-decoration: none;
+  overflow-wrap: anywhere;
+}
+
+.changelog a:hover,
+.changelog__compare a:hover {
+  text-decoration: underline;
+}
+
+.changelog__compare {
+  margin-top: 4px;
+  font-size: 0.85rem;
 }
 
 .app-version-panel__link {
