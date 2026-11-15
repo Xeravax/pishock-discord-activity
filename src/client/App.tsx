@@ -3,14 +3,26 @@ import { ApiError, apiBase, apiFetch, isEmbedded } from './api';
 import {
   bootstrapDiscord,
   buildPresenceSnapshot,
+  discordDisplayName,
   fetchInstanceParticipants,
   getActivityInstanceId,
+  guildMemberAvatarUrl,
+  inviteToActivity,
+  isDesktopPlatform,
   openExternal,
+  openShareMoment,
   resolveActivityLocationHint,
+  subscribeCurrentGuildMember,
+  subscribeCurrentUser,
   subscribeParticipants,
+  subscribeVoiceIndicators,
   updateRichPresence,
+  uploadActivityAttachment,
   type AuthState,
+  type DiscordUserProfile,
+  type VoiceStateFlags,
 } from './discord';
+import { renderLogShareCard } from './logShareCard';
 import { SafetyWarning } from './components/SafetyWarning';
 import { SafetyNoticeBar } from './components/SafetyNoticeBar';
 import { TermsOfService } from './components/TermsOfService';
@@ -153,6 +165,14 @@ let participantStatusCache: {
 export function App() {
   const [auth, setAuth] = useState<AuthState | null>(null);
   const [me, setMe] = useState<MeResponse | null>(null);
+  /** Server nick / guild avatar from CURRENT_GUILD_MEMBER_UPDATE (client-only). */
+  const [guildNick, setGuildNick] = useState<string | null>(null);
+  const [guildAvatarHash, setGuildAvatarHash] = useState<string | null>(null);
+  const [guildIdForAvatar, setGuildIdForAvatar] = useState<string | null>(null);
+  const [voiceIndicators, setVoiceIndicators] = useState<Record<string, VoiceStateFlags>>({});
+  /** SDK identity newer than cached /api/me — reapplied after refreshMe. */
+  const sdkUserOverlayRef = useRef<Partial<DiscordUserProfile> | null>(null);
+  const guildNickRef = useRef<string | null>(null);
   const [pip, setPip] = useState(false);
   const [bootError, setBootError] = useState<string | null>(null);
   const [bootProgress, setBootProgress] = useState(4);
@@ -183,6 +203,9 @@ export function App() {
   const defaultMenuAppliedRef = useRef(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [actionNotice, setActionNotice] = useState<string | null>(null);
+  const [inviteBusy, setInviteBusy] = useState(false);
+  const [sharingEntryId, setSharingEntryId] = useState<string | null>(null);
+  const canShareLogMoment = isEmbedded && isDesktopPlatform();
   const [legalView, setLegalView] = useState<LegalView>(null);
   const [friendsMode, setFriendsMode] = useState(true);
   const [participantRosterLoaded, setParticipantRosterLoaded] = useState(false);
@@ -257,10 +280,83 @@ export function App() {
     return data;
   }, []);
 
-  const refreshMe = useCallback(async (accessToken: string) => {
-    const data = await apiFetch<MeResponse>('/me', accessToken);
-    setMe(data);
-    return data;
+  const applySdkUserOverlay = useCallback((user: DiscordUserProfile): DiscordUserProfile => {
+    const overlay = sdkUserOverlayRef.current;
+    if (!overlay) return user;
+    return {
+      ...user,
+      ...(overlay.username != null ? { username: overlay.username } : {}),
+      ...(overlay.global_name !== undefined ? { global_name: overlay.global_name } : {}),
+      ...(overlay.avatar !== undefined ? { avatar: overlay.avatar } : {}),
+    };
+  }, []);
+
+  const refreshMe = useCallback(
+    async (accessToken: string) => {
+      const data = await apiFetch<MeResponse>('/me', accessToken);
+      const merged: MeResponse = {
+        ...data,
+        user: applySdkUserOverlay(data.user),
+      };
+      setMe(merged);
+      return merged;
+    },
+    [applySdkUserOverlay],
+  );
+
+  const patchLocalDiscordUser = useCallback((patch: Partial<DiscordUserProfile> & { id?: string }) => {
+    sdkUserOverlayRef.current = {
+      ...(sdkUserOverlayRef.current ?? {}),
+      ...patch,
+    };
+    setAuth((prev) =>
+      prev
+        ? {
+            ...prev,
+            user: {
+              ...prev.user,
+              ...(patch.username != null ? { username: patch.username } : {}),
+              ...(patch.global_name !== undefined ? { global_name: patch.global_name } : {}),
+              ...(patch.avatar !== undefined ? { avatar: patch.avatar } : {}),
+            },
+          }
+        : prev,
+    );
+    setMe((prev) =>
+      prev
+        ? {
+            ...prev,
+            user: {
+              ...prev.user,
+              ...(patch.username != null ? { username: patch.username } : {}),
+              ...(patch.global_name !== undefined ? { global_name: patch.global_name } : {}),
+              ...(patch.avatar !== undefined ? { avatar: patch.avatar } : {}),
+            },
+          }
+        : prev,
+    );
+    const userId = patch.id;
+    if (!userId) return;
+    setParticipants((roster) =>
+      roster.map((p) => {
+        if (p.id !== userId) return p;
+        const username = patch.username ?? p.username;
+        const global_name =
+          patch.global_name !== undefined ? patch.global_name : p.global_name;
+        const avatar = patch.avatar !== undefined ? patch.avatar : p.avatar;
+        return {
+          ...p,
+          username,
+          global_name,
+          avatar,
+          displayName: discordDisplayName(
+            { username: username ?? '', global_name },
+            guildNickRef.current,
+          ),
+          avatarUrl: participantAvatarUrl(userId, avatar ?? null),
+        };
+      }),
+    );
   }, []);
 
   const unlinkRejectedPiShock = useCallback(() => {
@@ -551,6 +647,51 @@ export function App() {
       void refreshParticipantStatus(token, roster).catch(() => undefined);
     });
   }, [token, refreshParticipantStatus]);
+
+  useEffect(() => {
+    if (!isEmbedded || !token || !bootReady) return;
+    return subscribeCurrentUser((user) => {
+      patchLocalDiscordUser({
+        id: user.id,
+        username: user.username,
+        global_name: user.global_name,
+        avatar: user.avatar,
+      });
+    });
+  }, [token, bootReady, patchLocalDiscordUser]);
+
+  useEffect(() => {
+    if (!isEmbedded || !token || !bootReady) return;
+    return subscribeCurrentGuildMember((member) => {
+      const nick = member.nick?.trim() || null;
+      guildNickRef.current = nick;
+      setGuildNick(nick);
+      setGuildAvatarHash(member.avatar ?? null);
+      setGuildIdForAvatar(member.guild_id || null);
+      const selfId = selfIdRef.current;
+      if (!selfId || member.user_id !== selfId) return;
+      setParticipants((roster) =>
+        roster.map((p) => {
+          if (p.id !== selfId) return p;
+          return {
+            ...p,
+            displayName: discordDisplayName(
+              { username: p.username ?? '', global_name: p.global_name },
+              nick,
+            ),
+          };
+        }),
+      );
+    });
+  }, [token, bootReady]);
+
+  useEffect(() => {
+    if (!isEmbedded || !token || !bootReady || !auth?.voiceRead) {
+      setVoiceIndicators({});
+      return;
+    }
+    return subscribeVoiceIndicators(setVoiceIndicators);
+  }, [token, bootReady, auth?.voiceRead]);
 
   // Auto-select once per friends-mode entry, after a usable roster/status loads.
   useEffect(() => {
@@ -1133,10 +1274,23 @@ export function App() {
       success: Boolean(row.success),
       kind: 'personal',
       targetDiscordUserId: selfId,
-      targetDisplayName: me.user.global_name || me.user.username || 'You',
-      targetAvatarUrl: participantAvatarUrl(selfId, me.user.avatar ?? null),
+      targetDisplayName: discordDisplayName(me.user, guildNick) || 'You',
+      targetAvatarUrl:
+        guildMemberAvatarUrl(guildIdForAvatar ?? '', selfId, guildAvatarHash) ||
+        participantAvatarUrl(selfId, me.user.avatar ?? null),
     });
-  }, [logs, publicLogs, me?.user?.id, lastIncoming, participants, participantStatus]);
+  }, [
+    logs,
+    publicLogs,
+    me?.user?.id,
+    me?.user,
+    guildNick,
+    guildAvatarHash,
+    guildIdForAvatar,
+    lastIncoming,
+    participants,
+    participantStatus,
+  ]);
 
   /** PIP surface: linked users see hits on themselves; unlinked users see the latest log shock + target. */
   const pipHit = useMemo<IncomingShockHit | null>(() => {
@@ -1890,6 +2044,40 @@ export function App() {
     }
   };
 
+  const handleInviteToActivity = useCallback(async () => {
+    if (!isEmbedded || inviteBusy) return;
+    setInviteBusy(true);
+    setActionError(null);
+    try {
+      const result = await inviteToActivity();
+      if (result.method === 'share_link' && result.success) {
+        setActionNotice('Invite link shared.');
+      }
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setInviteBusy(false);
+    }
+  }, [inviteBusy]);
+
+  const handleShareLogEntry = useCallback(
+    async (entry: OfficialLogEntry) => {
+      if (!token || !canShareLogMoment || sharingEntryId) return;
+      setSharingEntryId(entry.id);
+      setActionError(null);
+      try {
+        const blob = await renderLogShareCard(entry);
+        const mediaUrl = await uploadActivityAttachment(token, blob);
+        await openShareMoment(mediaUrl);
+      } catch (err) {
+        setActionError(err instanceof Error ? err.message : String(err));
+      } finally {
+        setSharingEntryId(null);
+      }
+    },
+    [token, canShareLogMoment, sharingEntryId],
+  );
+
   const setEmergencyStop = async (input: {
     shockerId: number;
     shockerIds?: number[];
@@ -2180,10 +2368,12 @@ export function App() {
     );
   }
 
+  const myDiscordName = discordDisplayName(me.user, guildNick);
+
   if (setupPhase) {
     return (
       <SetupWizard
-        discordName={me.user.global_name || me.user.username}
+        discordName={myDiscordName}
         onComplete={(choices) => {
           finishSetup(choices);
         }}
@@ -2225,7 +2415,7 @@ export function App() {
         avatarUrl={linkConfirm.avatarUrl}
         bannerUrl={linkConfirm.bannerUrl}
         hubNames={linkConfirm.hubNames}
-        discordName={me.user.global_name || me.user.username}
+        discordName={myDiscordName}
         busy={confirmBusy}
         error={linkError}
         onConfirm={confirmPiShockLink}
@@ -2268,7 +2458,7 @@ export function App() {
       Boolean(me.user?.id) && loadDefaultStartMenu(me.user.id) != null;
     return (
       <DefaultMenuPrompt
-        discordName={me.user.global_name || me.user.username}
+        discordName={myDiscordName}
         onChoose={applyDefaultStartMenu}
         onDismiss={canDismissDefaultMenu ? () => setDefaultMenuPrompt(false) : undefined}
       />
@@ -2461,6 +2651,7 @@ export function App() {
               participants={participants}
               statuses={participantStatus}
               currentUserId={me.user.id}
+              voiceIndicators={voiceIndicators}
               selectedTargetId={selectedTargetId}
               selectedTargetIds={selectedTargetIds}
               multiSelect={multiShock}
@@ -2488,6 +2679,8 @@ export function App() {
                 });
               }}
               onRefresh={() => token && refreshParticipants(token, true)}
+              onInvite={isEmbedded ? () => void handleInviteToActivity() : undefined}
+              inviteBusy={inviteBusy}
               onTogglePriority={
                 me.pishockLinked
                   ? (id, starred) => void toggleQueueStar(id, starred)
@@ -2971,6 +3164,9 @@ export function App() {
         <OfficialLogsPanel
           open={logsOpen || overlay === 'logs'}
           entries={officialLogEntries}
+          canShareMoment={canShareLogMoment}
+          sharingEntryId={sharingEntryId}
+          onShareEntry={(entry) => void handleShareLogEntry(entry)}
           onClose={() => {
             setLogsOpen(false);
             if (overlay === 'logs') setOverlay(null);
@@ -2992,7 +3188,7 @@ export function App() {
         <p className="auth-boot__sub">Discord Activity</p>
         <span className="status-pill consent-shell__user">
           <span className="dot on" />
-          {me.user.global_name || me.user.username}
+          {myDiscordName}
         </span>
       </div>
 

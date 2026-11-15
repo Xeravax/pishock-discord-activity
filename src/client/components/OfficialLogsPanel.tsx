@@ -30,6 +30,8 @@ export type OfficialLogEntry = {
   shockerName: string | null;
   hubClientId: string | null;
   hubName: string | null;
+  /** Pre-shock warning sent with this shock or hold. Null when none or unknown. */
+  warningLevel: 'small' | 'mid' | 'long' | null;
   intensity: number | null;
   durationSec: number | null;
   at: number;
@@ -40,7 +42,15 @@ type Props = {
   entries: OfficialLogEntry[];
   onOpen: () => void;
   onClose: () => void;
+  /** Desktop-only: share a branded image of this log row into Discord. */
+  canShareMoment?: boolean;
+  sharingEntryId?: string | null;
+  onShareEntry?: (entry: OfficialLogEntry) => void;
 };
+
+function canShareLogAction(action: OfficialLogEntry['action']): boolean {
+  return action === 'shock' || action === 'vibrate' || action === 'beep';
+}
 
 function formatAgo(at: number, now: number): string {
   const sec = Math.max(0, Math.round((now - at) / 1000));
@@ -58,6 +68,10 @@ function actionIcon(action: OfficialLogEntry['action']): string {
   if (action === 'beep') return 'mdi-bell';
   if (action === 'shock') return 'mdi-lightning-bolt';
   return 'mdi-circle-outline';
+}
+
+function loggedWarningLevel(value: unknown): OfficialLogEntry['warningLevel'] {
+  return value === 'small' || value === 'mid' || value === 'long' ? value : null;
 }
 
 function formatDuration(sec: number): string {
@@ -156,7 +170,14 @@ export function OfficialLogsFab({
   );
 }
 
-export function OfficialLogsPanel({ open, entries, onClose }: Omit<Props, 'onOpen'>) {
+export function OfficialLogsPanel({
+  open,
+  entries,
+  onClose,
+  canShareMoment = false,
+  sharingEntryId = null,
+  onShareEntry,
+}: Omit<Props, 'onOpen'>) {
   const now = useMemo(() => Date.now(), [open, entries.length]);
   if (!open) return null;
 
@@ -192,12 +213,34 @@ export function OfficialLogsPanel({ open, entries, onClose }: Omit<Props, 'onOpe
               entries.map((row) => {
                 const device = shockerLabel(row);
                 const hub = hubLabel(row);
+                const shareable =
+                  canShareMoment &&
+                  Boolean(onShareEntry) &&
+                  canShareLogAction(row.action);
+                const sharing = sharingEntryId === row.id;
                 return (
                 <div key={row.id} className="official-log-row">
                   <div className="official-log-row__top">
                     <PersonChip person={row.from} tone="from" />
                     <i className="q-icon mdi mdi-arrow-right official-log-arrow" aria-hidden />
                     <PersonChip person={row.to} tone="to" />
+                    {shareable ? (
+                      <button
+                        type="button"
+                        className="official-log-share"
+                        onClick={() => onShareEntry?.(row)}
+                        disabled={sharing || Boolean(sharingEntryId)}
+                        aria-label={`Share ${row.from.displayName} ${row.action} ${row.to.displayName}`}
+                        title="Share to Discord"
+                      >
+                        <i
+                          className={`q-icon mdi ${
+                            sharing ? 'mdi-loading mdi-spin' : 'mdi-share-variant'
+                          }`}
+                          aria-hidden
+                        />
+                      </button>
+                    ) : null}
                   </div>
                   <div className="official-log-row__bottom">
                     <div className="official-log-row__meta">
@@ -266,6 +309,7 @@ type PublicLogApiRow = {
   shockerName?: string | null;
   hubClientId?: string | null;
   hubName?: string | null;
+  warningLevel?: string | null;
   intensity?: number | null;
   durationMs?: number | null;
   createdAt?: string;
@@ -345,6 +389,7 @@ export function normalizePublicLogs(
           : null,
       hubName:
         typeof row.hubName === 'string' && row.hubName.trim() ? row.hubName.trim() : null,
+      warningLevel: loggedWarningLevel(row.warningLevel),
       intensity,
       durationSec: durationMs != null ? Math.round((durationMs / 1000) * 10) / 10 : null,
       at,
@@ -408,6 +453,7 @@ export function normalizeActivityLogs(
           : null,
       hubName:
         typeof row.hubName === 'string' && row.hubName.trim() ? row.hubName.trim() : null,
+      warningLevel: loggedWarningLevel(row.warningLevel),
       intensity,
       durationSec: durationMs != null ? Math.round((durationMs / 1000) * 10) / 10 : null,
       at,

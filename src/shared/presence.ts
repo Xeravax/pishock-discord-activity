@@ -1,6 +1,6 @@
 /** Privacy-safe Discord Rich Presence copy (no intensities / target names). */
 
-export const PRESENCE_PARTY_SOFT_MAX = 8;
+export const PRESENCE_PARTY_SOFT_MAX = 16;
 export const PRESENCE_ASSET_KEY = 'pishock_logo';
 
 export type PresenceSnapshot = {

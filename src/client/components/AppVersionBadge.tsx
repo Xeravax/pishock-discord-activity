@@ -5,6 +5,7 @@ import {
 } from '../hooks/useAppHealth';
 import { isEmbedded } from '../api';
 import { PsDialog } from './PsDialog';
+import { ChangelogView } from './ChangelogView';
 import type { AppReleaseNotes } from '../../shared/app-version';
 
 type BadgeProps = {
@@ -110,10 +111,7 @@ export function AppVersionBadge({ hidden }: BadgeProps) {
           ) : loadError ? (
             <p className="app-version-panel__hint app-version-panel__hint--error">{loadError}</p>
           ) : notes ? (
-            <div className="app-version-panel__notes">
-              <div className="app-version-panel__notes-title">Changelog</div>
-              <pre className="app-version-panel__notes-body">{notes}</pre>
-            </div>
+            <ChangelogView markdown={notes} />
           ) : (
             <p className="app-version-panel__hint">
               {info?.refType === 'tag'

@@ -79,6 +79,7 @@ async function logOperateEvent(input: {
   shockerName?: string | null;
   hubClientId?: string | null;
   hubName?: string | null;
+  warningLevel?: WarningLevel | null;
   shareCode?: string | null;
   intensity: number;
   durationMs: number;
@@ -96,6 +97,7 @@ async function logOperateEvent(input: {
     shockerName: input.shockerName,
     hubClientId: input.hubClientId,
     hubName: input.hubName,
+    warningLevel: input.warningLevel,
     shareCode: input.shareCode ?? undefined,
     intensity: input.intensity,
     durationMs: input.durationMs,
@@ -516,8 +518,9 @@ export const controlRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app, op
 
     const pendingHold =
       hold && shockerId != null ? beginPendingHold(policy.ownerDiscordUserId, shockerId) : null;
+    let sentWarning: WarningLevel = 'none';
     try {
-      await warnBeforeShock({
+      sentWarning = await warnBeforeShock({
         operation,
         requestedWarningLevel: body.warningLevel,
         requiredWarningLevel: policy.requiredWarningLevel,
@@ -588,6 +591,7 @@ export const controlRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app, op
             shockerName: policy.shockerName,
             hubClientId: policy.hubClientId,
             hubName: policy.hubName,
+            warningLevel: sentWarning,
             shareCode: policy.crossUser ? null : shareCode,
             intensity,
             durationMs,
@@ -636,6 +640,7 @@ export const controlRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app, op
             shockerName: policy.shockerName,
             hubClientId: policy.hubClientId,
             hubName: policy.hubName,
+            warningLevel: sentWarning,
             shareCode: policy.crossUser ? null : shareCode,
             intensity,
             durationMs,
@@ -657,6 +662,7 @@ export const controlRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app, op
           shockerName: policy.shockerName,
           hubClientId: policy.hubClientId,
           hubName: policy.hubName,
+          warningLevel: sentWarning,
           shareCode: policy.crossUser ? null : shareCode,
           intensity,
           durationMs,
@@ -684,6 +690,7 @@ export const controlRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app, op
         shockerName: policy.shockerName,
         hubClientId: policy.hubClientId,
         hubName: policy.hubName,
+        warningLevel: sentWarning,
         shareCode: policy.crossUser ? null : shareCode,
         intensity,
         durationMs,
@@ -700,6 +707,7 @@ export const controlRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app, op
         shockerName: policy.shockerName,
         hubClientId: policy.hubClientId,
         hubName: policy.hubName,
+        warningLevel: sentWarning,
         shareCode: policy.crossUser ? null : shareCode,
         intensity,
         durationMs,

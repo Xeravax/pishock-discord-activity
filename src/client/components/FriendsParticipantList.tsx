@@ -1,4 +1,5 @@
 import type { DiscordParticipant, ParticipantStatus } from '../participants';
+import type { VoiceStateFlags } from '../discord';
 import { colorForUser } from '../multiColors';
 import { IndividualIntensityToggle, MultiShockToggle } from './MultiShockToggle';
 
@@ -6,6 +7,8 @@ type Props = {
   participants: DiscordParticipant[];
   statuses: Record<string, ParticipantStatus>;
   currentUserId: string;
+  /** Mute / speaking from Discord voice channel (optional). */
+  voiceIndicators?: Record<string, VoiceStateFlags>;
   /** Single-select (legacy) — ignored when selectedTargetIds is provided */
   selectedTargetId?: string | null;
   /** Multi-select ids when Multishock / multi friend targeting is on */
@@ -16,6 +19,9 @@ type Props = {
   onToggleIndividualIntensity?: () => void;
   onSelect: (discordUserId: string | null) => void;
   onRefresh?: () => void;
+  /** Invite someone into this activity (guild invite dialog or share link). */
+  onInvite?: () => void;
+  inviteBusy?: boolean;
   /** Star someone so their commands to you get queue priority */
   onTogglePriority?: (discordUserId: string, starred: boolean) => void;
 };
@@ -25,6 +31,7 @@ export function FriendsParticipantList({
   participants,
   statuses,
   currentUserId,
+  voiceIndicators = {},
   selectedTargetId = null,
   selectedTargetIds,
   multiSelect = false,
@@ -33,6 +40,8 @@ export function FriendsParticipantList({
   onToggleIndividualIntensity,
   onSelect,
   onRefresh,
+  onInvite,
+  inviteBusy = false,
   onTogglePriority,
 }: Props) {
   const others = participants.filter((p) => p.id !== currentUserId);
@@ -61,6 +70,27 @@ export function FriendsParticipantList({
               onToggle={onToggleIndividualIntensity}
               compact
             />
+          ) : null}
+          {onInvite ? (
+            <button
+              type="button"
+              className="q-btn q-btn-item non-selectable no-outline q-btn--flat q-btn--round text-secondary q-btn--dense q-btn--actionable"
+              onClick={onInvite}
+              disabled={inviteBusy}
+              aria-label="Invite someone to this activity"
+              title="Invite"
+              style={{ minHeight: 22, minWidth: 22, padding: 0 }}
+            >
+              <span className="q-btn__wrapper col row q-anchor--skip">
+                <span className="q-btn__content text-center col items-center q-anchor--skip justify-center row">
+                  <i
+                    className={`q-icon mdi ${inviteBusy ? 'mdi-loading mdi-spin' : 'mdi-account-plus'}`}
+                    style={{ fontSize: 14 }}
+                    aria-hidden
+                  />
+                </span>
+              </span>
+            </button>
           ) : null}
           {onRefresh ? (
             <button
@@ -119,6 +149,9 @@ export function FriendsParticipantList({
             const multiColor = multiSelect && active ? colorForUser(`u:${p.id}`) : undefined;
 
             const starred = Boolean(status?.priority);
+            const voice = voiceIndicators[p.id];
+            const muted = Boolean(voice?.muted);
+            const speaking = Boolean(voice?.speaking) && !muted;
 
             return (
               <div
@@ -153,7 +186,19 @@ export function FriendsParticipantList({
                     onSelect(active ? null : p.id);
                   }}
                 >
-                  <img src={p.avatarUrl} alt="" className="official-friend-avatar" />
+                  <span
+                    className={`official-friend-avatar-wrap${
+                      speaking ? ' official-friend-avatar-wrap--speaking' : ''
+                    }${muted ? ' official-friend-avatar-wrap--muted' : ''}`}
+                  >
+                    <img src={p.avatarUrl} alt="" className="official-friend-avatar" />
+                    {muted ? (
+                      <i
+                        className="q-icon mdi mdi-microphone-off official-friend-voice-badge"
+                        aria-label="Muted"
+                      />
+                    ) : null}
+                  </span>
                   <span className="official-friend-meta">
                     <span className="official-friend-name ellipsis">{p.displayName}</span>
                     <span

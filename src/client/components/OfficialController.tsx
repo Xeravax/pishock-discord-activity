@@ -448,7 +448,7 @@ export function OfficialController({
   }, [shockers, multiShock]);
 
   useEffect(() => {
-    const mq = window.matchMedia('(max-width: 720px)');
+    const mq = window.matchMedia('(max-width: 999px)');
     const apply = () => {
       const compact = mq.matches || Boolean(pip);
       setCompactDock(compact);
@@ -1377,12 +1377,12 @@ export function OfficialController({
                   <div className="q-my-sm q-gutter-sm full-width">
                     <div className="full-width flex column">
                       <div className="flex column official-remote-cluster">
-                        <div className="full-width flex row justify-center q-px-md">
-                          <div className="q-my-sm q-card q-card--dark q-dark q-card--flat no-shadow col-sm-9 col-xs-12">
+                        <div className="official-remote-frame">
+                          <div className="q-card q-card--dark q-dark q-card--flat no-shadow official-remote-card">
                             <div className="full-width no-padding q-card__section q-card__section--vert">
-                              <div className="flex row justify-between items-center no-wrap">
-                                <span className="cursor-pointer text-h6 q-ml-sm">{active.name}</span>
-                                <div className="flex row justify-center items-center">
+                              <div className="official-remote-head">
+                                <span className="cursor-pointer official-remote-head__name">{active.name}</span>
+                                <div className="official-remote-head__actions">
                                   {active.owned && onShareShocker ? (
                                     <button
                                       type="button"
@@ -1413,9 +1413,9 @@ export function OfficialController({
                                 </div>
                               </div>
 
-                              <div className="flex row no-wrap justify-center q-mt-md">
+                              <div className="official-remote-row">
                                 {/* SHOCK */}
-                                <div className="flex col-4 justify-end">
+                                <div className="official-remote-side">
                                   <div className="official-panel-shell">
                                     <div className="border-color-secondary q-card q-card--dark q-dark q-card--bordered">
                                       <div className="q-item__label text-center bg-dark text-secondary q-mb-xs border-color-secondary q-item__label--overline text-overline">
@@ -1609,10 +1609,7 @@ export function OfficialController({
                                 </div>
 
                                 {/* CENTER */}
-                                <div
-                                  className="flex col-auto items-center justify-around column q-mx-sm"
-                                  style={{ minWidth: 60 }}
-                                >
+                                <div className="official-remote-center">
                                   <CenterControl
                                     icon="mdi-cursor-pointer"
                                     caption="Tap"
@@ -1705,7 +1702,7 @@ export function OfficialController({
                                 </div>
 
                                 {/* VIBRATE */}
-                                <div className="flex col-4 justify-start">
+                                <div className="official-remote-side">
                                   <div className="official-panel-shell">
                                     <IntensityEdgeRail
                                       side="left"

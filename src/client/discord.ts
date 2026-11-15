@@ -1,4 +1,11 @@
-import { DiscordSDK, Common, Events } from '@discord/embedded-app-sdk';
+import {
+  DiscordSDK,
+  Common,
+  Events,
+  Permissions,
+  PermissionUtils,
+  Platform,
+} from '@discord/embedded-app-sdk';
 import { apiFetch, isEmbedded } from './api';
 import { normalizeParticipant, type DiscordParticipant } from './participants';
 import {
@@ -6,15 +13,192 @@ import {
   installDiscordSafeAreaFallback,
 } from './safeArea';
 
+export type DiscordUserProfile = {
+  id: string;
+  username: string;
+  global_name?: string | null;
+  avatar?: string | null;
+};
+
 export type AuthState = {
   accessToken: string;
-  user: {
-    id: string;
-    username: string;
-    global_name?: string | null;
-    avatar?: string | null;
-  };
+  user: DiscordUserProfile;
+  /** True when authorize included rpc.voice.read successfully. */
+  voiceRead: boolean;
 };
+
+export type CurrentUserUpdate = {
+  id: string;
+  username: string;
+  global_name?: string | null;
+  avatar?: string | null;
+};
+
+export type CurrentGuildMemberUpdate = {
+  user_id: string;
+  nick?: string | null;
+  guild_id: string;
+  avatar?: string | null;
+};
+
+export type VoiceStateFlags = {
+  muted: boolean;
+  speaking: boolean;
+};
+
+export type VoiceStateUpdate = {
+  voice_state?: {
+    mute?: boolean;
+    deaf?: boolean;
+    self_mute?: boolean;
+    self_deaf?: boolean;
+    suppress?: boolean;
+  };
+  user?: { id?: string };
+  nick?: string | null;
+  mute?: boolean;
+};
+
+export type SpeakingUpdate = {
+  channel_id?: string;
+  user_id?: string;
+};
+
+const BASE_SCOPES = [
+  'identify',
+  'guilds',
+  'guilds.members.read',
+  'rpc.activities.write',
+] as const;
+
+const VOICE_SCOPES = [...BASE_SCOPES, 'rpc.voice.read'] as const;
+
+const SPEAKING_STALE_MS = 2000;
+/**
+ * Silent authorize returns immediately when the scopes are already granted.
+ * A missing scope opens Discord's OAuth sheet; Canary sometimes fails to draw
+ * that sheet and never answers. Voice gets a short wait, then we drop it.
+ */
+const DISCORD_AUTH_TIMEOUT_MS = 15_000;
+const VOICE_AUTHORIZE_TIMEOUT_MS = 5_000;
+
+class DiscordCommandTimeoutError extends Error {
+  constructor(step: string) {
+    super(`Discord didn’t respond while ${step}. Close the activity and launch it again.`);
+    this.name = 'DiscordCommandTimeoutError';
+  }
+}
+
+/** Swallow a Discord RPC that rejects or never settles. Boot must not wait on it. */
+function ignoreRejection(work: Promise<unknown> | unknown): void {
+  if (work && typeof (work as Promise<unknown>).then === 'function') {
+    void (work as Promise<unknown>).then(
+      () => undefined,
+      () => undefined,
+    );
+  }
+}
+
+function withDeadline<T>(promise: Promise<T>, ms: number, step: string): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timer = window.setTimeout(() => {
+      reject(new DiscordCommandTimeoutError(step));
+    }, ms);
+    promise.then(
+      (value) => {
+        window.clearTimeout(timer);
+        resolve(value);
+      },
+      (error: unknown) => {
+        window.clearTimeout(timer);
+        reject(error instanceof Error ? error : new Error(String(error)));
+      },
+    );
+  });
+}
+
+/**
+ * Layout, orientation, and PIP commands are optional. Desktop and a replaced
+ * iframe often never acknowledge them. Run them only after authorize — a
+ * subscribe sent earlier is rejected as unauthenticated and can wedge the
+ * consent sheet so AUTHORIZE never returns.
+ */
+function applyOptionalActivityChrome(
+  discordSdk: DiscordSDK,
+  onLayout: (pip: boolean) => void,
+): void {
+  const applyLayout = (layoutMode: number) => {
+    applyDiscordSafeAreaFallback();
+    onLayout(layoutMode === Common.LayoutModeTypeObject.PIP);
+  };
+
+  try {
+    const sdkAny = discordSdk as DiscordSDK & {
+      subscribeToLayoutModeUpdatesCompat?: (
+        cb: (update: { layout_mode: number }) => void,
+      ) => void | Promise<unknown>;
+    };
+    if (typeof sdkAny.subscribeToLayoutModeUpdatesCompat === 'function') {
+      ignoreRejection(
+        sdkAny.subscribeToLayoutModeUpdatesCompat((update) => applyLayout(update.layout_mode)),
+      );
+    }
+  } catch {
+    // optional
+  }
+
+  try {
+    ignoreRejection(
+      discordSdk.subscribe(Events.ACTIVITY_LAYOUT_MODE_UPDATE, (update) => {
+        applyLayout(update.layout_mode);
+      }),
+    );
+  } catch {
+    // optional
+  }
+
+  ignoreRejection(
+    discordSdk.commands.setOrientationLockState({
+      lock_state: Common.OrientationLockStateTypeObject.UNLOCKED,
+      picture_in_picture_lock_state: Common.OrientationLockStateTypeObject.LANDSCAPE,
+      grid_lock_state: Common.OrientationLockStateTypeObject.LANDSCAPE,
+    }),
+  );
+  ignoreRejection(discordSdk.commands.setConfig({ use_interactive_pip: true }));
+  ignoreRejection(
+    discordSdk.subscribe(Events.ORIENTATION_UPDATE, () => {
+      applyDiscordSafeAreaFallback();
+    }),
+  );
+}
+
+/** Prefer server nick, then global display name, then username. */
+export function discordDisplayName(
+  user: Pick<DiscordUserProfile, 'username' | 'global_name'>,
+  guildNick?: string | null,
+): string {
+  const nick = guildNick?.trim();
+  if (nick) return nick;
+  const global = user.global_name?.trim();
+  if (global) return global;
+  return user.username || 'Unknown';
+}
+
+export function guildMemberAvatarUrl(
+  guildId: string,
+  userId: string,
+  avatar: string | null | undefined,
+): string | null {
+  if (!avatar || !guildId || !userId) return null;
+  const ext = avatar.startsWith('a_') ? 'gif' : 'png';
+  return `https://cdn.discordapp.com/guilds/${guildId}/users/${userId}/avatars/${avatar}.${ext}?size=128`;
+}
+
+function isVoiceMuted(state: VoiceStateUpdate['voice_state'], topLevelMute?: boolean): boolean {
+  if (topLevelMute) return true;
+  if (!state) return false;
+  return Boolean(state.mute || state.self_mute || state.suppress);
+}
 
 let sdk: DiscordSDK | null = null;
 
@@ -45,6 +229,74 @@ export function getDiscordSdk(): DiscordSDK {
     window.history.replaceState({}, '', `${window.location.pathname}${originalSearch}`);
   }
   return sdk;
+}
+
+type ActivityScope = (typeof VOICE_SCOPES)[number];
+
+function authorizeCommand(discordSdk: DiscordSDK, scope: readonly ActivityScope[]) {
+  return discordSdk.commands.authorize({
+    client_id: clientId(),
+    response_type: 'code',
+    state: '',
+    prompt: 'none',
+    scope: [...scope],
+  });
+}
+
+async function tryAuthorize(
+  discordSdk: DiscordSDK,
+  scope: readonly ActivityScope[],
+  ms: number,
+): Promise<{ ok: true; code: string } | { ok: false; timedOut: boolean; error: unknown }> {
+  try {
+    const result = await withDeadline(authorizeCommand(discordSdk, scope), ms, 'authorizing');
+    return { ok: true, code: result.code };
+  } catch (error) {
+    return {
+      ok: false,
+      timedOut: error instanceof DiscordCommandTimeoutError,
+      error,
+    };
+  }
+}
+
+/** New handshake. Closes a previous SDK so a stuck consent command cannot linger. */
+async function connectDiscordSdk(): Promise<DiscordSDK> {
+  if (sdk) {
+    try {
+      sdk.close(1000, 'reconnect');
+    } catch {
+      // already closed
+    }
+  }
+  resetDiscordClient();
+  const discordSdk = getDiscordSdk();
+  await withDeadline(discordSdk.ready(), DISCORD_AUTH_TIMEOUT_MS, 'connecting');
+  return discordSdk;
+}
+
+/**
+ * Authorize is the first RPC after ready(). Voice is optional: if Discord
+ * opens a consent sheet and never answers, reconnect and continue without it.
+ */
+async function authorizeDiscord(discordSdk: DiscordSDK): Promise<{
+  sdk: DiscordSDK;
+  code: string;
+  voiceRead: boolean;
+}> {
+  const voice = await tryAuthorize(discordSdk, VOICE_SCOPES, VOICE_AUTHORIZE_TIMEOUT_MS);
+  if (voice.ok) return { sdk: discordSdk, code: voice.code, voiceRead: true };
+
+  if (!voice.timedOut) {
+    const base = await tryAuthorize(discordSdk, BASE_SCOPES, DISCORD_AUTH_TIMEOUT_MS);
+    if (base.ok) return { sdk: discordSdk, code: base.code, voiceRead: false };
+    if (!base.timedOut) throw base.error;
+  }
+
+  const retrySdk = await connectDiscordSdk();
+  const base = await tryAuthorize(retrySdk, BASE_SCOPES, DISCORD_AUTH_TIMEOUT_MS);
+  if (base.ok) return { sdk: retrySdk, code: base.code, voiceRead: false };
+  throw base.error;
 }
 
 export function getActivityInstanceId(): string | null {
@@ -178,68 +430,19 @@ export async function bootstrapDiscord(
         username: 'DevUser',
         global_name: 'Local Dev',
       },
+      voiceRead: false,
     };
   }
 
   report(8, 'Connecting to Discord…');
   // Always start from a fresh SDK instance after reload / version bump.
-  resetDiscordClient();
-  const discordSdk = getDiscordSdk();
-  await discordSdk.ready();
+  let discordSdk = await connectDiscordSdk();
   report(22, 'Preparing activity…');
   installDiscordSafeAreaFallback();
 
-  try {
-    await discordSdk.commands.setOrientationLockState({
-      lock_state: Common.OrientationLockStateTypeObject.UNLOCKED,
-      picture_in_picture_lock_state: Common.OrientationLockStateTypeObject.LANDSCAPE,
-      grid_lock_state: Common.OrientationLockStateTypeObject.LANDSCAPE,
-    });
-  } catch {
-    // optional
-  }
-
-  const applyLayout = (layoutMode: number) => {
-    applyDiscordSafeAreaFallback();
-    onLayout(layoutMode === Common.LayoutModeTypeObject.PIP);
-  };
-
-  // Prefer compat helper (covers old ACTIVITY_PIP_MODE_UPDATE + new layout events)
-  try {
-    const sdkAny = discordSdk as DiscordSDK & {
-      subscribeToLayoutModeUpdatesCompat?: (cb: (update: { layout_mode: number }) => void) => void;
-    };
-    if (typeof sdkAny.subscribeToLayoutModeUpdatesCompat === 'function') {
-      sdkAny.subscribeToLayoutModeUpdatesCompat((update) => applyLayout(update.layout_mode));
-    }
-  } catch {
-    // optional
-  }
-
-  // Also subscribe to the modern layout event directly
-  try {
-    void discordSdk.subscribe(Events.ACTIVITY_LAYOUT_MODE_UPDATE, (update) => {
-      applyLayout(update.layout_mode);
-    });
-  } catch {
-    // optional
-  }
-
-  // Keep the PIP surface alive so last-hit updates (WS/logs) still arrive
-  try {
-    await discordSdk.commands.setConfig({ use_interactive_pip: true });
-  } catch {
-    // optional / unsupported on some clients
-  }
-
   report(38, 'Authorizing with Discord…');
-  const { code } = await discordSdk.commands.authorize({
-    client_id: clientId(),
-    response_type: 'code',
-    state: '',
-    prompt: 'none',
-    scope: ['identify', 'guilds', 'guilds.members.read', 'rpc.activities.write'],
-  });
+  const authorized = await authorizeDiscord(discordSdk);
+  discordSdk = authorized.sdk;
 
   report(58, 'Exchanging session…');
   const result = await apiFetch<{
@@ -247,16 +450,22 @@ export async function bootstrapDiscord(
     user: AuthState['user'];
   }>('/auth/discord', null, {
     method: 'POST',
-    body: JSON.stringify({ code }),
+    body: JSON.stringify({ code: authorized.code }),
   });
 
   report(72, 'Signing into activity…');
-  await discordSdk.commands.authenticate({ access_token: result.access_token });
+  await withDeadline(
+    discordSdk.commands.authenticate({ access_token: result.access_token }),
+    DISCORD_AUTH_TIMEOUT_MS,
+    'signing in',
+  );
+  applyOptionalActivityChrome(discordSdk, onLayout);
   report(82, 'Authenticated');
 
   return {
     accessToken: result.access_token,
     user: result.user,
+    voiceRead: authorized.voiceRead,
   };
 }
 
@@ -291,6 +500,191 @@ export function subscribeParticipants(
   };
 }
 
+export function subscribeCurrentUser(
+  onUpdate: (user: CurrentUserUpdate) => void,
+): () => void {
+  if (!isEmbedded) return () => undefined;
+  const discordSdk = getDiscordSdk();
+  const handler = (data: CurrentUserUpdate) => {
+    onUpdate({
+      id: String(data.id),
+      username: String(data.username ?? ''),
+      global_name: data.global_name != null ? String(data.global_name) : null,
+      avatar: data.avatar != null ? String(data.avatar) : null,
+    });
+  };
+  try {
+    void discordSdk.subscribe(Events.CURRENT_USER_UPDATE, handler);
+  } catch {
+    // optional
+  }
+  return () => {
+    try {
+      void discordSdk.unsubscribe(Events.CURRENT_USER_UPDATE, handler);
+    } catch {
+      // ignore
+    }
+  };
+}
+
+export function subscribeCurrentGuildMember(
+  onUpdate: (member: CurrentGuildMemberUpdate) => void,
+): () => void {
+  if (!isEmbedded) return () => undefined;
+  let discordSdk: DiscordSDK;
+  try {
+    discordSdk = getDiscordSdk();
+  } catch {
+    return () => undefined;
+  }
+  const guildId = discordSdk.guildId ? String(discordSdk.guildId) : null;
+  if (!guildId) return () => undefined;
+
+  const handler = (data: CurrentGuildMemberUpdate) => {
+    onUpdate({
+      user_id: String(data.user_id ?? ''),
+      nick: data.nick != null && String(data.nick).trim() ? String(data.nick) : null,
+      guild_id: String(data.guild_id ?? guildId),
+      avatar: data.avatar != null ? String(data.avatar) : null,
+    });
+  };
+  try {
+    void discordSdk.subscribe(Events.CURRENT_GUILD_MEMBER_UPDATE, handler, {
+      guild_id: guildId,
+    });
+  } catch {
+    // optional / DM / unsupported
+  }
+  return () => {
+    try {
+      void discordSdk.unsubscribe(Events.CURRENT_GUILD_MEMBER_UPDATE, handler, {
+        guild_id: guildId,
+      });
+    } catch {
+      // ignore
+    }
+  };
+}
+
+/**
+ * Seed mute flags + live voice/speaking subscriptions for the activity channel.
+ * Requires rpc.voice.read (AuthState.voiceRead).
+ */
+export function subscribeVoiceIndicators(
+  onUpdate: (map: Record<string, VoiceStateFlags>) => void,
+): () => void {
+  if (!isEmbedded) return () => undefined;
+  let discordSdk: DiscordSDK;
+  try {
+    discordSdk = getDiscordSdk();
+  } catch {
+    return () => undefined;
+  }
+  const channelId = discordSdk.channelId ? String(discordSdk.channelId) : null;
+  if (!channelId) return () => undefined;
+
+  const map: Record<string, VoiceStateFlags> = {};
+  const speakingTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  let cancelled = false;
+
+  const emit = () => {
+    if (cancelled) return;
+    onUpdate({ ...map });
+  };
+
+  const ensure = (userId: string): VoiceStateFlags => {
+    if (!map[userId]) map[userId] = { muted: false, speaking: false };
+    return map[userId];
+  };
+
+  const clearSpeakingTimer = (userId: string) => {
+    const t = speakingTimers.get(userId);
+    if (t) {
+      clearTimeout(t);
+      speakingTimers.delete(userId);
+    }
+  };
+
+  const setSpeaking = (userId: string, speaking: boolean) => {
+    if (!userId) return;
+    const row = ensure(userId);
+    clearSpeakingTimer(userId);
+    if (speaking) {
+      row.speaking = true;
+      speakingTimers.set(
+        userId,
+        setTimeout(() => {
+          speakingTimers.delete(userId);
+          if (map[userId]) {
+            map[userId].speaking = false;
+            emit();
+          }
+        }, SPEAKING_STALE_MS),
+      );
+    } else {
+      row.speaking = false;
+    }
+    emit();
+  };
+
+  const onVoiceState = (data: VoiceStateUpdate) => {
+    const userId = data.user?.id != null ? String(data.user.id) : '';
+    if (!userId) return;
+    const row = ensure(userId);
+    row.muted = isVoiceMuted(data.voice_state, data.mute);
+    emit();
+  };
+
+  const onSpeakingStart = (data: SpeakingUpdate) => {
+    setSpeaking(data.user_id != null ? String(data.user_id) : '', true);
+  };
+
+  const onSpeakingStop = (data: SpeakingUpdate) => {
+    setSpeaking(data.user_id != null ? String(data.user_id) : '', false);
+  };
+
+  const args = { channel_id: channelId };
+
+  void (async () => {
+    try {
+      const channel = await discordSdk.commands.getChannel({ channel_id: channelId });
+      if (cancelled) return;
+      const states =
+        (channel as { voice_states?: VoiceStateUpdate[] }).voice_states ?? [];
+      for (const vs of states) {
+        const userId = vs.user?.id != null ? String(vs.user.id) : '';
+        if (!userId) continue;
+        const row = ensure(userId);
+        row.muted = isVoiceMuted(vs.voice_state, vs.mute);
+      }
+      emit();
+    } catch {
+      // optional — live events still work
+    }
+
+    try {
+      await discordSdk.subscribe(Events.VOICE_STATE_UPDATE, onVoiceState, args);
+      await discordSdk.subscribe(Events.SPEAKING_START, onSpeakingStart, args);
+      await discordSdk.subscribe(Events.SPEAKING_STOP, onSpeakingStop, args);
+    } catch {
+      // missing scope / unsupported
+    }
+  })();
+
+  return () => {
+    cancelled = true;
+    for (const t of speakingTimers.values()) clearTimeout(t);
+    speakingTimers.clear();
+    try {
+      void discordSdk.unsubscribe(Events.VOICE_STATE_UPDATE, onVoiceState, args);
+      void discordSdk.unsubscribe(Events.SPEAKING_START, onSpeakingStart, args);
+      void discordSdk.unsubscribe(Events.SPEAKING_STOP, onSpeakingStop, args);
+    } catch {
+      // ignore
+    }
+  };
+}
+
 export async function openExternal(url: string) {
   if (isEmbedded) {
     const discordSdk = getDiscordSdk();
@@ -302,6 +696,92 @@ export async function openExternal(url: string) {
     }
   }
   window.open(url, '_blank', 'noopener,noreferrer');
+}
+
+/** True when the Discord client reports desktop (share-moment is desktop-only). */
+export function isDesktopPlatform(): boolean {
+  if (!isEmbedded) return false;
+  try {
+    return getDiscordSdk().platform === Platform.DESKTOP;
+  } catch {
+    return new URLSearchParams(window.location.search).get('platform') === Platform.DESKTOP;
+  }
+}
+
+export type InviteActivityResult =
+  | { method: 'invite_dialog' }
+  | { method: 'share_link'; success: boolean };
+
+/**
+ * Invite someone into the activity: guild invite dialog when permitted,
+ * otherwise shareLink (works in DMs / without CREATE_INSTANT_INVITE).
+ */
+export async function inviteToActivity(): Promise<InviteActivityResult> {
+  if (!isEmbedded) {
+    throw new Error('Invite is only available inside Discord');
+  }
+  const discordSdk = getDiscordSdk();
+  const guildId = discordSdk.guildId ? String(discordSdk.guildId) : null;
+
+  if (guildId) {
+    try {
+      const { permissions } = await discordSdk.commands.getChannelPermissions();
+      if (PermissionUtils.can(Permissions.CREATE_INSTANT_INVITE, permissions)) {
+        await discordSdk.commands.openInviteDialog();
+        return { method: 'invite_dialog' };
+      }
+    } catch {
+      // Fall through to shareLink
+    }
+  }
+
+  const { success } = await discordSdk.commands.shareLink({
+    message: 'Join me in the PiShock activity.',
+  });
+  return { method: 'share_link', success };
+}
+
+/** Upload a PNG (or other image) to Discord’s ephemeral activity attachment CDN. */
+export async function uploadActivityAttachment(
+  accessToken: string,
+  file: Blob,
+  filename?: string,
+): Promise<string> {
+  if (!accessToken || accessToken === 'dev-token') {
+    throw new Error('Share requires Discord authentication');
+  }
+  const name =
+    filename ?? (file.type === 'image/gif' ? 'pishock-moment.gif' : 'pishock-moment.png');
+  const body = new FormData();
+  body.append('file', file, name);
+  const res = await fetch(
+    `https://discord.com/api/applications/${clientId()}/attachment`,
+    {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${accessToken}` },
+      body,
+    },
+  );
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    throw new Error(text || `Attachment upload failed (${res.status})`);
+  }
+  const json = (await res.json()) as { attachment?: { url?: string }; url?: string };
+  const mediaUrl = json.attachment?.url || json.url;
+  if (!mediaUrl) throw new Error('Attachment upload returned no URL');
+  return String(mediaUrl);
+}
+
+/** Open Discord’s share-moment dialog (desktop only). */
+export async function openShareMoment(mediaUrl: string): Promise<void> {
+  if (!isEmbedded) {
+    throw new Error('Share is only available inside Discord');
+  }
+  if (!isDesktopPlatform()) {
+    throw new Error('Share moment is only available on desktop Discord');
+  }
+  const discordSdk = getDiscordSdk();
+  await discordSdk.commands.openShareMomentDialog({ mediaUrl });
 }
 
 /**

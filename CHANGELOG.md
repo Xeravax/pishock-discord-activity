@@ -1,5 +1,21 @@
 # Changelog
 
+## v2.2.0 — 2026-11-15
+
+## What's changed
+
+### Friends & sharing
+- Invite someone into the activity from the roster (Discord invite dialog, or a share link)
+- Share a shock, vibrate, or beep from the log as an animated card in Discord (desktop activity)
+- Shared cards show a warning pill when a pre-shock warning was sent
+- Roster avatars show who is speaking or muted when voice access is allowed
+
+### Discord & layout
+- Discord connect times out and retries cleanly, and the activity still opens if voice permission is declined
+- Official remote layout fits more window sizes
+
+**Full changelog**: https://github.com/Xeravax/pishock-discord-activity/compare/v2.1.1...v2.2.0
+
 ## v2.1.1 — 2026-11-15
 
 ## What's changed
