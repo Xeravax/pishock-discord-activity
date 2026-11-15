@@ -650,13 +650,15 @@ export async function inviteToActivity(): Promise<InviteActivityResult> {
 export async function uploadActivityAttachment(
   accessToken: string,
   file: Blob,
-  filename = 'pishock-moment.png',
+  filename?: string,
 ): Promise<string> {
   if (!accessToken || accessToken === 'dev-token') {
     throw new Error('Share requires Discord authentication');
   }
+  const name =
+    filename ?? (file.type === 'image/gif' ? 'pishock-moment.gif' : 'pishock-moment.png');
   const body = new FormData();
-  body.append('file', file, filename);
+  body.append('file', file, name);
   const res = await fetch(
     `https://discord.com/api/applications/${clientId()}/attachment`,
     {
