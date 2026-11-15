@@ -30,6 +30,8 @@ export type OfficialLogEntry = {
   shockerName: string | null;
   hubClientId: string | null;
   hubName: string | null;
+  /** Pre-shock warning sent with this shock or hold. Null when none or unknown. */
+  warningLevel: 'small' | 'mid' | 'long' | null;
   intensity: number | null;
   durationSec: number | null;
   at: number;
@@ -66,6 +68,10 @@ function actionIcon(action: OfficialLogEntry['action']): string {
   if (action === 'beep') return 'mdi-bell';
   if (action === 'shock') return 'mdi-lightning-bolt';
   return 'mdi-circle-outline';
+}
+
+function loggedWarningLevel(value: unknown): OfficialLogEntry['warningLevel'] {
+  return value === 'small' || value === 'mid' || value === 'long' ? value : null;
 }
 
 function formatDuration(sec: number): string {
@@ -303,6 +309,7 @@ type PublicLogApiRow = {
   shockerName?: string | null;
   hubClientId?: string | null;
   hubName?: string | null;
+  warningLevel?: string | null;
   intensity?: number | null;
   durationMs?: number | null;
   createdAt?: string;
@@ -382,6 +389,7 @@ export function normalizePublicLogs(
           : null,
       hubName:
         typeof row.hubName === 'string' && row.hubName.trim() ? row.hubName.trim() : null,
+      warningLevel: loggedWarningLevel(row.warningLevel),
       intensity,
       durationSec: durationMs != null ? Math.round((durationMs / 1000) * 10) / 10 : null,
       at,
@@ -445,6 +453,7 @@ export function normalizeActivityLogs(
           : null,
       hubName:
         typeof row.hubName === 'string' && row.hubName.trim() ? row.hubName.trim() : null,
+      warningLevel: loggedWarningLevel(row.warningLevel),
       intensity,
       durationSec: durationMs != null ? Math.round((durationMs / 1000) * 10) / 10 : null,
       at,

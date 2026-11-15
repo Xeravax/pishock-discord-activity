@@ -106,6 +106,7 @@ async function auditParticipantCommand(input: {
   shockerName?: string | null;
   hubClientId?: string | null;
   hubName?: string | null;
+  warningLevel?: WarningLevel | null;
   shareCode?: string | null;
   intensity: number;
   durationMs: number;
@@ -122,6 +123,7 @@ async function auditParticipantCommand(input: {
     shockerName: input.shockerName,
     hubClientId: input.hubClientId,
     hubName: input.hubName,
+    warningLevel: input.warningLevel,
     intensity: input.intensity,
     durationMs: input.durationMs,
     success: input.success,
@@ -693,6 +695,7 @@ export const participantRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app
           ? ShockerOp.Vibrate
           : ShockerOp.Beep;
 
+    let sentWarning: WarningLevel = 'none';
     try {
       if (hold && !clientId) {
         return reply.code(502).send({
@@ -701,7 +704,7 @@ export const participantRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app
         });
       }
       const pendingHold = hold ? beginPendingHold(targetDiscordUserId, shockerId) : null;
-      await warnBeforeShock({
+      sentWarning = await warnBeforeShock({
         operation,
         requestedWarningLevel,
         requiredWarningLevel: modes.requiredWarningLevel,
@@ -836,6 +839,7 @@ export const participantRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app
             shockerName: share.shockerName,
             hubClientId: share.hubClientId ?? clientId ?? null,
             hubName: share.hubName ?? null,
+            warningLevel: sentWarning,
             shareCode: null,
             intensity,
             durationMs,
@@ -887,6 +891,7 @@ export const participantRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app
         shockerName: share.shockerName,
         hubClientId: share.hubClientId ?? clientId ?? null,
         hubName: share.hubName ?? null,
+        warningLevel: sentWarning,
         shareCode: null,
         intensity,
         durationMs,
@@ -914,6 +919,7 @@ export const participantRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app
         shockerName: share.shockerName,
         hubClientId: share.hubClientId ?? clientId ?? null,
         hubName: share.hubName ?? null,
+        warningLevel: sentWarning,
         shareCode: null,
         intensity,
         durationMs,

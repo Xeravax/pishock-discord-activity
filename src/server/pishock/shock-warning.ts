@@ -71,7 +71,7 @@ const defaultWarnDeps: WarnBeforeShockDeps = {
 };
 
 /**
- * Publish the warning vibe and wait. Returns when the shock or hold may proceed.
+ * Publish the warning vibe and wait. Returns the level that was sent (`none` when skipped).
  * A non-none level with no hub, a failed publish, or an emergency stop after the wait aborts.
  */
 export async function warnBeforeShock(
@@ -90,14 +90,14 @@ export async function warnBeforeShock(
     gateOnShare?: boolean;
   },
   deps: WarnBeforeShockDeps = defaultWarnDeps,
-): Promise<void> {
-  if (input.operation !== 'shock' && input.operation !== 'hold') return;
+): Promise<WarningLevel> {
+  if (input.operation !== 'shock' && input.operation !== 'hold') return 'none';
 
   const level = atLeastWarning(
     normalizeWarningLevel(input.requestedWarningLevel),
     input.requiredWarningLevel,
   );
-  if (level === 'none') return;
+  if (level === 'none') return 'none';
 
   if (!input.canVibrate) {
     const ownerRequired = input.requiredWarningLevel !== 'none';
@@ -163,4 +163,5 @@ export async function warnBeforeShock(
   if (await deps.isEmergencyStopped(input.ownerDiscordUserId, input.shockerId)) {
     throw new ShockWarningError('Owner has emergency stop engaged', 423, 'EMERGENCY_STOP');
   }
+  return level;
 }

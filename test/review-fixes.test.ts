@@ -121,7 +121,7 @@ describe('warnBeforeShock', () => {
 
   it('skips when effective warning level is none', async () => {
     let published = 0;
-    await warnBeforeShock(
+    const level = await warnBeforeShock(
       {
         operation: 'shock',
         requestedWarningLevel: 'none',
@@ -142,7 +142,30 @@ describe('warnBeforeShock', () => {
         sleep: async () => undefined,
       },
     );
+    assert.equal(level, 'none');
     assert.equal(published, 0);
+  });
+
+  it('returns the warning level that was sent', async () => {
+    const level = await warnBeforeShock(
+      {
+        operation: 'shock',
+        requestedWarningLevel: 'small',
+        requiredWarningLevel: 'none',
+        canVibrate: true,
+        creds: CREDS,
+        clientId: 'hub-1',
+        shockerId: 7,
+        ownerDiscordUserId: 'owner',
+        vibrateBand: vibeBand,
+      },
+      {
+        publishOperate: async () => true,
+        isEmergencyStopped: async () => false,
+        sleep: async () => undefined,
+      },
+    );
+    assert.equal(level, 'small');
   });
 
   it('aborts when the warning publish fails', async () => {

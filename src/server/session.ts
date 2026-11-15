@@ -16,7 +16,7 @@ import {
   clampQueueMaxPerSender,
 } from './pishock/command-queue.js';
 import { personalBandsFromUser, shareBandsFromRow } from './limit-bands.js';
-import { normalizeWarningLevel } from '../shared/warning.js';
+import { normalizeWarningLevel, type WarningLevel } from '../shared/warning.js';
 
 export async function savePiShockSession(
   env: AppEnv,
@@ -281,6 +281,12 @@ function cleanLoggedName(value: string | null | undefined): string | null {
   return name ? name.slice(0, 120) : null;
 }
 
+/** Persist only a warning that was actually sent. `none` and unknown values stay null. */
+function storedWarningLevel(value: unknown): Exclude<WarningLevel, 'none'> | null {
+  const level = normalizeWarningLevel(value, 'none');
+  return level === 'none' ? null : level;
+}
+
 /** @deprecated use cleanLoggedName */
 function cleanLoggedShockerName(value: string | null | undefined): string | null {
   return cleanLoggedName(value);
@@ -352,6 +358,8 @@ export async function logCommand(input: {
   shockerName?: string | null;
   hubClientId?: string | null;
   hubName?: string | null;
+  /** small | mid | long when a warning vibe was sent before this shock or hold. */
+  warningLevel?: WarningLevel | null;
   shareCode?: string;
   intensity?: number;
   durationMs?: number;
@@ -383,6 +391,7 @@ export async function logCommand(input: {
     shareMeta?.hubClientId ||
     null;
   const hubName = cleanLoggedName(input.hubName) ?? shareMeta?.hubName ?? null;
+  const warningLevel = storedWarningLevel(input.warningLevel);
 
   await prisma.commandLog.create({
     data: {
@@ -395,6 +404,7 @@ export async function logCommand(input: {
       shockerName,
       hubClientId,
       hubName,
+      warningLevel,
       shareCode: input.shareCode,
       intensity: input.intensity,
       durationMs: input.durationMs,
@@ -1048,6 +1058,7 @@ export async function listPublicCommandLogs(limit = 200) {
       shockerName: true,
       hubClientId: true,
       hubName: true,
+      warningLevel: true,
       intensity: true,
       durationMs: true,
       success: true,
@@ -1124,6 +1135,7 @@ export async function listPublicCommandLogs(limit = 200) {
       shockerName: cleanLoggedName(row.shockerName) ?? meta?.shockerName ?? null,
       hubClientId: row.hubClientId ?? meta?.hubClientId ?? null,
       hubName: cleanLoggedName(row.hubName) ?? meta?.hubName ?? null,
+      warningLevel: storedWarningLevel(row.warningLevel),
       intensity: row.intensity,
       durationMs: row.durationMs,
       success: row.success,

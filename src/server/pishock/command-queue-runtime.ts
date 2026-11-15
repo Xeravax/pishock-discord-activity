@@ -10,7 +10,7 @@ import {
   scheduleHoldAutoEnd,
 } from '../operate-policy.js';
 import { bandForOperation, nestBands, personalBandsFromUser, shareBandsFromRow } from '../limit-bands.js';
-import { atLeastWarning, normalizeWarningLevel, warningRank } from '../../shared/warning.js';
+import { atLeastWarning, normalizeWarningLevel, warningRank, type WarningLevel } from '../../shared/warning.js';
 import {
   findActivityShareByShocker,
   getCommandQueueSettings,
@@ -71,6 +71,7 @@ async function auditParticipantCommand(input: {
   shockerName?: string | null;
   hubClientId?: string | null;
   hubName?: string | null;
+  warningLevel?: WarningLevel | null;
   shareCode?: string | null;
   intensity: number;
   durationMs: number;
@@ -87,6 +88,7 @@ async function auditParticipantCommand(input: {
     shockerName: input.shockerName,
     hubClientId: input.hubClientId,
     hubName: input.hubName,
+    warningLevel: input.warningLevel,
     intensity: input.intensity,
     durationMs: input.durationMs,
     success: input.success,
@@ -271,6 +273,7 @@ async function executeQueuedItem(
     shockerName: null as string | null,
     hubClientId: clientId,
     hubName: null as string | null,
+    warningLevel: null as WarningLevel | null,
     shareCode: null as string | null,
     intensity: item.intensity,
     durationMs: item.durationMs,
@@ -331,7 +334,7 @@ async function executeQueuedItem(
 
     if (isCanceled?.() || await isEmergencyStopped(item.ownerDiscordUserId, item.shockerId)) return;
     if (isCanceled?.()) return;
-    await warnBeforeShock({
+    const sentWarning = await warnBeforeShock({
       operation: item.operation,
       requestedWarningLevel: item.warningLevel,
       requiredWarningLevel: modes.requiredWarningLevel,
@@ -343,6 +346,7 @@ async function executeQueuedItem(
       vibrateBand: modes.vibrate,
       gateOnShare: true,
     });
+    auditBase.warningLevel = sentWarning === 'none' ? null : sentWarning;
     if (isCanceled?.()) return;
 
     const shareNow = await findActivityShareByShocker(item.ownerDiscordUserId, item.shockerId);

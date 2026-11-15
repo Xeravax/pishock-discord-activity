@@ -1,4 +1,5 @@
 import { GIFEncoder, applyPalette, quantize } from 'gifenc';
+import { WARNING_PRESETS } from '../shared/warning';
 import type { OfficialLogEntry } from './components/OfficialLogsPanel';
 import markUrl from './assets/pishock-mark.png';
 
@@ -7,7 +8,6 @@ const CARD_W = 1280;
 const CARD_H = 715;
 
 const COLORS = {
-  outer: '#23282d',
   card: '#12171c',
   cyan: '#5ad8ff',
   yellow: '#ffe500',
@@ -74,10 +74,22 @@ function headlineFor(action: OfficialLogEntry['action']): string {
   return 'ZAPPED';
 }
 
-function motionFor(action: OfficialLogEntry['action']): { frames: number; delay: number } {
-  if (action === 'vibrate') return { frames: 8, delay: 45 };
-  if (action === 'beep') return { frames: 12, delay: 70 };
-  return { frames: 12, delay: 75 };
+/** 0 at 0%, 1 at 100%. Missing intensity sits in the middle. */
+function intensityT(entry: OfficialLogEntry): number {
+  if (entry.intensity == null || !Number.isFinite(entry.intensity)) return 0.55;
+  return Math.min(1, Math.max(0, entry.intensity / 100));
+}
+
+function motionFor(entry: OfficialLogEntry): { frames: number; delay: number; t: number } {
+  const t = intensityT(entry);
+  const punch = t * t;
+  if (entry.action === 'vibrate') {
+    return { frames: 8, delay: Math.max(20, Math.round(76 - punch * 52)), t };
+  }
+  if (entry.action === 'beep') {
+    return { frames: 12, delay: Math.max(24, Math.round(108 - punch * 64)), t };
+  }
+  return { frames: 12, delay: Math.max(24, Math.round(118 - punch * 72)), t };
 }
 
 function formatDuration(sec: number): string {
@@ -529,19 +541,26 @@ function drawOrbitingBolts(
   frame: number,
   frames: number,
   boltScale: number,
+  t: number,
 ) {
   const spin = (frame / frames) * Math.PI * 2;
-  const spots = [0, Math.PI];
+  const count = t < 0.28 ? 1 : t < 0.8 ? 2 : 3;
+  const spots = count === 1 ? [0] : count === 2 ? [0, Math.PI] : [0, (Math.PI * 2) / 3, (Math.PI * 4) / 3];
+  const trail = 0.22 + t * 1.05;
+  const width = 1.3 + t * 3.4;
+  const blur = 3 + t * 16;
+  const scaleMul = 0.38 + t * 1.35;
+  const sparkR = 1.4 + t * 4.2;
   for (let i = 0; i < spots.length; i++) {
-    const a = spin + spots[i];
+    const a = spin + spots[i]!;
     ctx.save();
-    ctx.strokeStyle = 'rgba(255, 229, 0, 0.8)';
-    ctx.lineWidth = 3;
+    ctx.strokeStyle = `rgba(255, 229, 0, ${0.35 + t * 0.6})`;
+    ctx.lineWidth = width;
     ctx.lineCap = 'round';
     ctx.shadowColor = COLORS.yellow;
-    ctx.shadowBlur = 10;
+    ctx.shadowBlur = blur;
     ctx.beginPath();
-    ctx.ellipse(cx, cy, rx, ry, 0, a - 0.85, a - 0.08);
+    ctx.ellipse(cx, cy, rx, ry, 0, a - trail, a - 0.05);
     ctx.stroke();
     ctx.restore();
 
@@ -550,8 +569,17 @@ function drawOrbitingBolts(
     const tx = -Math.sin(a) * rx;
     const ty = Math.cos(a) * ry;
     const rot = Math.atan2(ty, tx) + Math.PI / 2;
-    drawFilledBolt(ctx, x, y, (i === 0 ? 1.15 : 0.82) * boltScale, rot, COLORS.yellow);
-    drawStar(ctx, cx + Math.cos(a - 0.45) * rx, cy + Math.sin(a - 0.45) * ry, 3.2, '#fff6c2', 0.95);
+    drawFilledBolt(ctx, x, y, (i === 0 ? 1.15 : 0.78) * boltScale * scaleMul, rot, COLORS.yellow);
+    if (t > 0.12) {
+      drawStar(
+        ctx,
+        cx + Math.cos(a - 0.4) * rx,
+        cy + Math.sin(a - 0.4) * ry,
+        sparkR,
+        '#fff6c2',
+        0.4 + t * 0.55,
+      );
+    }
   }
 }
 
@@ -564,21 +592,23 @@ function drawBeepWaves(
   sideGap: number,
   frame: number,
   frames: number,
+  t: number,
 ) {
-  const maxR = Math.max(16, Math.min(32, sideGap - 16));
-  const waves = 2;
+  const maxR = Math.max(12, Math.min(10 + t * 26, sideGap - 12));
+  const waves = t < 0.3 ? 1 : t < 0.72 ? 2 : 3;
+  const loud = 0.28 + t * 0.72;
   for (const dir of [-1, 1] as const) {
     const ox = cx + dir * (halfW + 12);
     for (let i = 0; i < waves; i++) {
-      const t = (frame / frames + i / waves) % 1;
-      const radius = 8 + t * (maxR - 8);
+      const travel = (frame / frames + i / waves) % 1;
+      const radius = 6 + travel * (maxR - 6);
       ctx.save();
-      ctx.globalAlpha = (1 - t) * 0.95;
-      ctx.strokeStyle = t < 0.45 ? '#e9fbff' : COLORS.cyan;
-      ctx.lineWidth = 3.4 - t * 1.4;
+      ctx.globalAlpha = (1 - travel) * loud;
+      ctx.strokeStyle = travel < 0.45 ? '#e9fbff' : COLORS.cyan;
+      ctx.lineWidth = (1.3 + t * 3.6) * (1 - travel * 0.45);
       ctx.lineCap = 'round';
       ctx.shadowColor = 'rgba(90, 216, 255, 0.85)';
-      ctx.shadowBlur = 8;
+      ctx.shadowBlur = 3 + t * 12;
       ctx.beginPath();
       if (dir > 0) ctx.arc(ox, cy, radius, -1.05, 1.05);
       else ctx.arc(ox, cy, radius, Math.PI - 1.05, Math.PI + 1.05);
@@ -642,6 +672,103 @@ function drawMiniMark(
   ctx.restore();
 }
 
+function deviceCaption(entry: OfficialLogEntry, kind: 'hub' | 'shocker'): string | null {
+  if (kind === 'hub') {
+    const name = entry.hubName?.trim();
+    if (name) return name;
+    const id = entry.hubClientId?.trim();
+    return id || null;
+  }
+  const name = entry.shockerName?.trim();
+  if (name) return name;
+  return entry.shockerId != null ? String(entry.shockerId) : null;
+}
+
+function warningCaption(entry: OfficialLogEntry): string | null {
+  const level = entry.warningLevel;
+  if (level !== 'small' && level !== 'mid' && level !== 'long') return null;
+  return WARNING_PRESETS[level].label;
+}
+
+/** Hub, shocker, and a warning pill when a warning vibe was sent before the shock. */
+function drawDeviceMeta(
+  ctx: CanvasRenderingContext2D,
+  entry: OfficialLogEntry,
+  cx: number,
+  cy: number,
+) {
+  const hub = deviceCaption(entry, 'hub');
+  const shocker = deviceCaption(entry, 'shocker');
+  const warning = warningCaption(entry);
+  if (!hub && !shocker && !warning) return;
+
+  const labelFont = `700 18px ${FONT}`;
+  const valueFont = `700 28px ${FONT}`;
+  const pillFont = `700 18px ${FONT}`;
+  const maxW = CARD_W - 128;
+  const fieldGap = 26;
+  const labelGap = 8;
+  const fields: Array<{ label: string; value: string; color: string }> = [];
+  if (hub) fields.push({ label: 'HUB', value: hub, color: COLORS.white });
+  if (shocker) fields.push({ label: 'SHOCKER', value: shocker, color: COLORS.cyan });
+
+  const pillText = warning ? `WARNING ${warning}` : '';
+  ctx.font = pillFont;
+  const pillPadX = 14;
+  const pillW = warning ? ctx.measureText(pillText).width + pillPadX * 2 : 0;
+  const pillH = 36;
+
+  ctx.font = labelFont;
+  let overhead = 0;
+  for (let i = 0; i < fields.length; i++) {
+    if (i > 0) overhead += fieldGap;
+    overhead += ctx.measureText(fields[i]!.label).width + labelGap;
+  }
+  if (warning) overhead += (fields.length ? fieldGap : 0) + pillW;
+  const valueBudget = Math.max(48, maxW - overhead);
+  const each = fields.length ? valueBudget / fields.length : 0;
+  ctx.font = valueFont;
+  const values = fields.map((field) => truncate(ctx, field.value, each));
+
+  ctx.font = labelFont;
+  let total = overhead;
+  ctx.font = valueFont;
+  for (const value of values) total += ctx.measureText(value).width;
+
+  let x = cx - total / 2;
+  ctx.textBaseline = 'middle';
+  ctx.textAlign = 'left';
+  for (let i = 0; i < fields.length; i++) {
+    if (i > 0) x += fieldGap;
+    const field = fields[i]!;
+    ctx.font = labelFont;
+    ctx.fillStyle = COLORS.muted;
+    ctx.fillText(field.label, x, cy + 1);
+    x += ctx.measureText(field.label).width + labelGap;
+    ctx.font = valueFont;
+    ctx.fillStyle = field.color;
+    const shown = values[i] ?? '';
+    ctx.fillText(shown, x, cy);
+    x += ctx.measureText(shown).width;
+  }
+
+  if (!warning) return;
+  if (fields.length) x += fieldGap;
+  const pillY = cy - pillH / 2;
+  roundRect(ctx, x, pillY, pillW, pillH, pillH / 2);
+  ctx.fillStyle = 'rgba(255, 229, 0, 0.16)';
+  ctx.fill();
+  roundRect(ctx, x, pillY, pillW, pillH, pillH / 2);
+  ctx.lineWidth = 2;
+  ctx.strokeStyle = COLORS.yellow;
+  ctx.stroke();
+  ctx.font = pillFont;
+  ctx.fillStyle = COLORS.yellow;
+  ctx.textAlign = 'center';
+  ctx.fillText(pillText, x + pillW / 2, cy + 1);
+  ctx.textAlign = 'left';
+}
+
 function drawDetail(ctx: CanvasRenderingContext2D, entry: OfficialLogEntry, cx: number, cy: number) {
   const segs = detailSegments(entry);
   if (!segs.length) return;
@@ -667,6 +794,7 @@ function drawHeadline(
   layout: Layout,
   dx = 0,
   dy = 0,
+  t = 0,
 ) {
   const cx = CARD_W / 2 + dx;
   const cy = layout.heroY + dy;
@@ -675,18 +803,24 @@ function drawHeadline(
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   if (entry.action === 'vibrate') {
+    const ghost = 2 + t * 16;
     ctx.save();
-    ctx.globalAlpha = 0.45;
+    ctx.globalAlpha = 0.12 + t * 0.5;
     ctx.fillStyle = COLORS.ghost;
-    ctx.fillText(layout.headline, cx - 6, cy);
+    ctx.fillText(layout.headline, cx - ghost, cy);
     ctx.fillStyle = COLORS.magenta;
-    ctx.globalAlpha = 0.28;
-    ctx.fillText(layout.headline, cx + 5, cy + 1);
+    ctx.globalAlpha = 0.08 + t * 0.38;
+    ctx.fillText(layout.headline, cx + ghost * 0.85, cy + 1);
+    if (t > 0.72) {
+      ctx.globalAlpha = 0.28;
+      ctx.fillStyle = COLORS.ghost;
+      ctx.fillText(layout.headline, cx + ghost * 1.45, cy - 2);
+    }
     ctx.restore();
   }
   ctx.fillStyle = color;
   ctx.shadowColor = entry.action === 'vibrate' ? 'rgba(255, 75, 214, 0.95)' : entry.action === 'beep' ? 'rgba(90, 216, 255, 0.9)' : 'rgba(255, 210, 0, 0.9)';
-  ctx.shadowBlur = 14;
+  ctx.shadowBlur = 6 + t * 18;
   ctx.fillText(layout.headline, cx, cy);
   ctx.shadowBlur = 0;
   ctx.fillText(layout.headline, cx, cy);
@@ -699,14 +833,14 @@ function paintCard(
   layout: Layout,
   frame: number,
   frames: number,
+  t: number,
 ) {
-  const jitter = entry.action === 'vibrate' ? VIBE[frame % VIBE.length] : [0, 0];
-  const jx = jitter[0] ?? 0;
-  const jy = jitter[1] ?? 0;
+  const unit = entry.action === 'vibrate' ? VIBE[frame % VIBE.length] : [0, 0];
+  const amp = entry.action === 'vibrate' ? (1.15 + t * t * 32) / 9 : 0;
+  const jx = (unit?.[0] ?? 0) * amp;
+  const jy = (unit?.[1] ?? 0) * amp;
 
   ctx.clearRect(0, 0, CARD_W, CARD_H);
-  ctx.fillStyle = COLORS.outer;
-  ctx.fillRect(0, 0, CARD_W, CARD_H);
 
   const inset = 18;
   const radius = 32;
@@ -792,10 +926,10 @@ function paintCard(
   );
 
   const cx = CARD_W / 2;
-  drawHeadline(ctx, entry, layout, jx, jy);
+  drawHeadline(ctx, entry, layout, jx, jy, t);
 
   if (entry.action === 'beep') {
-    drawBeepWaves(ctx, cx, layout.heroY, layout.halfW, layout.gap, frame, frames);
+    drawBeepWaves(ctx, cx, layout.heroY, layout.halfW, layout.gap, frame, frames, t);
   }
 
   if (entry.action === 'shock') {
@@ -808,10 +942,17 @@ function paintCard(
       frame,
       frames,
       layout.boltScale,
+      t,
     );
   }
 
   drawDetail(ctx, entry, cx, layout.detailY);
+  const footerY = cardY + cardH - 36;
+  const metaY = Math.min(
+    detailSegments(entry).length ? layout.detailY + 54 : layout.detailY,
+    footerY - 46,
+  );
+  drawDeviceMeta(ctx, entry, cx, metaY);
 
   ctx.font = `italic 600 22px ${FONT}`;
   ctx.fillStyle = COLORS.footer;
@@ -856,20 +997,43 @@ function makeCanvas(): { canvas: HTMLCanvasElement; ctx: CanvasRenderingContext2
   return { canvas, ctx };
 }
 
+/** Pixels below this alpha are outside the card (or a soft fringe) and stay transparent. */
+const ALPHA_CUT = 128;
+
+function nearestOpaqueIndex(
+  r: number,
+  g: number,
+  b: number,
+  palette: Array<Array<number>>,
+): number {
+  let best = 1;
+  let bestD = Infinity;
+  for (let i = 1; i < palette.length; i++) {
+    const c = palette[i] ?? [0, 0, 0];
+    const d =
+      (r - (c[0] ?? 0)) ** 2 + (g - (c[1] ?? 0)) ** 2 + (b - (c[2] ?? 0)) ** 2;
+    if (d < bestD) {
+      bestD = d;
+      best = i;
+    }
+  }
+  return best;
+}
+
 function encodeGif(frames: ImageData[], delayMs: number): Blob {
   const step = 4 * 23;
   let total = 0;
   const parts: Uint8Array[] = [];
   for (const frame of frames) {
     const src = frame.data;
-    const n = Math.ceil(src.length / step);
-    const buf = new Uint8Array(n * 4);
+    const buf = new Uint8Array(Math.ceil(src.length / step) * 4);
     let o = 0;
     for (let i = 0; i < src.length; i += step) {
+      if ((src[i + 3] ?? 0) < ALPHA_CUT) continue;
       buf[o++] = src[i] ?? 0;
       buf[o++] = src[i + 1] ?? 0;
       buf[o++] = src[i + 2] ?? 0;
-      buf[o++] = src[i + 3] ?? 255;
+      buf[o++] = 255;
     }
     parts.push(buf.subarray(0, o));
     total += o;
@@ -881,7 +1045,6 @@ function encodeGif(frames: ImageData[], delayMs: number): Blob {
     [110, 243, 255],
     [247, 249, 251],
     [18, 23, 28],
-    [35, 40, 45],
   ];
   const keyBytes = keys.length * 40 * 4;
   const merged = new Uint8Array(total + keyBytes);
@@ -899,15 +1062,29 @@ function encodeGif(frames: ImageData[], delayMs: number): Blob {
     }
   }
 
-  const palette = quantize(merged, 256);
+  // Index 0 is the GIF transparent color. gifenc also uses index 0 as the screen background.
+  const quantized = quantize(merged, 255);
+  const palette = [[0, 0, 0], ...(quantized.length ? quantized : [[18, 23, 28]])].slice(0, 256);
   const gif = GIFEncoder();
   frames.forEach((frame, i) => {
     const index = applyPalette(frame.data, palette);
+    const src = frame.data;
+    for (let p = 0, o = 0; o < src.length; o += 4, p++) {
+      if ((src[o + 3] ?? 0) < ALPHA_CUT) {
+        index[p] = 0;
+        continue;
+      }
+      if (index[p] === 0) {
+        index[p] = nearestOpaqueIndex(src[o] ?? 0, src[o + 1] ?? 0, src[o + 2] ?? 0, palette);
+      }
+    }
     gif.writeFrame(index, frame.width, frame.height, {
       palette: i === 0 ? palette : null,
       delay: delayMs,
       repeat: 0,
-      dispose: 1,
+      transparent: true,
+      transparentIndex: 0,
+      dispose: 2,
     });
   });
   gif.finish();
@@ -922,13 +1099,13 @@ function encodeGif(frames: ImageData[], delayMs: number): Blob {
  * Shock, vibrate, and beep are short looping GIFs.
  */
 export async function renderLogShareCard(entry: OfficialLogEntry): Promise<Blob> {
-  const plan = motionFor(entry.action);
+  const plan = motionFor(entry);
   const assets = await loadAssets(entry);
   const { ctx } = makeCanvas();
   const layout = fitLayout(ctx, entry);
   const frames: ImageData[] = [];
   for (let i = 0; i < plan.frames; i++) {
-    paintCard(ctx, entry, assets, layout, i, plan.frames);
+    paintCard(ctx, entry, assets, layout, i, plan.frames, plan.t);
     frames.push(ctx.getImageData(0, 0, CARD_W, CARD_H));
   }
   return encodeGif(frames, plan.delay);

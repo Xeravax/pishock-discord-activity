@@ -154,6 +154,8 @@ model CommandLog {
   hubClientId          String?
   /// Hub display name at command time (when known).
   hubName              String?
+  /// Pre-shock warning that was sent with this command (small|mid|long). Null when none.
+  warningLevel         String?
   shareCode            String?
   intensity            Int?
   durationMs           Int?
