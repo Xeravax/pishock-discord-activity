@@ -1,5 +1,5 @@
-/** Matches the compact remote / phone layout breakpoints. */
-const PHONE_MQ = '(max-width: 720px), (max-height: 740px)';
+/** Phone / narrow layout only — do not use max-height (Discord desktop iframes are short). */
+const PHONE_MQ = '(max-width: 720px)';
 
 function isDiscordEmbed() {
   return new URLSearchParams(window.location.search).has('frame_id');

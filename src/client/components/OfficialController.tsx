@@ -448,7 +448,7 @@ export function OfficialController({
   }, [shockers, multiShock]);
 
   useEffect(() => {
-    const mq = window.matchMedia('(max-width: 720px), (max-height: 740px)');
+    const mq = window.matchMedia('(max-width: 720px)');
     const apply = () => {
       const compact = mq.matches || Boolean(pip);
       setCompactDock(compact);
