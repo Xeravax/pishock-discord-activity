@@ -1,5 +1,14 @@
 # Changelog
 
+## v2.2.2 — 2026-11-15
+
+## What's changed
+
+- #patch Add error handling and session management for Discord SDK integration (bce1853)
+- Add error handling and session management for Discord SDK integration (131a7c8)
+
+**Full changelog**: https://github.com/Xeravax/pishock-discord-activity/compare/v2.2.1...v2.2.2
+
 ## v2.2.1 — 2026-11-15
 
 ## What's changed

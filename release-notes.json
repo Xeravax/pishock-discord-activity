@@ -1,7 +1,7 @@
 {
-  "version": "v2.2.1",
-  "notes": "## What's changed\n\n- #patch Merge pull request #11 from Xeravax/develop (36dffd8)\n- Enhance logShareCard functionality and styles for improved Discord integration (97d930f)\n\n**Full changelog**: https://github.com/Xeravax/pishock-discord-activity/compare/v2.2.0...v2.2.1\n",
-  "url": "https://github.com/Xeravax/pishock-discord-activity/releases/tag/v2.2.1",
-  "publishedAt": "2026-11-15T18:57:15.837Z",
-  "updatedAt": "2026-11-15T18:57:15.929Z"
+  "version": "v2.2.2",
+  "notes": "## What's changed\n\n- #patch Add error handling and session management for Discord SDK integration (bce1853)\n- Add error handling and session management for Discord SDK integration (131a7c8)\n\n**Full changelog**: https://github.com/Xeravax/pishock-discord-activity/compare/v2.2.1...v2.2.2\n",
+  "url": "https://github.com/Xeravax/pishock-discord-activity/releases/tag/v2.2.2",
+  "publishedAt": "2026-11-15T19:20:32.693Z",
+  "updatedAt": "2026-11-15T19:20:32.841Z"
 }
