@@ -1,5 +1,10 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto';
 
+/** Lookup key for a stored PiShock API key. Not reversible. */
+export function hashApiKey(apiKey: string): string {
+  return createHash('sha256').update(apiKey).digest('hex');
+}
+
 function keyFromEnv(tokenKey: string): Buffer {
   const trimmed = tokenKey.trim();
   if (/^[0-9a-fA-F]{64}$/.test(trimmed)) {

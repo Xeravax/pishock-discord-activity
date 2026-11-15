@@ -1,0 +1,596 @@
+import assert from 'node:assert/strict';
+import { describe, it } from 'node:test';
+import {
+  CommandQueueError,
+  QUEUE_MAX_WAITING_PER_SENDER,
+  QUEUE_MAX_WAITING_TOTAL,
+  createCommandQueue,
+  resolveQueueAdvanceMs,
+  type QueueEnqueueInput,
+  type QueueItemInternal,
+  type QueueTicketEvent,
+} from '../src/server/pishock/command-queue.js';
+import { HOLD_AUTO_END_GRACE_MS } from '../src/server/operate-policy.js';
+
+function baseInput(
+  overrides: Partial<QueueEnqueueInput> &
+    Pick<QueueEnqueueInput, 'ownerDiscordUserId' | 'executorDiscordUserId'>,
+): QueueEnqueueInput {
+  return {
+    executorUsername: 'user',
+    executorGlobalName: null,
+    executorAvatar: null,
+    operation: 'shock',
+    intensity: 20,
+    durationMs: 100,
+    hold: false,
+    warning: false,
+    shockerId: 7,
+    shareCode: null,
+    hubClientId: 'hub-1',
+    instanceId: 'inst',
+    ...overrides,
+  };
+}
+
+type Harness = {
+  queue: ReturnType<typeof createCommandQueue>;
+  executed: string[];
+  ended: string[];
+  tickets: QueueTicketEvent[];
+  stars: Set<string>;
+  advance: (ms: number) => Promise<void>;
+  flush: () => Promise<void>;
+  setProgressMs: (ms: number) => void;
+};
+
+function makeHarness(opts?: {
+  validate?: (item: QueueItemInternal) => boolean | Promise<boolean>;
+  progressMs?: number;
+  maxPerSender?: number;
+  endActive?: (item: QueueItemInternal) => Promise<boolean | void>;
+}): Harness {
+  let now = 1_000_000;
+  const timers: Array<{ at: number; resolve: () => void }> = [];
+  const executed: string[] = [];
+  const ended: string[] = [];
+  const tickets: QueueTicketEvent[] = [];
+  const stars = new Set<string>();
+  let progressMs = opts?.progressMs ?? 0;
+  let maxPerSender = opts?.maxPerSender ?? QUEUE_MAX_WAITING_PER_SENDER;
+
+  const sleep = (ms: number) =>
+    new Promise<void>((resolve) => {
+      timers.push({ at: now + ms, resolve });
+      timers.sort((a, b) => a.at - b.at);
+    });
+
+  const advance = async (ms: number) => {
+    const target = now + ms;
+    while (timers.length > 0 && timers[0]!.at <= target) {
+      const t = timers.shift()!;
+      now = t.at;
+      t.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    }
+    now = target;
+  };
+
+  const flush = async () => {
+    for (let i = 0; i < 20; i++) {
+      await Promise.resolve();
+    }
+  };
+
+  const queue = createCommandQueue({
+    now: () => now,
+    sleep,
+    isStarred: (owner, executor) => stars.has(`${owner}:${executor}`),
+    getLimits: () => ({ progressMs, maxPerSender }),
+    validateBeforeRun: opts?.validate ?? (async () => true),
+    execute: async (item) => {
+      executed.push(item.id);
+    },
+    endActive:
+      opts?.endActive ??
+      (async (item) => {
+        ended.push(item.id);
+      }),
+    onStateChange: () => undefined,
+    onTicket: (t) => tickets.push(t),
+  });
+
+  return {
+    queue,
+    executed,
+    ended,
+    tickets,
+    stars,
+    advance,
+    flush,
+    setProgressMs: (ms: number) => {
+      progressMs = ms;
+    },
+  };
+}
+
+describe('command queue', () => {
+  it('resolveQueueAdvanceMs never goes below command duration + grace', () => {
+    assert.equal(resolveQueueAdvanceMs(100, 0), 100 + HOLD_AUTO_END_GRACE_MS);
+    assert.equal(resolveQueueAdvanceMs(100, 50), 100 + HOLD_AUTO_END_GRACE_MS);
+    assert.equal(resolveQueueAdvanceMs(100, 5_000), 5_000);
+  });
+
+  it('honors owner progressMs when longer than the command', async () => {
+    const h = makeHarness({ progressMs: 1_000 });
+    const first = await h.queue.enqueue(
+      baseInput({ ownerDiscordUserId: 'owner', executorDiscordUserId: 'a', durationMs: 40 }),
+    );
+    const second = await h.queue.enqueue(
+      baseInput({ ownerDiscordUserId: 'owner', executorDiscordUserId: 'b', durationMs: 40 }),
+    );
+    await h.flush();
+    assert.equal(h.executed[0], first.itemId);
+    await h.advance(300);
+    await h.flush();
+    assert.equal(h.executed.length, 1);
+    await h.advance(800);
+    await h.flush();
+    assert.equal(h.executed[1], second.itemId);
+  });
+
+  it('runs starred senders before open-lane FIFO', async () => {
+    const h = makeHarness();
+    const a = await h.queue.enqueue(
+      baseInput({ ownerDiscordUserId: 'owner', executorDiscordUserId: 'a', durationMs: 50 }),
+    );
+    const b = await h.queue.enqueue(
+      baseInput({ ownerDiscordUserId: 'owner', executorDiscordUserId: 'b', durationMs: 50 }),
+    );
+    h.stars.add('owner:b');
+    const c = await h.queue.enqueue(
+      baseInput({ ownerDiscordUserId: 'owner', executorDiscordUserId: 'c', durationMs: 50 }),
+    );
+    await h.flush();
+
+    // First item (a) may already be active before star of b matters for waiting.
+    assert.equal(h.executed[0], a.itemId);
+    await h.advance(400);
+    await h.flush();
+    // After a finishes, starred b should run before c (and any remaining).
+    // c was enqueued after star; b was waiting and is now starred.
+    assert.ok(h.executed.includes(b.itemId));
+    const bIdx = h.executed.indexOf(b.itemId);
+    const cIdx = h.executed.indexOf(c.itemId);
+    if (cIdx >= 0) {
+      assert.ok(bIdx < cIdx, 'starred b should run before open-lane c');
+    }
+  });
+
+  it('keeps FIFO within a lane', async () => {
+    const h = makeHarness();
+    const first = await h.queue.enqueue(
+      baseInput({ ownerDiscordUserId: 'owner', executorDiscordUserId: 'a', durationMs: 30 }),
+    );
+    const second = await h.queue.enqueue(
+      baseInput({ ownerDiscordUserId: 'owner', executorDiscordUserId: 'b', durationMs: 30 }),
+    );
+    await h.flush();
+    assert.equal(h.executed[0], first.itemId);
+    await h.advance(400);
+    await h.flush();
+    assert.equal(h.executed[1], second.itemId);
+  });
+
+  it('pause stops advancing while still accepting new items', async () => {
+    const h = makeHarness();
+    await h.queue.enqueue(
+      baseInput({ ownerDiscordUserId: 'owner', executorDiscordUserId: 'a', durationMs: 40 }),
+    );
+    await h.flush();
+    await h.queue.setPaused('owner', true);
+    const waiting = await h.queue.enqueue(
+      baseInput({ ownerDiscordUserId: 'owner', executorDiscordUserId: 'b', durationMs: 40 }),
+    );
+    await h.advance(500);
+    await h.flush();
+    assert.equal(h.executed.length, 1);
+    assert.equal(waiting.paused, true);
+
+    await h.queue.setPaused('owner', false);
+    await h.flush();
+    await h.advance(500);
+    await h.flush();
+    assert.equal(h.executed.length, 2);
+  });
+
+  it('skip ends the active command and starts the next', async () => {
+    const h = makeHarness();
+    const first = await h.queue.enqueue(
+      baseInput({ ownerDiscordUserId: 'owner', executorDiscordUserId: 'a', durationMs: 5_000 }),
+    );
+    const second = await h.queue.enqueue(
+      baseInput({ ownerDiscordUserId: 'owner', executorDiscordUserId: 'b', durationMs: 40 }),
+    );
+    await h.flush();
+    assert.equal(h.executed[0], first.itemId);
+    await h.queue.skipActive('owner');
+    await h.flush();
+    await h.advance(0);
+    await h.flush();
+    assert.deepEqual(h.ended, [first.itemId]);
+    assert.equal(h.executed[1], second.itemId);
+  });
+
+  it('skipActive does not clear a newer active item after a raced end', async () => {
+    let releaseEnd!: () => void;
+    const endGate = new Promise<void>((resolve) => {
+      releaseEnd = resolve;
+    });
+    const endedIds: string[] = [];
+    const h = makeHarness({
+      endActive: async (item) => {
+        endedIds.push(item.id);
+        await endGate;
+      },
+    });
+    const first = await h.queue.enqueue(
+      baseInput({ ownerDiscordUserId: 'owner', executorDiscordUserId: 'a', durationMs: 5_000 }),
+    );
+    const second = await h.queue.enqueue(
+      baseInput({ ownerDiscordUserId: 'owner', executorDiscordUserId: 'b', durationMs: 40 }),
+    );
+    await h.flush();
+    assert.equal(h.executed[0], first.itemId);
+
+    const skip1 = h.queue.skipActive('owner');
+    const skip2 = h.queue.skipActive('owner');
+    releaseEnd();
+    const [r1, r2] = await Promise.all([skip1, skip2]);
+    assert.equal(r1.ended, true);
+    assert.equal(r2.ended, true);
+    assert.ok(endedIds.includes(first.itemId));
+    await h.flush();
+    await h.advance(0);
+    await h.flush();
+
+    assert.ok(h.executed.includes(second.itemId));
+    const state = await h.queue.snapshot('owner');
+    assert.equal(state.active?.id, second.itemId);
+  });
+
+  it('clear drops waiting only', async () => {
+    const h = makeHarness();
+    const first = await h.queue.enqueue(
+      baseInput({ ownerDiscordUserId: 'owner', executorDiscordUserId: 'a', durationMs: 5_000 }),
+    );
+    await h.queue.enqueue(
+      baseInput({ ownerDiscordUserId: 'owner', executorDiscordUserId: 'b', durationMs: 40 }),
+    );
+    await h.flush();
+    await h.queue.clearWaiting('owner');
+    const state = await h.queue.snapshot('owner');
+    assert.equal(state.active?.id, first.itemId);
+    assert.equal(state.waiting.length, 0);
+  });
+
+  it('remove drops one waiting item', async () => {
+    const h = makeHarness();
+    await h.queue.enqueue(
+      baseInput({ ownerDiscordUserId: 'owner', executorDiscordUserId: 'a', durationMs: 5_000 }),
+    );
+    const second = await h.queue.enqueue(
+      baseInput({ ownerDiscordUserId: 'owner', executorDiscordUserId: 'b', durationMs: 40 }),
+    );
+    await h.flush();
+    await h.queue.removeItem('owner', second.itemId);
+    const state = await h.queue.snapshot('owner');
+    assert.equal(state.waiting.length, 0);
+  });
+
+  it('enforces per-sender and total waiting caps', async () => {
+    const h = makeHarness({ maxPerSender: QUEUE_MAX_WAITING_PER_SENDER });
+    await h.queue.setPaused('owner', true);
+    for (let i = 0; i < QUEUE_MAX_WAITING_PER_SENDER; i++) {
+      await h.queue.enqueue(
+        baseInput({ ownerDiscordUserId: 'owner', executorDiscordUserId: 'a', durationMs: 10 }),
+      );
+    }
+    await assert.rejects(
+      () =>
+        h.queue.enqueue(
+          baseInput({ ownerDiscordUserId: 'owner', executorDiscordUserId: 'a', durationMs: 10 }),
+        ),
+      (err: unknown) =>
+        err instanceof CommandQueueError && err.code === 'QUEUE_SENDER_FULL',
+    );
+
+    h.queue.resetAll();
+    await h.queue.setPaused('owner', true);
+    for (let i = 0; i < QUEUE_MAX_WAITING_TOTAL; i++) {
+      await h.queue.enqueue(
+        baseInput({
+          ownerDiscordUserId: 'owner',
+          executorDiscordUserId: `u${i}`,
+          durationMs: 10,
+        }),
+      );
+    }
+    await assert.rejects(
+      () =>
+        h.queue.enqueue(
+          baseInput({
+            ownerDiscordUserId: 'owner',
+            executorDiscordUserId: 'overflow',
+            durationMs: 10,
+          }),
+        ),
+      (err: unknown) => err instanceof CommandQueueError && err.code === 'QUEUE_FULL',
+    );
+  });
+
+  it('snapshot reports next waiting item and start ETA', async () => {
+    const h = makeHarness({ progressMs: 1_000 });
+    const first = await h.queue.enqueue(
+      baseInput({ ownerDiscordUserId: 'owner', executorDiscordUserId: 'a', durationMs: 40 }),
+    );
+    const second = await h.queue.enqueue(
+      baseInput({ ownerDiscordUserId: 'owner', executorDiscordUserId: 'b', durationMs: 40 }),
+    );
+    await h.flush();
+    const state = await h.queue.snapshot('owner');
+    assert.equal(state.active?.id, first.itemId);
+    assert.equal(state.next?.id, second.itemId);
+    assert.ok(state.nextStartsInMs != null && state.nextStartsInMs > 0);
+    assert.ok(state.nextEstimatedStartAt != null);
+    assert.equal(state.waiting[0]?.id, second.itemId);
+  });
+
+  it('returns an arrival estimate when enqueueing', async () => {
+    const h = makeHarness({ progressMs: 1_000 });
+    await h.queue.setPaused('owner', true);
+    const first = await h.queue.enqueue(
+      baseInput({ ownerDiscordUserId: 'owner', executorDiscordUserId: 'a', durationMs: 100 }),
+    );
+    const second = await h.queue.enqueue(
+      baseInput({ ownerDiscordUserId: 'owner', executorDiscordUserId: 'b', durationMs: 100 }),
+    );
+    assert.equal(first.estimatedWaitMs, 0);
+    assert.ok(second.estimatedWaitMs >= 1_000);
+  });
+
+  it('keeps separate queues per wearer', async () => {
+    const h = makeHarness();
+    await h.queue.setPaused('owner-a', true);
+    await h.queue.setPaused('owner-b', true);
+    await h.queue.enqueue(
+      baseInput({ ownerDiscordUserId: 'owner-a', executorDiscordUserId: 'x', durationMs: 20 }),
+    );
+    await h.queue.enqueue(
+      baseInput({ ownerDiscordUserId: 'owner-b', executorDiscordUserId: 'y', durationMs: 20 }),
+    );
+    const a = await h.queue.snapshot('owner-a');
+    const b = await h.queue.snapshot('owner-b');
+    assert.equal(a.waiting.length, 1);
+    assert.equal(b.waiting.length, 1);
+    assert.equal(a.waiting[0]?.executorDiscordUserId, 'x');
+    assert.equal(b.waiting[0]?.executorDiscordUserId, 'y');
+  });
+
+  it('handleSenderEnd skips active hold from that sender', async () => {
+    const h = makeHarness();
+    const first = await h.queue.enqueue(
+      baseInput({
+        ownerDiscordUserId: 'owner',
+        executorDiscordUserId: 'a',
+        operation: 'hold',
+        hold: true,
+        durationMs: 5_000,
+      }),
+    );
+    await h.flush();
+    const result = await h.queue.handleSenderEnd('owner', 'a', 7);
+    assert.equal(result.handled, true);
+    assert.equal(result.ended, true);
+    assert.deepEqual(h.ended, [first.itemId]);
+    assert.equal((await h.queue.snapshot('owner')).active, null);
+  });
+
+  it('keeps the active command when the device end fails', async () => {
+    const h = makeHarness({
+      endActive: async () => false,
+    });
+    const first = await h.queue.enqueue(
+      baseInput({
+        ownerDiscordUserId: 'owner',
+        executorDiscordUserId: 'a',
+        operation: 'hold',
+        hold: true,
+        durationMs: 5_000,
+      }),
+    );
+    await h.flush();
+    const result = await h.queue.handleSenderEnd('owner', 'a', 7);
+    assert.equal(result.handled, true);
+    assert.equal(result.ended, false);
+    assert.equal((await h.queue.snapshot('owner')).active?.id, first.itemId);
+  });
+
+  it('hardClear removes waiting and active', async () => {
+    const h = makeHarness();
+    await h.queue.enqueue(
+      baseInput({ ownerDiscordUserId: 'owner', executorDiscordUserId: 'a', durationMs: 5_000 }),
+    );
+    await h.queue.enqueue(
+      baseInput({ ownerDiscordUserId: 'owner', executorDiscordUserId: 'b', durationMs: 40 }),
+    );
+    await h.flush();
+    await h.queue.hardClear('owner', { endActiveDevice: false });
+    const state = await h.queue.snapshot('owner');
+    assert.equal(state.active, null);
+    assert.equal(state.waiting.length, 0);
+  });
+
+  it('drops items that fail validateBeforeRun', async () => {
+    const h = makeHarness({
+      validate: async (item) => item.executorDiscordUserId !== 'bad',
+    });
+    await h.queue.setPaused('owner', true);
+    await h.queue.enqueue(
+      baseInput({ ownerDiscordUserId: 'owner', executorDiscordUserId: 'bad', durationMs: 20 }),
+    );
+    const good = await h.queue.enqueue(
+      baseInput({ ownerDiscordUserId: 'owner', executorDiscordUserId: 'good', durationMs: 20 }),
+    );
+    await h.queue.setPaused('owner', false);
+    await h.flush();
+    await h.advance(400);
+    await h.flush();
+    assert.deepEqual(h.executed, [good.itemId]);
+  });
+
+  it('does not advance to the next item while advance is held', async () => {
+    const h = makeHarness();
+    const first = await h.queue.enqueue(
+      baseInput({ ownerDiscordUserId: 'owner', executorDiscordUserId: 'a', durationMs: 40 }),
+    );
+    await h.queue.enqueue(
+      baseInput({ ownerDiscordUserId: 'owner', executorDiscordUserId: 'b', durationMs: 40 }),
+    );
+    await h.flush();
+    h.queue.holdAdvance('owner');
+    await h.queue.skipActive('owner');
+    await h.advance(10_000);
+    await h.flush();
+    assert.deepEqual(h.executed, [first.itemId]);
+    const held = await h.queue.snapshot('owner');
+    assert.equal(held.waiting.length, 1);
+    h.queue.releaseAdvance('owner');
+    await h.flush();
+    assert.equal(h.executed.length, 2);
+  });
+
+  it('requeues an item when advance is held during validation', async () => {
+    let releaseValidate: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => {
+      releaseValidate = resolve;
+    });
+    const h = makeHarness({
+      validate: async () => {
+        await gate;
+        return true;
+      },
+    });
+    const item = await h.queue.enqueue(
+      baseInput({ ownerDiscordUserId: 'owner', executorDiscordUserId: 'a', durationMs: 40 }),
+    );
+    await h.flush();
+    h.queue.holdAdvance('owner');
+    releaseValidate();
+    await h.flush();
+    assert.deepEqual(h.executed, []);
+    const held = await h.queue.snapshot('owner');
+    assert.equal(held.active, null);
+    assert.equal(held.waiting.length, 1);
+    h.queue.releaseAdvance('owner');
+    await h.flush();
+    assert.deepEqual(h.executed, [item.itemId]);
+  });
+
+  it('discards selection cleared while priority lookup is pending, even when advancement is held', async () => {
+    let releaseLookup!: () => void;
+    let lookupStarted!: () => void;
+    const started = new Promise<void>((resolve) => { lookupStarted = resolve; });
+    const gate = new Promise<void>((resolve) => { releaseLookup = resolve; });
+    let blockSelection = false;
+    const executed: string[] = [];
+    const queue = createCommandQueue({
+      isStarred: async () => {
+        if (blockSelection) { lookupStarted(); await gate; }
+        return false;
+      },
+      getLimits: () => ({ progressMs: 0, maxPerSender: 3 }),
+      validateBeforeRun: async () => true,
+      execute: async (item) => { executed.push(item.id); },
+      endActive: async () => true,
+      onStateChange: () => undefined,
+      onTicket: () => undefined,
+    });
+    await queue.setPaused('owner', true);
+    await queue.enqueue(baseInput({ ownerDiscordUserId: 'owner', executorDiscordUserId: 'a' }));
+    blockSelection = true;
+    const resume = queue.setPaused('owner', false);
+    await started;
+    queue.holdAdvance('owner');
+    await queue.hardClear('owner', { endActiveDevice: false });
+    releaseLookup();
+    await resume;
+    for (let i = 0; i < 30; i++) await Promise.resolve();
+    const state = await queue.snapshot('owner');
+    assert.equal(state.active, null);
+    assert.equal(state.waiting.length, 0);
+    assert.deepEqual(executed, []);
+    queue.resetAll();
+  });
+
+  it('does not run an item cleared while validation is in flight', async () => {
+    let releaseValidate: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => {
+      releaseValidate = resolve;
+    });
+    const h = makeHarness({
+      validate: async () => {
+        await gate;
+        return true;
+      },
+    });
+    await h.queue.enqueue(
+      baseInput({ ownerDiscordUserId: 'owner', executorDiscordUserId: 'a', durationMs: 40 }),
+    );
+    await h.flush();
+    await h.queue.hardClear('owner', { endActiveDevice: false });
+    releaseValidate();
+    await h.flush();
+    assert.deepEqual(h.executed, []);
+    const state = await h.queue.snapshot('owner');
+    assert.equal(state.active, null);
+    assert.equal(state.waiting.length, 0);
+  });
+
+  it('invalidateInFlight is visible to the running execute', async () => {
+    let canceled: (() => boolean) | undefined;
+    let releaseStarted: () => void = () => undefined;
+    const started = new Promise<void>((resolve) => {
+      releaseStarted = resolve;
+    });
+    let releaseDone: () => void = () => undefined;
+    const done = new Promise<void>((resolve) => {
+      releaseDone = resolve;
+    });
+    const queue = createCommandQueue({
+      isStarred: () => false,
+      getLimits: () => ({ progressMs: 0, maxPerSender: 3 }),
+      validateBeforeRun: async () => true,
+      execute: async (_item, isCanceled) => {
+        canceled = isCanceled;
+        releaseStarted();
+        await done;
+      },
+      endActive: async () => true,
+      onStateChange: () => undefined,
+      onTicket: () => undefined,
+    });
+    await queue.enqueue(baseInput({ ownerDiscordUserId: 'owner', executorDiscordUserId: 'a' }));
+    await started;
+    assert.equal(canceled?.(), false);
+    queue.invalidateInFlight('owner');
+    assert.equal(canceled?.(), true);
+    releaseDone();
+    await hFlush();
+  });
+});
+
+async function hFlush() {
+  for (let i = 0; i < 20; i++) await Promise.resolve();
+}

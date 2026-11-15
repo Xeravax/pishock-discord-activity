@@ -1,3 +1,5 @@
+import { AppVersionBadge } from './AppVersionBadge';
+
 type Props = {
   progress: number;
   label: string;
@@ -15,8 +17,11 @@ export function AuthLoadingScreen({ progress, label, error }: Props) {
         <div className="auth-boot__mark" aria-hidden>
           <i className="q-icon mdi mdi-flash auth-boot__bolt" />
         </div>
-        <h1 className="auth-boot__brand">
-          Pi<span>Shock</span>
+        <h1 className="auth-boot__brand auth-boot__brand-row">
+          <span className="auth-boot__brand-name">
+            Pi<span>Shock</span>
+          </span>
+          <AppVersionBadge />
         </h1>
         <p className="auth-boot__sub">Discord Activity</p>
 

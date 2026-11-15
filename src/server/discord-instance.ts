@@ -22,20 +22,26 @@ export class InstanceAuthError extends Error {
 }
 
 /**
- * Verify a Discord Activity instance is live and (optionally) that a user is in it.
- * Requires DISCORD_BOT_TOKEN. When bot token is missing, throws unless allowMissingBot.
+ * Verify a Discord Activity instance is live and (optionally) that users are in it.
+ * Requires DISCORD_BOT_TOKEN. Missing-bot bypass is only allowed when env.allowMissingBotInstanceCheck.
  */
 export async function verifyActivityInstance(
   env: AppEnv,
   instanceId: string,
-  opts?: { requireUserId?: string; allowMissingBot?: boolean },
+  opts?: {
+    requireUserId?: string;
+    /** Additional Discord user ids that must also be present in the instance. */
+    requireUserIds?: string[];
+    allowMissingBot?: boolean;
+  },
 ): Promise<ActivityInstanceInfo | null> {
   if (!instanceId || typeof instanceId !== 'string') {
     throw new InstanceAuthError('Missing activity instanceId', 400);
   }
 
+  const allowMissingBot = Boolean(opts?.allowMissingBot && env.allowMissingBotInstanceCheck);
   if (!env.discordBotToken) {
-    if (opts?.allowMissingBot) return null;
+    if (allowMissingBot) return null;
     throw new InstanceAuthError(
       'DISCORD_BOT_TOKEN is required for Discord participant actions',
       503,
@@ -61,6 +67,15 @@ export async function verifyActivityInstance(
 
   if (opts?.requireUserId && !users.includes(opts.requireUserId)) {
     throw new InstanceAuthError('You are not a participant in this activity instance', 403);
+  }
+
+  for (const uid of opts?.requireUserIds ?? []) {
+    if (!users.includes(uid)) {
+      throw new InstanceAuthError(
+        'Target is not a participant in this activity instance',
+        403,
+      );
+    }
   }
 
   return data;

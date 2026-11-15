@@ -2,6 +2,9 @@ type LogRow = {
   id: string;
   action: string;
   shockerId?: number | null;
+  shockerName?: string | null;
+  hubClientId?: string | null;
+  hubName?: string | null;
   intensity?: number | null;
   durationMs?: number | null;
   success: boolean;
@@ -42,7 +45,16 @@ export function CommandLog({ rows }: Props) {
           </div>
           <div className="q-item__label q-item__label--caption text-grey-5">
             {new Date(row.createdAt).toLocaleString()}
-            {row.shockerId != null ? ` · shocker ${row.shockerId}` : ''}
+            {row.hubName
+              ? ` · ${row.hubName}`
+              : row.hubClientId
+                ? ` · hub ${row.hubClientId}`
+                : ''}
+            {row.shockerName
+              ? ` · ${row.shockerName}`
+              : row.shockerId != null
+                ? ` · shocker ${row.shockerId}`
+                : ''}
             {row.intensity != null ? ` · int ${row.intensity}` : ''}
             {row.durationMs != null ? ` · ${row.durationMs}ms` : ''}
           </div>

@@ -2,8 +2,12 @@ node_modules/
 dist/
 .env
 .env.local
+.env.version
+version.json
+release-notes.json
 *.log
 .DS_Store
 client-dist/
+data/
 prisma/*.db
 prisma/*.db-journal

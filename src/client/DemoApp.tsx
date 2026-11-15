@@ -9,12 +9,13 @@ import { OfficialController } from './components/OfficialController';
 import { SharesPanel } from './components/SharesPanel';
 import { CommandLog } from './components/CommandLog';
 import { FriendsParticipantList } from './components/FriendsParticipantList';
+import { PipIncomingShock } from './components/PipIncomingShock';
 import { PsDialog } from './components/PsDialog';
 import type { ShockerView } from './components/ShockerCard';
 import { participantAvatarUrl, type DiscordParticipant, type ParticipantStatus } from './participants';
 
 type Screen = 'consent' | 'login' | 'control' | 'shares' | 'logs' | 'pip' | 'terms' | 'privacy';
-type Overlay = null | 'shares' | 'logs' | 'availability' | 'menu';
+type Overlay = null | 'shares' | 'logs' | 'availability' | 'menu' | 'settings';
 
 const DEMO_PARTICIPANTS: DiscordParticipant[] = [
   {
@@ -59,7 +60,9 @@ const DEMO_STATUS: Record<string, ParticipantStatus> = {
         hubClientId: '7343',
         deviceMaxIntensity: 100,
         deviceMaxDurationMs: 15000,
+        minIntensity: 1,
         maxIntensity: 80,
+        minDurationMs: 16,
         maxDurationMs: 10000,
         canShock: true,
         canVibrate: true,
@@ -100,9 +103,13 @@ const DEMO_SHOCKERS: ShockerView[] = [
     canPause: false,
     deviceMaxIntensity: 100,
     deviceMaxDuration: 15000,
+    activityMinIntensity: 1,
     activityMaxIntensity: 70,
+    activityMinDuration: 16,
     activityMaxDuration: 8000,
+    minIntensity: 1,
     maxIntensity: 70,
+    minDuration: 16,
     maxDuration: 8000,
     isV3: true,
     online: true,
@@ -123,25 +130,16 @@ const DEMO_SHOCKERS: ShockerView[] = [
     canPause: false,
     deviceMaxIntensity: 100,
     deviceMaxDuration: 15000,
+    activityMinIntensity: 1,
     activityMaxIntensity: 100,
+    activityMinDuration: 16,
     activityMaxDuration: 15000,
+    minIntensity: 1,
     maxIntensity: 100,
+    minDuration: 16,
     maxDuration: 15000,
     isV3: true,
     online: false,
-  },
-];
-
-const DEMO_LINKS = [
-  {
-    LinkId: 5158,
-    ShockerId: 26515,
-    Code: '58a93a7b-demo',
-    Name: 'Lemonade',
-    Paused: false,
-    ShockEnabled: true,
-    VibrateEnabled: false,
-    BeepEnabled: false,
   },
 ];
 
@@ -171,39 +169,44 @@ const DEMO_LOGS = [
 export function DemoApp() {
   const [screen, setScreen] = useState<Screen>('control');
   const [toast, setToast] = useState<string | null>(null);
-  const [friendsOpen, setFriendsOpen] = useState(false);
-  const [selectedTargetId, setSelectedTargetId] = useState<string | null>('111');
+  const [friendsOpen, setFriendsOpen] = useState(true);
+  const [selectedTargetIds, setSelectedTargetIds] = useState<string[]>(['111']);
+  const selectedTargetId = selectedTargetIds[0] ?? null;
   const [overlay, setOverlay] = useState<Overlay>(null);
+  const demoLinked = true;
 
   const flash = (msg: string) => {
     setToast(msg);
     window.setTimeout(() => setToast(null), 1800);
   };
 
-  const friendShockers: ShockerView[] =
-    selectedTargetId && DEMO_STATUS[selectedTargetId]?.available
-      ? DEMO_STATUS[selectedTargetId]!.shockers.map((s) => ({
-          id: s.shockerId,
-          name: s.shockerName,
-          hubName: DEMO_STATUS[selectedTargetId]!.globalName ?? 'Friend',
-          clientId: s.hubClientId ?? undefined,
-          owned: false,
-          targetDiscordUserId: selectedTargetId,
-          canShock: s.canShock,
-          canVibrate: s.canVibrate,
-          canBeep: s.canBeep,
-          canHold: s.canHold,
-          canPause: false,
-          deviceMaxIntensity: s.deviceMaxIntensity,
-          deviceMaxDuration: s.deviceMaxDurationMs,
-          activityMaxIntensity: s.maxIntensity,
-          activityMaxDuration: s.maxDurationMs,
-          maxIntensity: s.maxIntensity,
-          maxDuration: s.maxDurationMs,
-          isV3: true,
-          online: true,
-        }))
-      : [];
+  const friendShockers: ShockerView[] = selectedTargetIds.flatMap((targetId) => {
+    const status = DEMO_STATUS[targetId];
+    if (!status?.available) return [];
+    return status.shockers.map(
+      (s): ShockerView => ({
+        id: s.shockerId,
+        name: s.shockerName,
+        hubName: status.globalName ?? 'Friend',
+        clientId: s.hubClientId ?? undefined,
+        owned: false,
+        targetDiscordUserId: targetId,
+        canShock: s.canShock,
+        canVibrate: s.canVibrate,
+        canBeep: s.canBeep,
+        canHold: s.canHold,
+        canPause: false,
+        deviceMaxIntensity: s.deviceMaxIntensity,
+        deviceMaxDuration: s.deviceMaxDurationMs,
+        activityMaxIntensity: s.maxIntensity,
+        activityMaxDuration: s.maxDurationMs,
+        maxIntensity: s.maxIntensity,
+        maxDuration: s.maxDurationMs,
+        isV3: true,
+        online: true,
+      }),
+    );
+  });
 
   const shockers = friendsOpen ? friendShockers : DEMO_SHOCKERS.filter((s) => s.owned);
 
@@ -283,7 +286,28 @@ export function DemoApp() {
         </div>
       ) : null}
 
-      {screen === 'shares' || screen === 'logs' || screen === 'control' || screen === 'pip' ? (
+      {screen === 'pip' ? (
+        <div style={{ height: 160, width: 280, margin: 16, border: '1px solid #333' }}>
+          <PipIncomingShock
+            hit={{
+              executorDiscordUserId: '111',
+              displayName: 'RogerfireFox',
+              avatarUrl: participantAvatarUrl('111'),
+              action: 'participant_shock',
+              intensity: 42,
+              durationMs: 1000,
+              at: Date.now() - 4000,
+              success: true,
+              kind: 'activity',
+              targetDiscordUserId: '222',
+              targetDisplayName: 'NotLinked',
+              targetAvatarUrl: participantAvatarUrl('222'),
+            }}
+          />
+        </div>
+      ) : null}
+
+      {screen === 'shares' || screen === 'logs' || screen === 'control' ? (
         <div className="official-activity-root">
           <OfficialController
             hub={{
@@ -295,33 +319,59 @@ export function DemoApp() {
               lastSeen: friendsOpen ? 'Activity share' : 'Seen a few seconds ago',
             }}
             shockers={shockers}
-            pip={screen === 'pip'}
             friendsOpen={friendsOpen}
-            safetyBanner={screen !== 'pip' ? <SafetyNoticeBar /> : null}
-            friendsPanel={
+            showOwnMode={demoLinked}
+            safetyBanner={<SafetyNoticeBar />}
+            friendsPanel={({
+              multiShock,
+              onToggleMultiShock,
+              individualIntensity,
+              onToggleIndividualIntensity,
+            }) => (
               <FriendsParticipantList
                 participants={DEMO_PARTICIPANTS}
                 statuses={DEMO_STATUS}
                 currentUserId="dev-user"
                 selectedTargetId={selectedTargetId}
-                onSelect={setSelectedTargetId}
+                selectedTargetIds={selectedTargetIds}
+                multiSelect={multiShock}
+                onToggleMultiSelect={onToggleMultiShock}
+                individualIntensity={individualIntensity}
+                onToggleIndividualIntensity={onToggleIndividualIntensity}
+                onSelect={(id) => {
+                  if (!id) {
+                    setSelectedTargetIds([]);
+                    return;
+                  }
+                  if (multiShock) {
+                    setSelectedTargetIds((prev) =>
+                      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id],
+                    );
+                    return;
+                  }
+                  setSelectedTargetIds((prev) =>
+                    prev.length === 1 && prev[0] === id ? [] : [id],
+                  );
+                }}
                 onRefresh={() => flash('Would refresh Discord participants')}
               />
-            }
+            )}
             onOperate={(input) =>
               flash(
-                `${friendsOpen ? 'participant ' : ''}${input.operation} · id ${input.shockerId} · ${input.intensity}% · ${input.durationMs}ms${
+                `${friendsOpen ? 'participant ' : ''}${input.operation} · id ${input.shockerId}${
+                  input.targetDiscordUserId ? ` · user ${input.targetDiscordUserId}` : ''
+                } · ${input.intensity}% · ${input.durationMs}ms${
                   input.hold ? ' · hold' : ''
                 }${input.warning ? ' · warn' : ''}`,
               )
             }
             onOpenFriends={() => {
-              setFriendsOpen((v) => !v);
-              flash(friendsOpen ? 'Showing owned hub' : 'Showing Discord Shockers');
+              setFriendsOpen(true);
+              flash('Showing Discord Shockers');
             }}
-            onOpenClaim={() => {
-              setOverlay('availability');
-              flash('Availability dialog');
+            onOpenOwnShockers={() => {
+              setFriendsOpen(false);
+              flash('Showing owned hub');
             }}
             onOpenMenu={() => setOverlay('menu')}
             onOpenShockerSettings={(s) => {
@@ -329,7 +379,6 @@ export function DemoApp() {
               flash(`Would open settings for ${s.name}`);
             }}
             onSelectHub={() => flash('Hub selector')}
-            onShareHub={() => flash('Would open hub share')}
             onShareShocker={(s) => {
               flash(`Would share ${s.name}`);
               setOverlay('shares');
@@ -355,7 +404,7 @@ export function DemoApp() {
                 className="q-item q-item-type row no-wrap full-width bg-transparent text-left cursor-pointer"
                 onClick={() => setOverlay('shares')}
               >
-                <div className="q-item__label text-grey-3">Shares & links</div>
+                <div className="q-item__label text-grey-3">Shares</div>
               </button>
               <button
                 type="button"
@@ -369,7 +418,7 @@ export function DemoApp() {
 
           <PsDialog
             open={overlay === 'shares' || screen === 'shares'}
-            title="Shares & links"
+            title="Shares"
             onClose={() => {
               setOverlay(null);
               if (screen === 'shares') setScreen('control');
@@ -377,13 +426,9 @@ export function DemoApp() {
             wide
           >
             <SharesPanel
-              links={DEMO_LINKS}
               shared={[]}
               shockers={DEMO_SHOCKERS.filter((s) => s.owned).map((s) => ({ id: s.id, name: s.name }))}
               busy={false}
-              onCreate={() => flash('Would create link')}
-              onPause={() => flash('Would pause link')}
-              onDelete={() => flash('Would delete link')}
               onCreateShare={() => flash('Would create share code')}
               onClaimShare={() => flash('Would redeem share code')}
             />

@@ -1,6 +1,10 @@
 import { DiscordSDK, Common, Events } from '@discord/embedded-app-sdk';
 import { apiFetch, isEmbedded } from './api';
 import { normalizeParticipant, type DiscordParticipant } from './participants';
+import {
+  applyDiscordSafeAreaFallback,
+  installDiscordSafeAreaFallback,
+} from './safeArea';
 
 export type AuthState = {
   accessToken: string;
@@ -13,6 +17,12 @@ export type AuthState = {
 };
 
 let sdk: DiscordSDK | null = null;
+
+/** Drop cached SDK / location state so a reload always re-auths cleanly. */
+export function resetDiscordClient() {
+  sdk = null;
+  locationHintCache = null;
+}
 
 function clientId(): string {
   return import.meta.env.VITE_DISCORD_CLIENT_ID || 'dev_dummy_client_id';
@@ -45,6 +55,107 @@ export function getActivityInstanceId(): string | null {
   }
 }
 
+export type ActivityLocationHint = {
+  guildId: string | null;
+  channelId: string | null;
+  locationKind: string | null;
+  locationName: string | null;
+  locationIconUrl: string | null;
+};
+
+type DiscordGuildSummary = {
+  id: string;
+  name?: string;
+  icon?: string | null;
+};
+
+function guildIconUrl(guildId: string, icon: string | null | undefined): string | null {
+  if (!icon) return null;
+  const ext = icon.startsWith('a_') ? 'gif' : 'png';
+  return `https://cdn.discordapp.com/icons/${guildId}/${icon}.${ext}?size=64`;
+}
+
+let locationHintCache: { key: string; at: number; value: ActivityLocationHint } | null = null;
+const LOCATION_HINT_TTL_MS = 5 * 60_000;
+
+/**
+ * Resolve the current activity's guild/DM name + icon via the user's OAuth token
+ * and Embedded App SDK (more reliable than bot GET /guilds when the bot isn't in-server).
+ */
+export async function resolveActivityLocationHint(
+  accessToken: string,
+): Promise<ActivityLocationHint | null> {
+  if (!isEmbedded || !accessToken || accessToken === 'dev-token') return null;
+
+  try {
+    const sdk = getDiscordSdk();
+    const guildId = sdk.guildId ? String(sdk.guildId) : null;
+    const channelId = sdk.channelId ? String(sdk.channelId) : null;
+    const cacheKey = `${guildId ?? ''}:${channelId ?? ''}`;
+    if (
+      locationHintCache &&
+      locationHintCache.key === cacheKey &&
+      Date.now() - locationHintCache.at < LOCATION_HINT_TTL_MS
+    ) {
+      return locationHintCache.value;
+    }
+
+    let locationName: string | null = null;
+    let locationIconUrl: string | null = null;
+    let locationKind: string | null = guildId ? 'gc' : channelId ? 'dm' : null;
+
+    if (guildId) {
+      const res = await fetch('https://discord.com/api/users/@me/guilds', {
+        headers: { Authorization: `Bearer ${accessToken}` },
+      });
+      if (res.ok) {
+        const guilds = (await res.json()) as DiscordGuildSummary[];
+        const guild = Array.isArray(guilds) ? guilds.find((g) => String(g.id) === guildId) : null;
+        if (guild) {
+          locationName = guild.name ? String(guild.name) : null;
+          locationIconUrl = guildIconUrl(guildId, guild.icon);
+        }
+      }
+    }
+
+    if (channelId && guildId) {
+      try {
+        const channel = await sdk.commands.getChannel({ channel_id: channelId });
+        if (!locationName && channel?.name) {
+          locationName = String(channel.name);
+        }
+      } catch {
+        // optional — guild name from /users/@me/guilds is enough
+      }
+    } else if (channelId && !guildId) {
+      locationKind = 'dm';
+      try {
+        const channel = await sdk.commands.getChannel({ channel_id: channelId });
+        const name = channel?.name ? String(channel.name).trim() : '';
+        if (name) locationName = name;
+        else if (channel?.type === 3) locationName = 'Group DM';
+        else locationName = 'Direct Message';
+      } catch {
+        locationName = locationName ?? 'Direct Message';
+      }
+    }
+
+    if (!locationName && guildId) locationName = 'Discord Server';
+
+    const value: ActivityLocationHint = {
+      guildId,
+      channelId,
+      locationKind,
+      locationName,
+      locationIconUrl,
+    };
+    locationHintCache = { key: cacheKey, at: Date.now(), value };
+    return value;
+  } catch {
+    return null;
+  }
+}
+
 export type BootstrapProgress = {
   progress: number;
   label: string;
@@ -71,9 +182,12 @@ export async function bootstrapDiscord(
   }
 
   report(8, 'Connecting to Discord…');
+  // Always start from a fresh SDK instance after reload / version bump.
+  resetDiscordClient();
   const discordSdk = getDiscordSdk();
   await discordSdk.ready();
   report(22, 'Preparing activity…');
+  installDiscordSafeAreaFallback();
 
   try {
     await discordSdk.commands.setOrientationLockState({
@@ -85,15 +199,37 @@ export async function bootstrapDiscord(
     // optional
   }
 
+  const applyLayout = (layoutMode: number) => {
+    applyDiscordSafeAreaFallback();
+    onLayout(layoutMode === Common.LayoutModeTypeObject.PIP);
+  };
+
+  // Prefer compat helper (covers old ACTIVITY_PIP_MODE_UPDATE + new layout events)
   try {
     const sdkAny = discordSdk as DiscordSDK & {
       subscribeToLayoutModeUpdatesCompat?: (cb: (update: { layout_mode: number }) => void) => void;
     };
-    sdkAny.subscribeToLayoutModeUpdatesCompat?.((update) => {
-      onLayout(update.layout_mode === Common.LayoutModeTypeObject.PIP);
+    if (typeof sdkAny.subscribeToLayoutModeUpdatesCompat === 'function') {
+      sdkAny.subscribeToLayoutModeUpdatesCompat((update) => applyLayout(update.layout_mode));
+    }
+  } catch {
+    // optional
+  }
+
+  // Also subscribe to the modern layout event directly
+  try {
+    void discordSdk.subscribe(Events.ACTIVITY_LAYOUT_MODE_UPDATE, (update) => {
+      applyLayout(update.layout_mode);
     });
   } catch {
     // optional
+  }
+
+  // Keep the PIP surface alive so last-hit updates (WS/logs) still arrive
+  try {
+    await discordSdk.commands.setConfig({ use_interactive_pip: true });
+  } catch {
+    // optional / unsupported on some clients
   }
 
   report(38, 'Authorizing with Discord…');
@@ -166,4 +302,87 @@ export async function openExternal(url: string) {
     }
   }
   window.open(url, '_blank', 'noopener,noreferrer');
+}
+
+/**
+ * Rich Presence via Embedded App SDK `setActivity`.
+ * Requires Developer Portal art asset key `pishock_logo`, Activities enabled,
+ * and `rpc.activities.write` (already requested at authorize). Portal toggles
+ * cannot be enabled from code.
+ */
+import {
+  PRESENCE_ASSET_KEY,
+  PRESENCE_PARTY_SOFT_MAX,
+  type PresenceSnapshot,
+} from '../shared/presence';
+
+export {
+  buildPresenceSnapshot,
+  PRESENCE_ASSET_KEY,
+  PRESENCE_PARTY_SOFT_MAX,
+  type PresenceSnapshot,
+} from '../shared/presence';
+
+const PRESENCE_DEBOUNCE_MS = 400;
+
+let presenceTimer: ReturnType<typeof setTimeout> | null = null;
+let lastPresenceKey: string | null = null;
+let presenceInflight: string | null = null;
+
+function presenceKey(snapshot: PresenceSnapshot): string {
+  return [
+    snapshot.details,
+    snapshot.state,
+    snapshot.partySize,
+    snapshot.partyMax,
+    snapshot.instanceId ?? '',
+    snapshot.startedAt,
+  ].join('|');
+}
+
+async function pushRichPresence(snapshot: PresenceSnapshot): Promise<void> {
+  if (!isEmbedded) return;
+  const key = presenceKey(snapshot);
+  if (key === lastPresenceKey || key === presenceInflight) return;
+  presenceInflight = key;
+  try {
+    const discordSdk = getDiscordSdk();
+    const partyId = snapshot.instanceId || `pishock-${snapshot.startedAt}`;
+    const current = Math.max(1, Math.floor(snapshot.partySize) || 1);
+    const max = Math.max(current, Math.floor(snapshot.partyMax) || PRESENCE_PARTY_SOFT_MAX);
+    // Unix seconds for Discord timestamps
+    const startSec = Math.floor(snapshot.startedAt / 1000);
+    await discordSdk.commands.setActivity({
+      activity: {
+        type: 0,
+        details: snapshot.details,
+        state: snapshot.state,
+        instance: true,
+        timestamps: { start: startSec },
+        assets: {
+          large_image: PRESENCE_ASSET_KEY,
+          large_text: 'PiShock',
+        },
+        party: {
+          id: partyId,
+          size: [current, max],
+        },
+      },
+    });
+    lastPresenceKey = key;
+  } catch {
+    // Optional on some clients / missing scope / missing art asset
+  } finally {
+    if (presenceInflight === key) presenceInflight = null;
+  }
+}
+
+/** Debounced Rich Presence update from privacy-safe app state. */
+export function updateRichPresence(snapshot: PresenceSnapshot): void {
+  if (!isEmbedded) return;
+  if (presenceTimer) clearTimeout(presenceTimer);
+  presenceTimer = setTimeout(() => {
+    presenceTimer = null;
+    void pushRichPresence(snapshot);
+  }, PRESENCE_DEBOUNCE_MS);
 }

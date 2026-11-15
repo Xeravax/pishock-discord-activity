@@ -4,7 +4,6 @@ generator client {
 
 datasource db {
   provider = "postgresql"
-  url      = env("DATABASE_URL")
 }
 
 model DiscordUser {
@@ -14,10 +13,31 @@ model DiscordUser {
   avatar         String?
   consentAt      DateTime?
   /// Personal Discord Activity operate caps (own devices). Separate from PiShock device max.
+  activityMinIntensity  Int @default(1)
   activityMaxIntensity  Int @default(100)
+  activityMinDurationMs Int @default(16)
   activityMaxDurationMs Int @default(15000)
+  /// Separate vibrate / beep bands for own-device operate (nest under device max).
+  activityVibMinIntensity  Int @default(1)
+  activityVibMaxIntensity  Int @default(100)
+  activityVibMinDurationMs Int @default(16)
+  activityVibMaxDurationMs Int @default(15000)
+  activityBeepMinIntensity  Int @default(1)
+  activityBeepMaxIntensity  Int @default(100)
+  activityBeepMinDurationMs Int @default(16)
+  activityBeepMaxDurationMs Int @default(15000)
+  /// Guests shocking you must use at least this warning level (none|small|mid|long).
+  activityRequiredWarningLevel String @default("none")
   /// Owner kill-switch: shocker ids with emergency stop latched in. Blocks all commands until released.
   emergencyStopShockerIds Int[] @default([])
+  /// When true, incoming participant commands line up one-at-a-time for this wearer.
+  commandQueueEnabled Boolean @default(false)
+  /// Minimum ms a queue item occupies before the next starts (0 = follow command duration).
+  commandQueueProgressMs Int @default(0)
+  /// How many waiting commands one sender may have lined up.
+  commandQueueMaxPerSender Int @default(3)
+  /// When true, only starred participants may operate this wearer's shared shockers.
+  commandQueueStarOnly Boolean @default(false)
   createdAt      DateTime        @default(now())
   updatedAt      DateTime        @updatedAt
   pishockSession PiShockSession?
@@ -25,19 +45,28 @@ model DiscordUser {
   activityShares ActivityShare[]
   activityBans   ActivityBan[]   @relation("BanOwner")
   bannedBy       ActivityBan[]   @relation("BannedUser")
+  queueStarsGiven ActivityQueueStar[] @relation("QueueStarOwner")
+  queueStarsReceived ActivityQueueStar[] @relation("QueueStarStarred")
 }
 
 model PiShockSession {
-  id             String     @id @default(cuid())
-  discordUserId  String     @unique
-  discordUser    DiscordUser @relation(fields: [discordUserId], references: [id], onDelete: Cascade)
-  pishockUserId  Int
-  /// AES-256-GCM ciphertext of the PiShock session token (never returned to the browser)
-  encryptedToken String
-  tokenIv        String
-  tokenAuthTag   String
-  createdAt      DateTime   @default(now())
-  updatedAt      DateTime   @updatedAt
+  id              String     @id @default(cuid())
+  discordUserId   String     @unique
+  discordUser     DiscordUser @relation(fields: [discordUserId], references: [id], onDelete: Cascade)
+  /// One PiShock account can be linked to only one Discord user.
+  pishockUserId   Int        @unique
+  pishockUsername String
+  /// AES-256-GCM ciphertext of the PiShock API key (never returned to the browser after confirm)
+  encryptedToken  String
+  tokenIv         String
+  tokenAuthTag    String
+  /// Optional soft hint (PiShock-reported). Null = no app clock expiry; wipe only on API reject.
+  expiresAt       DateTime?
+  apiKeyId        Int?
+  /// SHA-256 of the API key, so a rejected key can be found without decrypting every row.
+  apiKeyHash      String?    @unique
+  createdAt       DateTime   @default(now())
+  updatedAt       DateTime   @updatedAt
 }
 
 model ActivityShare {
@@ -47,6 +76,8 @@ model ActivityShare {
   shockerId     Int
   shockerName   String
   hubClientId   String?
+  /// PiShock hub display name at share-save time (for multi-hub UI + logs).
+  hubName       String?
   /// PiShock share code used when the executor has their own session (OperateByShare)
   shareCode     String?
   /// Hard ceiling from the PiShock device/share (UI red zone above this)
@@ -54,13 +85,27 @@ model ActivityShare {
   deviceMaxDurationMs Int @default(15000)
   enabled       Boolean     @default(true)
   paused        Boolean     @default(false)
-  /// Discord Activity Limit — must be ≤ device max; separate from PiShock website limits
+  /// Shock band — must be ≤ device max; separate from PiShock website limits
+  minIntensity  Int         @default(1)
   maxIntensity  Int         @default(100)
+  minDurationMs Int         @default(16)
   maxDurationMs Int         @default(15000)
+  /// Vibrate band for guests controlling this share
+  vibMinIntensity  Int      @default(1)
+  vibMaxIntensity  Int      @default(100)
+  vibMinDurationMs Int      @default(16)
+  vibMaxDurationMs Int      @default(15000)
+  /// Beep band for guests controlling this share
+  beepMinIntensity  Int     @default(1)
+  beepMaxIntensity  Int     @default(100)
+  beepMinDurationMs Int     @default(16)
+  beepMaxDurationMs Int     @default(15000)
   canShock      Boolean     @default(true)
   canVibrate    Boolean     @default(true)
   canBeep       Boolean     @default(true)
   canHold       Boolean     @default(true)
+  /// Guests must use at least this warning before shock (none|small|mid|long)
+  requiredWarningLevel String @default("none")
   createdAt     DateTime    @default(now())
   updatedAt     DateTime    @updatedAt
 
@@ -80,21 +125,54 @@ model ActivityBan {
   @@index([ownerDiscordUserId])
 }
 
+/// Wearer-marked priority senders — their commands jump ahead in that wearer's queue.
+model ActivityQueueStar {
+  id                   String      @id @default(cuid())
+  ownerDiscordUserId   String
+  owner                DiscordUser @relation("QueueStarOwner", fields: [ownerDiscordUserId], references: [id], onDelete: Cascade)
+  starredDiscordUserId String
+  starred              DiscordUser @relation("QueueStarStarred", fields: [starredDiscordUserId], references: [id], onDelete: Cascade)
+  createdAt            DateTime    @default(now())
+
+  @@unique([ownerDiscordUserId, starredDiscordUserId])
+  @@index([ownerDiscordUserId])
+}
+
 model CommandLog {
   id                   String      @id @default(cuid())
   discordUserId        String
   discordUser          DiscordUser @relation(fields: [discordUserId], references: [id], onDelete: Cascade)
   executorDiscordUserId String?
   targetDiscordUserId  String?
+  /// Display name when the executor is not a Discord user (e.g. PiShock website panel)
+  executorLabel        String?
   action               String
   shockerId            Int?
+  /// Device name at command time (PiShock name, or the activity share name).
+  shockerName          String?
+  /// Hub client id used for the command (when known).
+  hubClientId          String?
+  /// Hub display name at command time (when known).
+  hubName              String?
   shareCode            String?
   intensity            Int?
   durationMs           Int?
   success              Boolean
   detail               String?
+  /// "discord" = this Discord activity app; "website" = PiShock website / other panel
+  source               String      @default("discord")
+  instanceId           String?
+  guildId              String?
+  channelId            String?
+  locationKind         String?
+  locationName         String?
+  locationIconUrl      String?
+  /// Stable key for synced website device logs (dedupe)
+  externalLogKey       String?     @unique
   createdAt            DateTime    @default(now())
 
   @@index([discordUserId, createdAt])
   @@index([targetDiscordUserId, createdAt])
+  @@index([createdAt])
+  @@index([source, createdAt])
 }

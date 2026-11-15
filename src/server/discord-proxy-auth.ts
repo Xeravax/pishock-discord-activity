@@ -13,6 +13,9 @@ export class ProxyAuthError extends Error {
 export type ProxyPayload = {
   created_at: number;
   expires_at: number;
+  user_id?: string;
+  application_id?: string;
+  is_developer?: boolean;
   [key: string]: unknown;
 };
 
@@ -74,7 +77,28 @@ export function validateDiscordProxyHeaders(env: AppEnv, req: FastifyRequest): P
     throw new ProxyAuthError('invalid request signature');
   }
 
+  if (env.discordClientId && payloadData.application_id) {
+    if (String(payloadData.application_id) !== String(env.discordClientId)) {
+      throw new ProxyAuthError('Proxy payload application mismatch');
+    }
+  }
+
   return payloadData;
+}
+
+/** Bind a verified proxy payload to the Discord bearer user. */
+export function assertProxyPayloadMatchesUser(
+  payload: ProxyPayload | null,
+  discordUserId: string,
+): void {
+  if (!payload) return;
+  const proxyUserId = payload.user_id != null ? String(payload.user_id) : null;
+  if (!proxyUserId) {
+    throw new ProxyAuthError('Proxy payload missing user_id');
+  }
+  if (proxyUserId !== discordUserId) {
+    throw new ProxyAuthError('Proxy payload user does not match bearer');
+  }
 }
 
 function header(req: FastifyRequest, name: string): string | null {

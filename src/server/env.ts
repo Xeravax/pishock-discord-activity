@@ -1,7 +1,9 @@
 function required(name: string): string {
-  const value = process.env[name];
+  const value = process.env[name]?.trim();
   if (!value) {
-    throw new Error(`Missing required environment variable: ${name}`);
+    throw new Error(
+      `Missing required environment variable: ${name}. Set it in .env / compose; the process will not start without it.`,
+    );
   }
   return value;
 }
@@ -19,8 +21,21 @@ export function loadEnv() {
     discordBotToken: process.env.DISCORD_BOT_TOKEN?.trim() || null,
     /** Application public key (hex) for proxy signature verification */
     discordPublicKey: process.env.DISCORD_PUBLIC_KEY?.trim() || null,
-    /** When true, /api/participants/* require valid Discord proxy signatures */
-    requireDiscordProxyAuth: process.env.REQUIRE_DISCORD_PROXY_AUTH === '1',
+    /**
+     * When true, /api/participants/* require valid Discord proxy signatures.
+     * Defaults on in production unless explicitly set to 0.
+     */
+    requireDiscordProxyAuth:
+      process.env.REQUIRE_DISCORD_PROXY_AUTH === '1' ||
+      (process.env.NODE_ENV === 'production' && process.env.REQUIRE_DISCORD_PROXY_AUTH !== '0'),
+    /**
+     * Dev-only: allow skipping Activity Instance API when DISCORD_BOT_TOKEN is missing.
+     * Never enable in production.
+     */
+    allowMissingBotInstanceCheck:
+      process.env.ALLOW_MISSING_BOT_INSTANCE_CHECK === '1' && process.env.NODE_ENV !== 'production',
+    /** Root for durable local files (PiShock profile images, etc.). Defaults to ./data */
+    dataDir: process.env.DATA_DIR?.trim() || null,
   };
 }
 
