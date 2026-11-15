@@ -492,7 +492,7 @@ function fitLayout(ctx: CanvasRenderingContext2D, entry: OfficialLogEntry): Layo
   const orbitRy = Math.max(m.ascent, m.descent) + 36;
   const boltScale = Math.min(1, lane / 34);
   const effectBottom =
-    entry.action === 'vibrate' ? heroY + m.descent : heroY + orbitRy + 30;
+    entry.action === 'shock' ? heroY + orbitRy + 30 : heroY + m.descent;
   const detailY = Math.max(effectBottom, chipY + m.chipH) + 22;
   const cx = CARD_W / 2;
 
@@ -555,42 +555,36 @@ function drawOrbitingBolts(
   }
 }
 
+/** Speaker-style pings on either side of the word. Arcs open outward and fade as they travel. */
 function drawBeepWaves(
   ctx: CanvasRenderingContext2D,
   cx: number,
   cy: number,
-  rx: number,
-  ry: number,
+  halfW: number,
+  sideGap: number,
   frame: number,
   frames: number,
 ) {
-  ctx.save();
-  ctx.strokeStyle = COLORS.cyan;
-  ctx.lineWidth = 3.5;
-  ctx.shadowColor = 'rgba(90, 216, 255, 0.85)';
-  ctx.shadowBlur = 8;
-  ctx.beginPath();
-  ctx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2);
-  ctx.stroke();
-  ctx.restore();
-
-  const waves = 3;
-  for (let i = 0; i < waves; i++) {
-    const t = (frame / frames + i / waves) % 1;
-    const hGrow = t * 14;
-    const vGrow = t * 42;
-    ctx.save();
-    ctx.globalAlpha = (1 - t) * 0.9;
-    ctx.strokeStyle = i % 2 === 0 ? COLORS.cyan : '#d7f6ff';
-    ctx.lineWidth = 3;
-    ctx.lineCap = 'round';
-    ctx.beginPath();
-    ctx.ellipse(cx, cy, rx + hGrow, ry + 8 + vGrow, 0, Math.PI + 0.42, Math.PI * 2 - 0.42);
-    ctx.stroke();
-    ctx.beginPath();
-    ctx.ellipse(cx, cy, rx + hGrow, ry + 8 + vGrow, 0, 0.42, Math.PI - 0.42);
-    ctx.stroke();
-    ctx.restore();
+  const maxR = Math.max(16, Math.min(32, sideGap - 16));
+  const waves = 2;
+  for (const dir of [-1, 1] as const) {
+    const ox = cx + dir * (halfW + 12);
+    for (let i = 0; i < waves; i++) {
+      const t = (frame / frames + i / waves) % 1;
+      const radius = 8 + t * (maxR - 8);
+      ctx.save();
+      ctx.globalAlpha = (1 - t) * 0.95;
+      ctx.strokeStyle = t < 0.45 ? '#e9fbff' : COLORS.cyan;
+      ctx.lineWidth = 3.4 - t * 1.4;
+      ctx.lineCap = 'round';
+      ctx.shadowColor = 'rgba(90, 216, 255, 0.85)';
+      ctx.shadowBlur = 8;
+      ctx.beginPath();
+      if (dir > 0) ctx.arc(ox, cy, radius, -1.05, 1.05);
+      else ctx.arc(ox, cy, radius, Math.PI - 1.05, Math.PI + 1.05);
+      ctx.stroke();
+      ctx.restore();
+    }
   }
 }
 
@@ -671,8 +665,11 @@ function drawHeadline(
   ctx: CanvasRenderingContext2D,
   entry: OfficialLogEntry,
   layout: Layout,
+  dx = 0,
+  dy = 0,
 ) {
-  const cx = CARD_W / 2;
+  const cx = CARD_W / 2 + dx;
+  const cy = layout.heroY + dy;
   const color = wordColor(entry.action);
   ctx.font = `italic 800 ${layout.fontSize}px ${DISPLAY}`;
   ctx.textAlign = 'center';
@@ -681,18 +678,18 @@ function drawHeadline(
     ctx.save();
     ctx.globalAlpha = 0.45;
     ctx.fillStyle = COLORS.ghost;
-    ctx.fillText(layout.headline, cx - 6, layout.heroY);
+    ctx.fillText(layout.headline, cx - 6, cy);
     ctx.fillStyle = COLORS.magenta;
     ctx.globalAlpha = 0.28;
-    ctx.fillText(layout.headline, cx + 5, layout.heroY + 1);
+    ctx.fillText(layout.headline, cx + 5, cy + 1);
     ctx.restore();
   }
   ctx.fillStyle = color;
   ctx.shadowColor = entry.action === 'vibrate' ? 'rgba(255, 75, 214, 0.95)' : entry.action === 'beep' ? 'rgba(90, 216, 255, 0.9)' : 'rgba(255, 210, 0, 0.9)';
   ctx.shadowBlur = 14;
-  ctx.fillText(layout.headline, cx, layout.heroY);
+  ctx.fillText(layout.headline, cx, cy);
   ctx.shadowBlur = 0;
-  ctx.fillText(layout.headline, cx, layout.heroY);
+  ctx.fillText(layout.headline, cx, cy);
 }
 
 function paintCard(
@@ -725,7 +722,6 @@ function paintCard(
   ctx.save();
   roundRect(ctx, cardX, cardY, cardW, cardH, radius);
   ctx.clip();
-  ctx.translate(jx, jy);
 
   const wash = ctx.createRadialGradient(
     CARD_W * 0.5,
@@ -796,11 +792,11 @@ function paintCard(
   );
 
   const cx = CARD_W / 2;
-  if (entry.action === 'beep') {
-    drawBeepWaves(ctx, cx, layout.heroY, layout.orbitRx, layout.orbitRy, frame, frames);
-  }
+  drawHeadline(ctx, entry, layout, jx, jy);
 
-  drawHeadline(ctx, entry, layout);
+  if (entry.action === 'beep') {
+    drawBeepWaves(ctx, cx, layout.heroY, layout.halfW, layout.gap, frame, frames);
+  }
 
   if (entry.action === 'shock') {
     drawOrbitingBolts(
