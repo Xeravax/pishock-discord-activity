@@ -74,8 +74,13 @@ const BASE_SCOPES = [
 const VOICE_SCOPES = [...BASE_SCOPES, 'rpc.voice.read'] as const;
 
 const SPEAKING_STALE_MS = 2000;
-/** Authorize/authenticate should answer quickly with prompt: 'none'. */
+/**
+ * Silent authorize returns immediately when the scopes are already granted.
+ * A missing scope opens Discord's OAuth sheet; Canary sometimes fails to draw
+ * that sheet and never answers. Voice gets a short wait, then we drop it.
+ */
 const DISCORD_AUTH_TIMEOUT_MS = 15_000;
+const VOICE_AUTHORIZE_TIMEOUT_MS = 5_000;
 
 class DiscordCommandTimeoutError extends Error {
   constructor(step: string) {
@@ -113,11 +118,45 @@ function withDeadline<T>(promise: Promise<T>, ms: number, step: string): Promise
 }
 
 /**
- * Orientation lock and interactive PIP are optional. Desktop and a replaced
- * iframe often never acknowledge them. Apply after authorize so a missing
- * reply cannot pin startup on "Preparing activity…".
+ * Layout, orientation, and PIP commands are optional. Desktop and a replaced
+ * iframe often never acknowledge them. Run them only after authorize — a
+ * subscribe sent earlier is rejected as unauthenticated and can wedge the
+ * consent sheet so AUTHORIZE never returns.
  */
-function applyOptionalActivityChrome(discordSdk: DiscordSDK): void {
+function applyOptionalActivityChrome(
+  discordSdk: DiscordSDK,
+  onLayout: (pip: boolean) => void,
+): void {
+  const applyLayout = (layoutMode: number) => {
+    applyDiscordSafeAreaFallback();
+    onLayout(layoutMode === Common.LayoutModeTypeObject.PIP);
+  };
+
+  try {
+    const sdkAny = discordSdk as DiscordSDK & {
+      subscribeToLayoutModeUpdatesCompat?: (
+        cb: (update: { layout_mode: number }) => void,
+      ) => void | Promise<unknown>;
+    };
+    if (typeof sdkAny.subscribeToLayoutModeUpdatesCompat === 'function') {
+      ignoreRejection(
+        sdkAny.subscribeToLayoutModeUpdatesCompat((update) => applyLayout(update.layout_mode)),
+      );
+    }
+  } catch {
+    // optional
+  }
+
+  try {
+    ignoreRejection(
+      discordSdk.subscribe(Events.ACTIVITY_LAYOUT_MODE_UPDATE, (update) => {
+        applyLayout(update.layout_mode);
+      }),
+    );
+  } catch {
+    // optional
+  }
+
   ignoreRejection(
     discordSdk.commands.setOrientationLockState({
       lock_state: Common.OrientationLockStateTypeObject.UNLOCKED,
@@ -190,6 +229,74 @@ export function getDiscordSdk(): DiscordSDK {
     window.history.replaceState({}, '', `${window.location.pathname}${originalSearch}`);
   }
   return sdk;
+}
+
+type ActivityScope = (typeof VOICE_SCOPES)[number];
+
+function authorizeCommand(discordSdk: DiscordSDK, scope: readonly ActivityScope[]) {
+  return discordSdk.commands.authorize({
+    client_id: clientId(),
+    response_type: 'code',
+    state: '',
+    prompt: 'none',
+    scope: [...scope],
+  });
+}
+
+async function tryAuthorize(
+  discordSdk: DiscordSDK,
+  scope: readonly ActivityScope[],
+  ms: number,
+): Promise<{ ok: true; code: string } | { ok: false; timedOut: boolean; error: unknown }> {
+  try {
+    const result = await withDeadline(authorizeCommand(discordSdk, scope), ms, 'authorizing');
+    return { ok: true, code: result.code };
+  } catch (error) {
+    return {
+      ok: false,
+      timedOut: error instanceof DiscordCommandTimeoutError,
+      error,
+    };
+  }
+}
+
+/** New handshake. Closes a previous SDK so a stuck consent command cannot linger. */
+async function connectDiscordSdk(): Promise<DiscordSDK> {
+  if (sdk) {
+    try {
+      sdk.close(1000, 'reconnect');
+    } catch {
+      // already closed
+    }
+  }
+  resetDiscordClient();
+  const discordSdk = getDiscordSdk();
+  await withDeadline(discordSdk.ready(), DISCORD_AUTH_TIMEOUT_MS, 'connecting');
+  return discordSdk;
+}
+
+/**
+ * Authorize is the first RPC after ready(). Voice is optional: if Discord
+ * opens a consent sheet and never answers, reconnect and continue without it.
+ */
+async function authorizeDiscord(discordSdk: DiscordSDK): Promise<{
+  sdk: DiscordSDK;
+  code: string;
+  voiceRead: boolean;
+}> {
+  const voice = await tryAuthorize(discordSdk, VOICE_SCOPES, VOICE_AUTHORIZE_TIMEOUT_MS);
+  if (voice.ok) return { sdk: discordSdk, code: voice.code, voiceRead: true };
+
+  if (!voice.timedOut) {
+    const base = await tryAuthorize(discordSdk, BASE_SCOPES, DISCORD_AUTH_TIMEOUT_MS);
+    if (base.ok) return { sdk: discordSdk, code: base.code, voiceRead: false };
+    if (!base.timedOut) throw base.error;
+  }
+
+  const retrySdk = await connectDiscordSdk();
+  const base = await tryAuthorize(retrySdk, BASE_SCOPES, DISCORD_AUTH_TIMEOUT_MS);
+  if (base.ok) return { sdk: retrySdk, code: base.code, voiceRead: false };
+  throw base.error;
 }
 
 export function getActivityInstanceId(): string | null {
@@ -329,77 +436,13 @@ export async function bootstrapDiscord(
 
   report(8, 'Connecting to Discord…');
   // Always start from a fresh SDK instance after reload / version bump.
-  resetDiscordClient();
-  const discordSdk = getDiscordSdk();
-  await withDeadline(discordSdk.ready(), DISCORD_AUTH_TIMEOUT_MS, 'connecting');
+  let discordSdk = await connectDiscordSdk();
   report(22, 'Preparing activity…');
   installDiscordSafeAreaFallback();
 
-  const applyLayout = (layoutMode: number) => {
-    applyDiscordSafeAreaFallback();
-    onLayout(layoutMode === Common.LayoutModeTypeObject.PIP);
-  };
-
-  // Prefer compat helper (covers old ACTIVITY_PIP_MODE_UPDATE + new layout events)
-  try {
-    const sdkAny = discordSdk as DiscordSDK & {
-      subscribeToLayoutModeUpdatesCompat?: (
-        cb: (update: { layout_mode: number }) => void,
-      ) => void | Promise<unknown>;
-    };
-    if (typeof sdkAny.subscribeToLayoutModeUpdatesCompat === 'function') {
-      ignoreRejection(
-        sdkAny.subscribeToLayoutModeUpdatesCompat((update) => applyLayout(update.layout_mode)),
-      );
-    }
-  } catch {
-    // optional
-  }
-
-  // Also subscribe to the modern layout event directly
-  try {
-    ignoreRejection(
-      discordSdk.subscribe(Events.ACTIVITY_LAYOUT_MODE_UPDATE, (update) => {
-        applyLayout(update.layout_mode);
-      }),
-    );
-  } catch {
-    // optional
-  }
-
   report(38, 'Authorizing with Discord…');
-  let voiceRead = false;
-  let code: string;
-  try {
-    const withVoice = await withDeadline(
-      discordSdk.commands.authorize({
-        client_id: clientId(),
-        response_type: 'code',
-        state: '',
-        prompt: 'none',
-        scope: [...VOICE_SCOPES],
-      }),
-      DISCORD_AUTH_TIMEOUT_MS,
-      'authorizing',
-    );
-    code = withVoice.code;
-    voiceRead = true;
-  } catch (err) {
-    if (err instanceof DiscordCommandTimeoutError) throw err;
-    const base = await withDeadline(
-      discordSdk.commands.authorize({
-        client_id: clientId(),
-        response_type: 'code',
-        state: '',
-        prompt: 'none',
-        scope: [...BASE_SCOPES],
-      }),
-      DISCORD_AUTH_TIMEOUT_MS,
-      'authorizing',
-    );
-    code = base.code;
-    voiceRead = false;
-  }
+  const authorized = await authorizeDiscord(discordSdk);
+  discordSdk = authorized.sdk;
 
   report(58, 'Exchanging session…');
   const result = await apiFetch<{
@@ -407,7 +450,7 @@ export async function bootstrapDiscord(
     user: AuthState['user'];
   }>('/auth/discord', null, {
     method: 'POST',
-    body: JSON.stringify({ code }),
+    body: JSON.stringify({ code: authorized.code }),
   });
 
   report(72, 'Signing into activity…');
@@ -416,13 +459,13 @@ export async function bootstrapDiscord(
     DISCORD_AUTH_TIMEOUT_MS,
     'signing in',
   );
-  applyOptionalActivityChrome(discordSdk);
+  applyOptionalActivityChrome(discordSdk, onLayout);
   report(82, 'Authenticated');
 
   return {
     accessToken: result.access_token,
     user: result.user,
-    voiceRead,
+    voiceRead: authorized.voiceRead,
   };
 }
 
