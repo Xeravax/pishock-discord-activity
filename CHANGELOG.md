@@ -1,5 +1,43 @@
 # Changelog
 
+## v2.2.2 — 2026-11-15
+
+## What's changed
+
+- #patch Add error handling and session management for Discord SDK integration (bce1853)
+- Add error handling and session management for Discord SDK integration (131a7c8)
+
+**Full changelog**: https://github.com/Xeravax/pishock-discord-activity/compare/v2.2.1...v2.2.2
+
+## v2.2.1 — 2026-11-15
+
+## What's changed
+
+- #patch Merge pull request #11 from Xeravax/develop (36dffd8)
+- Enhance logShareCard functionality and styles for improved Discord integration (97d930f)
+
+**Full changelog**: https://github.com/Xeravax/pishock-discord-activity/compare/v2.2.0...v2.2.1
+
+## v2.2.0 — 2026-11-15
+
+## What's changed
+
+- #minor Enhance App component with Discord integration and log sharing features (d82605a)
+- Merge branch 'release' into develop (6edc568)
+- Update CHANGELOG for version 2.2.0 and enhance AppVersionBadge component with ChangelogView (6b5b978)
+- Refactor styles and layout for improved responsiveness and visual consistency (d511403)
+- Implement enhanced Discord authorization flow and layout handling (d2e08c1)
+- Add Discord command timeout handling and optional activity configuration (9d7a878)
+- Add grapheme handling and text measurement functions for improved rendering (09103e0)
+- Add warning level support to CommandLog and OfficialLogEntry models (a88426b)
+- Remove share-preview.html file as part of the refactoring process to streamline log sharing functionality. This deletion eliminates outdated code related to rendering share cards, contributing to a cleaner codebase and improved maintainability. (78c19a4)
+- Refactor logShareCard rendering logic for improved layout and visual effects (4141582)
+- Add gifenc package and update log sharing functionality (1ea4ddc)
+- Implement activity invitation and log sharing features in App component (9e0a1c1)
+- Enhance App component with Discord user profile integration and voice indicators (0a9c934)
+
+**Full changelog**: https://github.com/Xeravax/pishock-discord-activity/compare/v2.1.1...v2.2.0
+
 ## v2.2.0 — 2026-11-15
 
 ## What's changed
