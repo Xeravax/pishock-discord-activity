@@ -42,6 +42,8 @@ type Assets = {
   fromImg: HTMLImageElement | null;
   toImg: HTMLImageElement | null;
   mark: HTMLImageElement | null;
+  /** Guild or channel icon. Null when missing or the image failed to load. */
+  placeImg: HTMLImageElement | null;
 };
 
 type Layout = {
@@ -126,6 +128,13 @@ function percentColor(action: OfficialLogEntry['action']): string {
   if (action === 'vibrate') return COLORS.magenta;
   if (action === 'beep') return COLORS.cyan;
   return COLORS.yellow;
+}
+
+/** Ask Discord's CDN for a size that stays sharp on the share banner. */
+function placeIconUrl(entry: OfficialLogEntry): string {
+  const url = entry.location?.iconUrl?.trim() ?? '';
+  if (!url) return '';
+  return url.replace(/([?&])size=\d+/i, '$1size=128');
 }
 
 function loadImage(url: string): Promise<HTMLImageElement | null> {
@@ -389,7 +398,28 @@ function drawPersonChip(
   ctx.fillText(label, x + chipTextInset(height), y + height / 2 + 1);
 }
 
-function drawDiscordBadge(ctx: CanvasRenderingContext2D, right: number, cy: number, label: string) {
+function drawDefaultDiscordIcon(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  icon: number,
+) {
+  ctx.save();
+  const scale = (icon * 0.62) / 24;
+  ctx.translate(x + icon * 0.19, y + icon * 0.2);
+  ctx.scale(scale, scale);
+  ctx.fillStyle = '#e7eef3';
+  ctx.fill(new Path2D(DISCORD_ICON));
+  ctx.restore();
+}
+
+function drawDiscordBadge(
+  ctx: CanvasRenderingContext2D,
+  right: number,
+  cy: number,
+  label: string,
+  iconImg: HTMLImageElement | null,
+) {
   ctx.font = `600 26px ${FONT}`;
   const text = truncate(ctx, label, 420);
   const textW = ctx.measureText(text).width;
@@ -402,13 +432,15 @@ function drawDiscordBadge(ctx: CanvasRenderingContext2D, right: number, cy: numb
   ctx.fillStyle = '#3e464e';
   ctx.fill();
 
-  ctx.save();
-  const scale = (icon * 0.62) / 24;
-  ctx.translate(x + icon * 0.19, y + icon * 0.2);
-  ctx.scale(scale, scale);
-  ctx.fillStyle = '#e7eef3';
-  ctx.fill(new Path2D(DISCORD_ICON));
-  ctx.restore();
+  if (iconImg) {
+    ctx.save();
+    roundRect(ctx, x, y, icon, icon, 10);
+    ctx.clip();
+    ctx.drawImage(iconImg, x, y, icon, icon);
+    ctx.restore();
+  } else {
+    drawDefaultDiscordIcon(ctx, x, y, icon);
+  }
 
   ctx.fillStyle = COLORS.white;
   ctx.font = `600 26px ${FONT}`;
@@ -936,7 +968,9 @@ function paintCard(
   fillTracked(ctx, 'DISCORD ACTIVITY', titleX + 1, logoY + 78, 2.8);
 
   const place = serverLine(entry);
-  if (place) drawDiscordBadge(ctx, cardX + cardW - 36, logoY + logo / 2, place);
+  if (place) {
+    drawDiscordBadge(ctx, cardX + cardW - 36, logoY + logo / 2, place, assets.placeImg);
+  }
 
   drawPersonChip(
     ctx,
@@ -1020,12 +1054,13 @@ function paintCard(
 }
 
 async function loadAssets(entry: OfficialLogEntry): Promise<Assets> {
-  const [fromImg, toImg, mark] = await Promise.all([
+  const [fromImg, toImg, mark, placeImg] = await Promise.all([
     loadImage(entry.from.avatarUrl),
     loadImage(entry.to.avatarUrl),
     loadImage(markUrl),
+    loadImage(placeIconUrl(entry)),
   ]);
-  return { fromImg, toImg, mark };
+  return { fromImg, toImg, mark, placeImg };
 }
 
 function makeCanvas(): { canvas: HTMLCanvasElement; ctx: CanvasRenderingContext2D } {
