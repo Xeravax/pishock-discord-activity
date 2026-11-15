@@ -1,4 +1,11 @@
-import { DiscordSDK, Common, Events } from '@discord/embedded-app-sdk';
+import {
+  DiscordSDK,
+  Common,
+  Events,
+  Permissions,
+  PermissionUtils,
+  Platform,
+} from '@discord/embedded-app-sdk';
 import { apiFetch, isEmbedded } from './api';
 import { normalizeParticipant, type DiscordParticipant } from './participants';
 import {
@@ -594,6 +601,90 @@ export async function openExternal(url: string) {
     }
   }
   window.open(url, '_blank', 'noopener,noreferrer');
+}
+
+/** True when the Discord client reports desktop (share-moment is desktop-only). */
+export function isDesktopPlatform(): boolean {
+  if (!isEmbedded) return false;
+  try {
+    return getDiscordSdk().platform === Platform.DESKTOP;
+  } catch {
+    return new URLSearchParams(window.location.search).get('platform') === Platform.DESKTOP;
+  }
+}
+
+export type InviteActivityResult =
+  | { method: 'invite_dialog' }
+  | { method: 'share_link'; success: boolean };
+
+/**
+ * Invite someone into the activity: guild invite dialog when permitted,
+ * otherwise shareLink (works in DMs / without CREATE_INSTANT_INVITE).
+ */
+export async function inviteToActivity(): Promise<InviteActivityResult> {
+  if (!isEmbedded) {
+    throw new Error('Invite is only available inside Discord');
+  }
+  const discordSdk = getDiscordSdk();
+  const guildId = discordSdk.guildId ? String(discordSdk.guildId) : null;
+
+  if (guildId) {
+    try {
+      const { permissions } = await discordSdk.commands.getChannelPermissions();
+      if (PermissionUtils.can(Permissions.CREATE_INSTANT_INVITE, permissions)) {
+        await discordSdk.commands.openInviteDialog();
+        return { method: 'invite_dialog' };
+      }
+    } catch {
+      // Fall through to shareLink
+    }
+  }
+
+  const { success } = await discordSdk.commands.shareLink({
+    message: 'Join me in the PiShock activity.',
+  });
+  return { method: 'share_link', success };
+}
+
+/** Upload a PNG (or other image) to Discord’s ephemeral activity attachment CDN. */
+export async function uploadActivityAttachment(
+  accessToken: string,
+  file: Blob,
+  filename = 'pishock-moment.png',
+): Promise<string> {
+  if (!accessToken || accessToken === 'dev-token') {
+    throw new Error('Share requires Discord authentication');
+  }
+  const body = new FormData();
+  body.append('file', file, filename);
+  const res = await fetch(
+    `https://discord.com/api/applications/${clientId()}/attachment`,
+    {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${accessToken}` },
+      body,
+    },
+  );
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    throw new Error(text || `Attachment upload failed (${res.status})`);
+  }
+  const json = (await res.json()) as { attachment?: { url?: string }; url?: string };
+  const mediaUrl = json.attachment?.url || json.url;
+  if (!mediaUrl) throw new Error('Attachment upload returned no URL');
+  return String(mediaUrl);
+}
+
+/** Open Discord’s share-moment dialog (desktop only). */
+export async function openShareMoment(mediaUrl: string): Promise<void> {
+  if (!isEmbedded) {
+    throw new Error('Share is only available inside Discord');
+  }
+  if (!isDesktopPlatform()) {
+    throw new Error('Share moment is only available on desktop Discord');
+  }
+  const discordSdk = getDiscordSdk();
+  await discordSdk.commands.openShareMomentDialog({ mediaUrl });
 }
 
 /**

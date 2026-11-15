@@ -7,17 +7,22 @@ import {
   fetchInstanceParticipants,
   getActivityInstanceId,
   guildMemberAvatarUrl,
+  inviteToActivity,
+  isDesktopPlatform,
   openExternal,
+  openShareMoment,
   resolveActivityLocationHint,
   subscribeCurrentGuildMember,
   subscribeCurrentUser,
   subscribeParticipants,
   subscribeVoiceIndicators,
   updateRichPresence,
+  uploadActivityAttachment,
   type AuthState,
   type DiscordUserProfile,
   type VoiceStateFlags,
 } from './discord';
+import { renderLogShareCard } from './logShareCard';
 import { SafetyWarning } from './components/SafetyWarning';
 import { SafetyNoticeBar } from './components/SafetyNoticeBar';
 import { TermsOfService } from './components/TermsOfService';
@@ -198,6 +203,9 @@ export function App() {
   const defaultMenuAppliedRef = useRef(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [actionNotice, setActionNotice] = useState<string | null>(null);
+  const [inviteBusy, setInviteBusy] = useState(false);
+  const [sharingEntryId, setSharingEntryId] = useState<string | null>(null);
+  const canShareLogMoment = isEmbedded && isDesktopPlatform();
   const [legalView, setLegalView] = useState<LegalView>(null);
   const [friendsMode, setFriendsMode] = useState(true);
   const [participantRosterLoaded, setParticipantRosterLoaded] = useState(false);
@@ -2036,6 +2044,40 @@ export function App() {
     }
   };
 
+  const handleInviteToActivity = useCallback(async () => {
+    if (!isEmbedded || inviteBusy) return;
+    setInviteBusy(true);
+    setActionError(null);
+    try {
+      const result = await inviteToActivity();
+      if (result.method === 'share_link' && result.success) {
+        setActionNotice('Invite link shared.');
+      }
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setInviteBusy(false);
+    }
+  }, [inviteBusy]);
+
+  const handleShareLogEntry = useCallback(
+    async (entry: OfficialLogEntry) => {
+      if (!token || !canShareLogMoment || sharingEntryId) return;
+      setSharingEntryId(entry.id);
+      setActionError(null);
+      try {
+        const blob = await renderLogShareCard(entry);
+        const mediaUrl = await uploadActivityAttachment(token, blob);
+        await openShareMoment(mediaUrl);
+      } catch (err) {
+        setActionError(err instanceof Error ? err.message : String(err));
+      } finally {
+        setSharingEntryId(null);
+      }
+    },
+    [token, canShareLogMoment, sharingEntryId],
+  );
+
   const setEmergencyStop = async (input: {
     shockerId: number;
     shockerIds?: number[];
@@ -2637,6 +2679,8 @@ export function App() {
                 });
               }}
               onRefresh={() => token && refreshParticipants(token, true)}
+              onInvite={isEmbedded ? () => void handleInviteToActivity() : undefined}
+              inviteBusy={inviteBusy}
               onTogglePriority={
                 me.pishockLinked
                   ? (id, starred) => void toggleQueueStar(id, starred)
@@ -3120,6 +3164,9 @@ export function App() {
         <OfficialLogsPanel
           open={logsOpen || overlay === 'logs'}
           entries={officialLogEntries}
+          canShareMoment={canShareLogMoment}
+          sharingEntryId={sharingEntryId}
+          onShareEntry={(entry) => void handleShareLogEntry(entry)}
           onClose={() => {
             setLogsOpen(false);
             if (overlay === 'logs') setOverlay(null);

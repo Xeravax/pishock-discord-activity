@@ -1630,6 +1630,36 @@ html.pip-mode .app-restart-overlay:not(.app-restart-overlay--outdated) {
   color: rgba(255, 255, 255, 0.45);
 }
 
+.official-log-share {
+  margin-left: auto;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: rgba(121, 198, 219, 0.16);
+  color: #9fd8e8;
+  cursor: pointer;
+}
+
+.official-log-share:hover:not(:disabled) {
+  background: rgba(121, 198, 219, 0.28);
+  color: #c8eaf3;
+}
+
+.official-log-share:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.official-log-share .q-icon {
+  font-size: 16px;
+}
+
 .official-log-source {
   display: inline-flex;
   align-items: center;

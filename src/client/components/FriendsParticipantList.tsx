@@ -19,6 +19,9 @@ type Props = {
   onToggleIndividualIntensity?: () => void;
   onSelect: (discordUserId: string | null) => void;
   onRefresh?: () => void;
+  /** Invite someone into this activity (guild invite dialog or share link). */
+  onInvite?: () => void;
+  inviteBusy?: boolean;
   /** Star someone so their commands to you get queue priority */
   onTogglePriority?: (discordUserId: string, starred: boolean) => void;
 };
@@ -37,6 +40,8 @@ export function FriendsParticipantList({
   onToggleIndividualIntensity,
   onSelect,
   onRefresh,
+  onInvite,
+  inviteBusy = false,
   onTogglePriority,
 }: Props) {
   const others = participants.filter((p) => p.id !== currentUserId);
@@ -65,6 +70,27 @@ export function FriendsParticipantList({
               onToggle={onToggleIndividualIntensity}
               compact
             />
+          ) : null}
+          {onInvite ? (
+            <button
+              type="button"
+              className="q-btn q-btn-item non-selectable no-outline q-btn--flat q-btn--round text-secondary q-btn--dense q-btn--actionable"
+              onClick={onInvite}
+              disabled={inviteBusy}
+              aria-label="Invite someone to this activity"
+              title="Invite"
+              style={{ minHeight: 22, minWidth: 22, padding: 0 }}
+            >
+              <span className="q-btn__wrapper col row q-anchor--skip">
+                <span className="q-btn__content text-center col items-center q-anchor--skip justify-center row">
+                  <i
+                    className={`q-icon mdi ${inviteBusy ? 'mdi-loading mdi-spin' : 'mdi-account-plus'}`}
+                    style={{ fontSize: 14 }}
+                    aria-hidden
+                  />
+                </span>
+              </span>
+            </button>
           ) : null}
           {onRefresh ? (
             <button
