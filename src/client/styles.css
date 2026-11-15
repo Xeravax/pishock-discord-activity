@@ -860,18 +860,139 @@ html.pip-mode #root > * {
 }
 
 .official-control-surface {
-  max-width: 720px;
+  width: 100%;
+  max-width: none;
   margin: 0 auto;
-  padding-left: 18px !important;
-  padding-right: 18px !important;
+  padding-left: 12px !important;
+  padding-right: 12px !important;
+  padding-bottom: 8px !important;
   box-sizing: border-box;
 }
 
-/* Desktop remote is intentionally oversized; phones drop the scale to fit Discord’s chrome */
+/* Remote sizes with the layout. CSS scale overflowed the viewport and
+   pulled the title / Pair button away from the shock and vibrate columns. */
 .official-remote-cluster {
-  margin: 48px;
-  scale: 1.25;
-  transform-origin: top center;
+  margin: 8px auto 16px;
+  width: 100%;
+  max-width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.official-remote-frame {
+  width: 100%;
+  display: flex;
+  justify-content: center;
+  padding: 0 4px 12px;
+  box-sizing: border-box;
+}
+
+.official-remote-card {
+  width: max-content;
+  max-width: 100%;
+  margin: 0 auto;
+  overflow: visible;
+  box-sizing: border-box;
+}
+
+.official-remote-head {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+  padding: 2px 6px 0;
+  box-sizing: border-box;
+}
+
+.official-remote-head__name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: Oxanium, geo, sans-serif;
+  font-size: 1.15rem;
+  font-weight: 500;
+  line-height: 1.2;
+  color: #e8e8e8;
+}
+
+.official-remote-head__actions {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  flex-shrink: 0;
+  gap: 2px;
+}
+
+.official-remote-head__actions .q-btn__content {
+  flex-direction: row;
+  gap: 4px;
+}
+
+.official-remote-head__actions .q-icon {
+  margin: 0 !important;
+  font-size: 18px;
+  width: 18px;
+  height: 18px;
+}
+
+.official-remote-row {
+  display: flex;
+  flex-flow: row nowrap;
+  align-items: stretch;
+  justify-content: center;
+  gap: 12px;
+  width: max-content;
+  max-width: 100%;
+  margin: 10px auto 0;
+  padding: 0 14px 4px;
+  box-sizing: border-box;
+}
+
+.official-remote-side {
+  display: flex;
+  align-items: stretch;
+  justify-content: center;
+  min-width: 0;
+}
+
+.official-remote-center {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: space-evenly;
+  gap: 8px;
+  min-width: 76px;
+  padding-top: 22px;
+  box-sizing: border-box;
+}
+
+.official-remote-cluster .q-btn__content.column {
+  flex-direction: column !important;
+  align-items: center;
+  justify-content: center;
+  gap: 1px;
+}
+
+.official-remote-cluster .q-btn__content.column > .q-icon,
+.official-slider-col > .q-icon {
+  margin: 0 !important;
+  font-size: 22px;
+  width: 22px;
+  height: 22px;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.official-slider-col > .flex.column.items-center > .q-icon,
+.official-slider-col > .q-icon {
+  margin-top: 6px !important;
 }
 
 .official-remote-cluster .q-slider--v {
@@ -880,6 +1001,8 @@ html.pip-mode #root > * {
 
 .official-control-column {
   width: 100%;
+  padding-bottom: calc(88px + var(--saib));
+  box-sizing: border-box;
 }
 
 .official-control-column--starred {
@@ -1869,12 +1992,22 @@ html.pip-mode .app-restart-overlay:not(.app-restart-overlay--outdated) {
 /* Width-based only: Discord desktop iframes are often <740px tall but still wide */
 @media (max-width: 720px) {
   .official-remote-cluster {
-    margin: 8px 4px;
-    scale: 1;
+    margin: 4px auto 8px;
   }
 
   .official-remote-cluster .q-slider--v {
-    height: min(200px, 32dvh);
+    height: min(180px, 32dvh);
+  }
+
+  .official-remote-row {
+    gap: 8px;
+    padding-left: 12px;
+    padding-right: 12px;
+  }
+
+  .official-remote-center {
+    min-width: 68px;
+    padding-top: 18px;
   }
 
   .official-root > .q-header.custom-header {
@@ -1907,13 +2040,58 @@ html.pip-mode .app-restart-overlay:not(.app-restart-overlay--outdated) {
 
 @media (max-width: 520px) {
   .fixed-bottom-left {
-    left: calc(12px + var(--sail));
-    bottom: calc(12px + var(--saib));
+    left: calc(8px + var(--sail));
+    bottom: calc(8px + var(--saib));
   }
 
   .official-control-surface {
-    padding-left: 10px !important;
-    padding-right: 10px !important;
+    padding-left: 8px !important;
+    padding-right: 8px !important;
+  }
+
+  .official-header-brand .text-h3 {
+    font-size: 1.2rem !important;
+    line-height: 1.15;
+  }
+
+  .official-header-version {
+    min-width: 0;
+    max-width: 42%;
+    padding-left: 6px;
+  }
+
+  .official-remote-head__name {
+    font-size: 1rem;
+  }
+
+  .official-remote-cluster .q-slider--v {
+    height: min(160px, 28dvh);
+  }
+}
+
+@media (max-height: 700px) {
+  .official-remote-cluster .q-slider--v {
+    height: min(150px, 34dvh);
+  }
+}
+
+@media (max-height: 520px) {
+  .official-remote-cluster {
+    margin-top: 0;
+    margin-bottom: 4px;
+  }
+
+  .official-remote-cluster .q-slider--v {
+    height: min(112px, 30dvh);
+  }
+
+  .official-remote-center {
+    gap: 4px;
+    padding-top: 8px;
+  }
+
+  .official-hub-status__name {
+    font-size: 1rem;
   }
 }
 
@@ -3713,12 +3891,25 @@ button.auth-boot__api-key:not(.secret-value--shown) {
 }
 
 .legal-page {
+  width: 100%;
   max-width: 760px;
+  height: 100%;
+  max-height: 100%;
   margin: 0 auto;
-  padding: 16px 14px 40px;
+  padding: calc(16px + var(--sait)) calc(14px + var(--sair)) calc(28px + var(--saib))
+    calc(14px + var(--sail));
   display: grid;
+  align-content: start;
   gap: 14px;
   box-sizing: border-box;
+  overflow: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
+.legal-page > * {
+  min-width: 0;
+  max-width: 100%;
 }
 
 .legal-page h1 {
