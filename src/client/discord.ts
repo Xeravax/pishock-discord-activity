@@ -74,6 +74,64 @@ const BASE_SCOPES = [
 const VOICE_SCOPES = [...BASE_SCOPES, 'rpc.voice.read'] as const;
 
 const SPEAKING_STALE_MS = 2000;
+/** Authorize/authenticate should answer quickly with prompt: 'none'. */
+const DISCORD_AUTH_TIMEOUT_MS = 15_000;
+
+class DiscordCommandTimeoutError extends Error {
+  constructor(step: string) {
+    super(`Discord didn’t respond while ${step}. Close the activity and launch it again.`);
+    this.name = 'DiscordCommandTimeoutError';
+  }
+}
+
+/** Swallow a Discord RPC that rejects or never settles. Boot must not wait on it. */
+function ignoreRejection(work: Promise<unknown> | unknown): void {
+  if (work && typeof (work as Promise<unknown>).then === 'function') {
+    void (work as Promise<unknown>).then(
+      () => undefined,
+      () => undefined,
+    );
+  }
+}
+
+function withDeadline<T>(promise: Promise<T>, ms: number, step: string): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timer = window.setTimeout(() => {
+      reject(new DiscordCommandTimeoutError(step));
+    }, ms);
+    promise.then(
+      (value) => {
+        window.clearTimeout(timer);
+        resolve(value);
+      },
+      (error: unknown) => {
+        window.clearTimeout(timer);
+        reject(error instanceof Error ? error : new Error(String(error)));
+      },
+    );
+  });
+}
+
+/**
+ * Orientation lock and interactive PIP are optional. Desktop and a replaced
+ * iframe often never acknowledge them. Apply after authorize so a missing
+ * reply cannot pin startup on "Preparing activity…".
+ */
+function applyOptionalActivityChrome(discordSdk: DiscordSDK): void {
+  ignoreRejection(
+    discordSdk.commands.setOrientationLockState({
+      lock_state: Common.OrientationLockStateTypeObject.UNLOCKED,
+      picture_in_picture_lock_state: Common.OrientationLockStateTypeObject.LANDSCAPE,
+      grid_lock_state: Common.OrientationLockStateTypeObject.LANDSCAPE,
+    }),
+  );
+  ignoreRejection(discordSdk.commands.setConfig({ use_interactive_pip: true }));
+  ignoreRejection(
+    discordSdk.subscribe(Events.ORIENTATION_UPDATE, () => {
+      applyDiscordSafeAreaFallback();
+    }),
+  );
+}
 
 /** Prefer server nick, then global display name, then username. */
 export function discordDisplayName(
@@ -273,19 +331,9 @@ export async function bootstrapDiscord(
   // Always start from a fresh SDK instance after reload / version bump.
   resetDiscordClient();
   const discordSdk = getDiscordSdk();
-  await discordSdk.ready();
+  await withDeadline(discordSdk.ready(), DISCORD_AUTH_TIMEOUT_MS, 'connecting');
   report(22, 'Preparing activity…');
   installDiscordSafeAreaFallback();
-
-  try {
-    await discordSdk.commands.setOrientationLockState({
-      lock_state: Common.OrientationLockStateTypeObject.UNLOCKED,
-      picture_in_picture_lock_state: Common.OrientationLockStateTypeObject.LANDSCAPE,
-      grid_lock_state: Common.OrientationLockStateTypeObject.LANDSCAPE,
-    });
-  } catch {
-    // optional
-  }
 
   const applyLayout = (layoutMode: number) => {
     applyDiscordSafeAreaFallback();
@@ -295,10 +343,14 @@ export async function bootstrapDiscord(
   // Prefer compat helper (covers old ACTIVITY_PIP_MODE_UPDATE + new layout events)
   try {
     const sdkAny = discordSdk as DiscordSDK & {
-      subscribeToLayoutModeUpdatesCompat?: (cb: (update: { layout_mode: number }) => void) => void;
+      subscribeToLayoutModeUpdatesCompat?: (
+        cb: (update: { layout_mode: number }) => void,
+      ) => void | Promise<unknown>;
     };
     if (typeof sdkAny.subscribeToLayoutModeUpdatesCompat === 'function') {
-      sdkAny.subscribeToLayoutModeUpdatesCompat((update) => applyLayout(update.layout_mode));
+      ignoreRejection(
+        sdkAny.subscribeToLayoutModeUpdatesCompat((update) => applyLayout(update.layout_mode)),
+      );
     }
   } catch {
     // optional
@@ -306,50 +358,45 @@ export async function bootstrapDiscord(
 
   // Also subscribe to the modern layout event directly
   try {
-    void discordSdk.subscribe(Events.ACTIVITY_LAYOUT_MODE_UPDATE, (update) => {
-      applyLayout(update.layout_mode);
-    });
+    ignoreRejection(
+      discordSdk.subscribe(Events.ACTIVITY_LAYOUT_MODE_UPDATE, (update) => {
+        applyLayout(update.layout_mode);
+      }),
+    );
   } catch {
     // optional
-  }
-
-  // Mobile orientation — Discord iframe often skips the browser orientationchange event
-  try {
-    void discordSdk.subscribe(Events.ORIENTATION_UPDATE, () => {
-      applyDiscordSafeAreaFallback();
-    });
-  } catch {
-    // optional / desktop
-  }
-
-  // Keep the PIP surface alive so last-hit updates (WS/logs) still arrive
-  try {
-    await discordSdk.commands.setConfig({ use_interactive_pip: true });
-  } catch {
-    // optional / unsupported on some clients
   }
 
   report(38, 'Authorizing with Discord…');
   let voiceRead = false;
   let code: string;
   try {
-    const withVoice = await discordSdk.commands.authorize({
-      client_id: clientId(),
-      response_type: 'code',
-      state: '',
-      prompt: 'none',
-      scope: [...VOICE_SCOPES],
-    });
+    const withVoice = await withDeadline(
+      discordSdk.commands.authorize({
+        client_id: clientId(),
+        response_type: 'code',
+        state: '',
+        prompt: 'none',
+        scope: [...VOICE_SCOPES],
+      }),
+      DISCORD_AUTH_TIMEOUT_MS,
+      'authorizing',
+    );
     code = withVoice.code;
     voiceRead = true;
-  } catch {
-    const base = await discordSdk.commands.authorize({
-      client_id: clientId(),
-      response_type: 'code',
-      state: '',
-      prompt: 'none',
-      scope: [...BASE_SCOPES],
-    });
+  } catch (err) {
+    if (err instanceof DiscordCommandTimeoutError) throw err;
+    const base = await withDeadline(
+      discordSdk.commands.authorize({
+        client_id: clientId(),
+        response_type: 'code',
+        state: '',
+        prompt: 'none',
+        scope: [...BASE_SCOPES],
+      }),
+      DISCORD_AUTH_TIMEOUT_MS,
+      'authorizing',
+    );
     code = base.code;
     voiceRead = false;
   }
@@ -364,7 +411,12 @@ export async function bootstrapDiscord(
   });
 
   report(72, 'Signing into activity…');
-  await discordSdk.commands.authenticate({ access_token: result.access_token });
+  await withDeadline(
+    discordSdk.commands.authenticate({ access_token: result.access_token }),
+    DISCORD_AUTH_TIMEOUT_MS,
+    'signing in',
+  );
+  applyOptionalActivityChrome(discordSdk);
   report(82, 'Authenticated');
 
   return {
