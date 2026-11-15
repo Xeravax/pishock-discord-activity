@@ -1,5 +1,14 @@
 # Changelog
 
+## v2.1.1 — 2026-11-15
+
+## What's changed
+
+- #patch Refactor responsive design and UI components for better compatibility (a637006)
+- Refactor responsive design and UI components for better compatibility (3f88763)
+
+**Full changelog**: https://github.com/Xeravax/pishock-discord-activity/compare/v2.1.0...v2.1.1
+
 ## v2.1.0 — 2026-11-15
 
 ## What's changed
