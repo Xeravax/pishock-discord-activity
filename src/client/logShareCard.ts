@@ -160,6 +160,51 @@ function roundRect(
   ctx.closePath();
 }
 
+function graphemes(text: string): string[] {
+  if (typeof Intl !== 'undefined' && 'Segmenter' in Intl) {
+    return [...new Intl.Segmenter(undefined, { granularity: 'grapheme' }).segment(text)].map(
+      (part) => part.segment,
+    );
+  }
+  return [...text];
+}
+
+function isEmojiGrapheme(grapheme: string): boolean {
+  return /\p{Extended_Pictographic}|\p{Emoji_Presentation}/u.test(grapheme);
+}
+
+/** Advance width plus the ink that emoji fonts paint outside that advance. */
+function measureLabel(ctx: CanvasRenderingContext2D, text: string, fontPx: number): number {
+  let width = 0;
+  for (const grapheme of graphemes(text)) {
+    const measured = ctx.measureText(grapheme);
+    const ink = Math.max(
+      measured.width,
+      (measured.actualBoundingBoxLeft || 0) + (measured.actualBoundingBoxRight || 0),
+    );
+    width += isEmojiGrapheme(grapheme) ? Math.max(ink, fontPx * 1.45) : Math.max(measured.width, ink);
+  }
+  return width;
+}
+
+function chipTextInset(chipH: number): number {
+  const avatarR = Math.max(10, chipH / 2 - 7);
+  return chipH / 2 + avatarR + 22;
+}
+
+function chipWidth(
+  ctx: CanvasRenderingContext2D,
+  label: string,
+  chipH: number,
+  chipFont: number,
+): number {
+  ctx.font = `700 ${chipFont}px ${FONT}`;
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'alphabetic';
+  const rightPad = Math.max(34, Math.round(chipH * 0.38));
+  return Math.ceil(chipTextInset(chipH) + measureLabel(ctx, label, chipFont) + rightPad);
+}
+
 function truncate(ctx: CanvasRenderingContext2D, text: string, maxWidth: number): string {
   if (ctx.measureText(text).width <= maxWidth) return text;
   let out = text;
@@ -341,7 +386,7 @@ function drawPersonChip(
   ctx.font = `700 ${fontPx}px ${FONT}`;
   ctx.textAlign = 'left';
   ctx.textBaseline = 'middle';
-  ctx.fillText(label, x + height + 10, y + height / 2 + 1);
+  ctx.fillText(label, x + chipTextInset(height), y + height / 2 + 1);
 }
 
 function drawDiscordBadge(ctx: CanvasRenderingContext2D, right: number, cy: number, label: string) {
@@ -455,12 +500,8 @@ function fitLayout(ctx: CanvasRenderingContext2D, entry: OfficialLogEntry): Layo
 
   const measure = () => {
     const chipH = Math.max(44, Math.round(chipFont * 2.05 + 14));
-    const textPad = Math.max(18, Math.round(chipH * 0.38));
-    ctx.font = `700 ${chipFont}px ${FONT}`;
-    ctx.textAlign = 'left';
-    ctx.textBaseline = 'alphabetic';
-    const fromW = chipH + 12 + ctx.measureText(fromLabel).width + textPad;
-    const toW = chipH + 12 + ctx.measureText(toLabel).width + textPad;
+    const fromW = chipWidth(ctx, fromLabel, chipH, chipFont);
+    const toW = chipWidth(ctx, toLabel, chipH, chipFont);
     ctx.font = `italic 800 ${fontSize}px ${DISPLAY}`;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
@@ -814,13 +855,13 @@ function drawHeadline(
     if (t > 0.72) {
       ctx.globalAlpha = 0.28;
       ctx.fillStyle = COLORS.ghost;
-      ctx.fillText(layout.headline, cx + ghost * 1.45, cy - 2);
+      ctx.fillText(layout.headline, cx + ghost * 1.45, cy + 2);
     }
     ctx.restore();
   }
   ctx.fillStyle = color;
   ctx.shadowColor = entry.action === 'vibrate' ? 'rgba(255, 75, 214, 0.95)' : entry.action === 'beep' ? 'rgba(90, 216, 255, 0.9)' : 'rgba(255, 210, 0, 0.9)';
-  ctx.shadowBlur = 6 + t * 18;
+  ctx.shadowBlur = entry.action === 'vibrate' ? 6 + t * 11 : 6 + t * 18;
   ctx.fillText(layout.headline, cx, cy);
   ctx.shadowBlur = 0;
   ctx.fillText(layout.headline, cx, cy);
@@ -838,7 +879,8 @@ function paintCard(
   const unit = entry.action === 'vibrate' ? VIBE[frame % VIBE.length] : [0, 0];
   const amp = entry.action === 'vibrate' ? (1.15 + t * t * 32) / 9 : 0;
   const jx = (unit?.[0] ?? 0) * amp;
-  const jy = (unit?.[1] ?? 0) * amp;
+  const rawY = (unit?.[1] ?? 0) * amp;
+  const jy = rawY < 0 ? rawY * 0.55 : rawY;
 
   ctx.clearRect(0, 0, CARD_W, CARD_H);
 
