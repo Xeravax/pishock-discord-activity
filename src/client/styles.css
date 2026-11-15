@@ -869,8 +869,8 @@ html.pip-mode #root > * {
   box-sizing: border-box;
 }
 
-/* Remote sizes with the layout. CSS scale overflowed the viewport and
-   pulled the title / Pair button away from the shock and vibrate columns. */
+/* Card stays shrink-wrapped to the controls so the title and Pair
+   stay attached. Size changes below use real layout, not zoom/scale. */
 .official-remote-cluster {
   margin: 8px auto 16px;
   width: 100%;
@@ -945,11 +945,11 @@ html.pip-mode #root > * {
   flex-flow: row nowrap;
   align-items: stretch;
   justify-content: center;
-  gap: 12px;
+  gap: 18px;
   width: max-content;
-  max-width: 100%;
+  max-width: none;
   margin: 10px auto 0;
-  padding: 0 14px 4px;
+  padding: 0 16px 4px;
   box-sizing: border-box;
 }
 
@@ -957,14 +957,22 @@ html.pip-mode #root > * {
   display: flex;
   align-items: stretch;
   justify-content: center;
-  min-width: 0;
+  flex-shrink: 0;
+  min-width: max-content;
+}
+
+.official-remote-side .column.justify-between {
+  flex-shrink: 0;
+  min-height: min-content;
 }
 
 .official-remote-center {
   display: flex;
   flex-direction: column;
   align-items: center;
-  justify-content: space-evenly;
+  align-self: center;
+  justify-content: center;
+  flex-shrink: 0;
   gap: 8px;
   min-width: 76px;
   padding-top: 22px;
@@ -996,7 +1004,7 @@ html.pip-mode #root > * {
 }
 
 .official-remote-cluster .q-slider--v {
-  height: 200px;
+  height: 220px;
 }
 
 .official-control-column {
@@ -2052,25 +2060,96 @@ html.pip-mode .app-restart-overlay:not(.app-restart-overlay--outdated) {
   bottom: calc(16px + var(--saib));
 }
 
+/* Large monitors grow the whole remote. A short window keeps the
+   phone-safe stack so buttons are not crushed into the sliders. */
+@media (min-width: 1200px) {
+  .official-remote-cluster .q-slider--v {
+    height: 320px;
+  }
+
+  .official-remote-head__name {
+    font-size: 1.45rem;
+  }
+
+  .official-remote-row {
+    gap: 24px;
+  }
+
+  .official-remote-cluster .q-btn__wrapper {
+    min-height: 3.1em;
+  }
+
+  .official-remote-cluster .q-btn__content.column > .q-icon,
+  .official-slider-col > .q-icon {
+    font-size: 26px;
+    width: 26px;
+    height: 26px;
+  }
+}
+
+@media (min-width: 1700px) {
+  .official-remote-cluster .q-slider--v {
+    height: 420px;
+  }
+
+  .official-remote-head__name {
+    font-size: 1.7rem;
+  }
+
+  .official-remote-row {
+    gap: 32px;
+  }
+
+  .official-remote-cluster .q-btn__wrapper {
+    padding: 8px 20px;
+    min-height: 3.4em;
+  }
+}
+
+@media (min-width: 2100px) {
+  .official-remote-cluster .q-slider--v {
+    height: 500px;
+  }
+
+  .official-remote-head__name {
+    font-size: 1.9rem;
+  }
+
+  .official-remote-cluster .q-btn__wrapper {
+    padding: 10px 22px;
+    min-height: 3.6em;
+  }
+}
+
+@media (max-height: 700px) {
+  .official-remote-cluster .q-slider--v {
+    height: 220px;
+  }
+
+  .official-remote-head__name {
+    font-size: 1.15rem;
+  }
+
+  .official-remote-row {
+    gap: 18px;
+  }
+
+  .official-remote-cluster .q-btn__wrapper {
+    padding: 4px 16px;
+    min-height: 2.572em;
+  }
+}
+
 /* Width-based only: Discord desktop iframes are often <740px tall but still wide */
 @media (max-width: 720px) {
   .official-remote-cluster {
     margin: 4px auto 8px;
   }
 
-  .official-remote-cluster .q-slider--v {
-    height: min(180px, 32dvh);
-  }
-
-  .official-remote-row {
-    gap: 8px;
-    padding-left: 12px;
-    padding-right: 12px;
-  }
-
   .official-remote-center {
     min-width: 68px;
     padding-top: 18px;
+    gap: 6px;
   }
 
   .official-root > .q-header.custom-header {
@@ -2126,16 +2205,6 @@ html.pip-mode .app-restart-overlay:not(.app-restart-overlay--outdated) {
   .official-remote-head__name {
     font-size: 1rem;
   }
-
-  .official-remote-cluster .q-slider--v {
-    height: min(160px, 28dvh);
-  }
-}
-
-@media (max-height: 700px) {
-  .official-remote-cluster .q-slider--v {
-    height: min(150px, 34dvh);
-  }
 }
 
 @media (max-height: 520px) {
@@ -2144,13 +2213,9 @@ html.pip-mode .app-restart-overlay:not(.app-restart-overlay--outdated) {
     margin-bottom: 4px;
   }
 
-  .official-remote-cluster .q-slider--v {
-    height: min(112px, 30dvh);
-  }
-
   .official-remote-center {
-    gap: 4px;
-    padding-top: 8px;
+    gap: 6px;
+    padding-top: 12px;
   }
 
   .official-hub-status__name {
