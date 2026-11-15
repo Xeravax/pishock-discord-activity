@@ -1,4 +1,5 @@
 import type { DiscordParticipant, ParticipantStatus } from '../participants';
+import type { VoiceStateFlags } from '../discord';
 import { colorForUser } from '../multiColors';
 import { IndividualIntensityToggle, MultiShockToggle } from './MultiShockToggle';
 
@@ -6,6 +7,8 @@ type Props = {
   participants: DiscordParticipant[];
   statuses: Record<string, ParticipantStatus>;
   currentUserId: string;
+  /** Mute / speaking from Discord voice channel (optional). */
+  voiceIndicators?: Record<string, VoiceStateFlags>;
   /** Single-select (legacy) — ignored when selectedTargetIds is provided */
   selectedTargetId?: string | null;
   /** Multi-select ids when Multishock / multi friend targeting is on */
@@ -25,6 +28,7 @@ export function FriendsParticipantList({
   participants,
   statuses,
   currentUserId,
+  voiceIndicators = {},
   selectedTargetId = null,
   selectedTargetIds,
   multiSelect = false,
@@ -119,6 +123,9 @@ export function FriendsParticipantList({
             const multiColor = multiSelect && active ? colorForUser(`u:${p.id}`) : undefined;
 
             const starred = Boolean(status?.priority);
+            const voice = voiceIndicators[p.id];
+            const muted = Boolean(voice?.muted);
+            const speaking = Boolean(voice?.speaking) && !muted;
 
             return (
               <div
@@ -153,7 +160,19 @@ export function FriendsParticipantList({
                     onSelect(active ? null : p.id);
                   }}
                 >
-                  <img src={p.avatarUrl} alt="" className="official-friend-avatar" />
+                  <span
+                    className={`official-friend-avatar-wrap${
+                      speaking ? ' official-friend-avatar-wrap--speaking' : ''
+                    }${muted ? ' official-friend-avatar-wrap--muted' : ''}`}
+                  >
+                    <img src={p.avatarUrl} alt="" className="official-friend-avatar" />
+                    {muted ? (
+                      <i
+                        className="q-icon mdi mdi-microphone-off official-friend-voice-badge"
+                        aria-label="Muted"
+                      />
+                    ) : null}
+                  </span>
                   <span className="official-friend-meta">
                     <span className="official-friend-name ellipsis">{p.displayName}</span>
                     <span
