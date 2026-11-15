@@ -56,13 +56,18 @@ async function main() {
     now: new Date().toISOString(),
   });
 
+  const versionPayload = () => ({
+    ...healthPayload(),
+    release: appVersion.release ?? null,
+  });
+
   app.get('/api/health', async (_req, reply) => {
     const payload = healthPayload();
     if (shuttingDown) return reply.code(503).send(payload);
     return payload;
   });
   app.get('/api/version', async (_req, reply) => {
-    const payload = healthPayload();
+    const payload = versionPayload();
     if (shuttingDown) return reply.code(503).send(payload);
     return payload;
   });

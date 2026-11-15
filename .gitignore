@@ -4,6 +4,7 @@ dist/
 .env.local
 .env.version
 version.json
+release-notes.json
 *.log
 .DS_Store
 client-dist/

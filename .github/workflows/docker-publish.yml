@@ -2,7 +2,9 @@ name: Publish Docker image
 
 on:
   push:
-    branches: [release, develop, feature/api-key]
+    # Production images come from v* tags (create-release.yml on every release push).
+    # Do not build on the release branch itself — that would bake release-<sha> and double-build.
+    branches: [develop, feature/api-key]
     tags: ['v*']
   workflow_dispatch:
 
@@ -49,7 +51,7 @@ jobs:
         with:
           images: ${{ env.IMAGE_NAME }}
           tags: |
-            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/release' }}
+            type=raw,value=latest,enable=${{ github.ref_type == 'tag' }}
             type=ref,event=branch
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}

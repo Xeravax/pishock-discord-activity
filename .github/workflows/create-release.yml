@@ -1,0 +1,196 @@
+name: Create GitHub Release
+
+# Every push to release cuts a GitHub Release + v* tag + changelog.
+# Bump: workflow_dispatch input, else #major / #minor / #patch in HEAD message, else patch.
+# Docker publish runs on the new tag (not on the release branch push).
+
+on:
+  push:
+    branches: [release]
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: Semver bump type
+        required: true
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+        default: patch
+
+concurrency:
+  group: create-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Bump, changelog, and publish release
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      actions: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          # Push changelog commit back to release
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Resolve bump, write changelog, create release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DISPATCH_BUMP: ${{ github.event_name == 'workflow_dispatch' && inputs.bump || '' }}
+        run: |
+          set -euo pipefail
+
+          if [[ "${GITHUB_REF_NAME}" != "release" && "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
+            echo "workflow_dispatch should target the release branch (got ${GITHUB_REF_NAME})." >&2
+            exit 1
+          fi
+
+          # Skip changelog-only commits from this workflow
+          head_msg="$(git log -1 --pretty=%B)"
+          if grep -qiE '\[skip ci\]|\[ci skip\]' <<<"$head_msg"; then
+            echo "HEAD commit requests CI skip; not creating another release."
+            exit 0
+          fi
+
+          if exact="$(git describe --exact-match --tags HEAD 2>/dev/null || true)" && [[ -n "$exact" ]]; then
+            echo "HEAD is already tagged as ${exact}; skipping."
+            exit 0
+          fi
+
+          bump="${DISPATCH_BUMP}"
+          if [[ -z "$bump" ]]; then
+            if grep -qiE '(^|[[:space:]])#major([[:space:]]|$)' <<<"$head_msg"; then
+              bump=major
+            elif grep -qiE '(^|[[:space:]])#minor([[:space:]]|$)' <<<"$head_msg"; then
+              bump=minor
+            elif grep -qiE '(^|[[:space:]])#patch([[:space:]]|$)' <<<"$head_msg"; then
+              bump=patch
+            else
+              bump=patch
+            fi
+          fi
+          echo "Bump type: ${bump}"
+
+          latest="$(git tag -l 'v*' --sort=-v:refname | head -n1 || true)"
+          if [[ -z "$latest" ]]; then
+            major=0
+            minor=0
+            patch=0
+            echo "No existing v* tags; starting from v0.0.0"
+          else
+            echo "Latest tag: ${latest}"
+            ver="${latest#v}"
+            IFS=. read -r major minor patch _ <<<"${ver}.0.0"
+            major="$(echo "${major:-0}" | tr -cd '0-9')"
+            minor="$(echo "${minor:-0}" | tr -cd '0-9')"
+            patch="$(echo "${patch:-0}" | tr -cd '0-9')"
+            major="${major:-0}"
+            minor="${minor:-0}"
+            patch="${patch:-0}"
+          fi
+
+          case "$bump" in
+            major)
+              major=$((major + 1))
+              minor=0
+              patch=0
+              ;;
+            minor)
+              minor=$((minor + 1))
+              patch=0
+              ;;
+            patch)
+              patch=$((patch + 1))
+              ;;
+            *)
+              echo "Unknown bump: ${bump}" >&2
+              exit 1
+              ;;
+          esac
+
+          next="v${major}.${minor}.${patch}"
+          echo "Preparing release ${next}"
+
+          if git rev-parse -q --verify "refs/tags/${next}" >/dev/null; then
+            echo "Tag ${next} already exists; aborting." >&2
+            exit 1
+          fi
+
+          # Changelog from commits since the previous tag (exclude prior release chore commits).
+          if [[ -n "$latest" ]]; then
+            range="${latest}..HEAD"
+          else
+            range="HEAD"
+          fi
+          {
+            echo "## What's changed"
+            echo
+            git log --pretty=format:'- %s (%h)' "$range"
+            echo
+            echo
+            echo "**Full changelog**: https://github.com/${GITHUB_REPOSITORY}/compare/${latest:-HEAD}...${next}"
+          } > /tmp/release-notes.md
+
+          # Strip empty "What's changed" if there were no commits (shouldn't happen).
+          if ! grep -q '^- ' /tmp/release-notes.md; then
+            printf '%s\n' "## What's changed" "" "- Release ${next}" "" > /tmp/release-notes.md
+          fi
+
+          day="$(date -u +%Y-%m-%d)"
+          notes_body="$(cat /tmp/release-notes.md)"
+
+          # Prepend to CHANGELOG.md
+          {
+            echo "# Changelog"
+            echo
+            echo "## ${next} — ${day}"
+            echo
+            echo "$notes_body"
+            echo
+            if [[ -f CHANGELOG.md ]]; then
+              # Drop a leading "# Changelog" header from the previous file
+              tail -n +1 CHANGELOG.md | sed '1{/^# Changelog$/d;}' | sed '1{/^$/d;}'
+            fi
+          } > /tmp/CHANGELOG.md
+          mv /tmp/CHANGELOG.md CHANGELOG.md
+
+          # Baked into the Docker image / served by /api/version
+          NEXT_VERSION="$next" GITHUB_REPOSITORY="$GITHUB_REPOSITORY" node <<'NODE'
+          const fs = require('fs');
+          const notes = fs.readFileSync('/tmp/release-notes.md', 'utf8');
+          const version = process.env.NEXT_VERSION;
+          const payload = {
+            version,
+            notes,
+            url: `https://github.com/${process.env.GITHUB_REPOSITORY}/releases/tag/${version}`,
+            publishedAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+          };
+          fs.writeFileSync('release-notes.json', `${JSON.stringify(payload, null, 2)}\n`);
+          console.log(`Wrote release-notes.json for ${version}`);
+          NODE
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add CHANGELOG.md
+          git add -f release-notes.json
+          git commit -m "chore(release): ${next} [skip ci]"
+          git push origin HEAD:release
+
+          target_sha="$(git rev-parse HEAD)"
+          echo "Creating GitHub Release ${next} at ${target_sha}"
+
+          gh release create "${next}" \
+            --notes-file /tmp/release-notes.md \
+            --title "${next}" \
+            --target "${target_sha}"
+
+          # Tag/release events created with GITHUB_TOKEN do not start other workflows.
+          echo "Triggering Docker publish for ${next}"
+          gh workflow run docker-publish.yml --ref "${next}"

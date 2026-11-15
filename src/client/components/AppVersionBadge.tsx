@@ -1,19 +1,34 @@
+import { useCallback, useEffect, useState } from 'react';
 import {
   reloadApp,
   useAppHealth,
 } from '../hooks/useAppHealth';
 import { isEmbedded } from '../api';
+import { PsDialog } from './PsDialog';
+import type { AppReleaseNotes } from '../../shared/app-version';
 
 type BadgeProps = {
   /** Hide during PIP so the last-hit UI stays clean */
   hidden?: boolean;
 };
 
-/** Centered build identity + live health indicator. */
+type VersionApiResponse = {
+  version?: string;
+  sha?: string;
+  shortSha?: string;
+  ref?: string;
+  refType?: string;
+  builtAt?: string;
+  release?: AppReleaseNotes | null;
+};
+
+/** Centered build identity + live health indicator; click opens latest-version / changelog. */
 export function AppVersionBadge({ hidden }: BadgeProps) {
   const { bootVersion, status, serverVersion } = useAppHealth();
-
-  if (hidden) return null;
+  const [open, setOpen] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [info, setInfo] = useState<VersionApiResponse | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   const label = serverVersion || bootVersion;
   const statusLabel =
@@ -27,14 +42,99 @@ export function AppVersionBadge({ hidden }: BadgeProps) {
             ? 'Unreachable'
             : 'Checking';
 
+  const loadVersion = useCallback(async () => {
+    setLoading(true);
+    setLoadError(null);
+    try {
+      const res = await fetch('/api/version', { cache: 'no-store' });
+      const body = (await res.json().catch(() => null)) as VersionApiResponse | null;
+      if (!res.ok || !body) {
+        setLoadError('Could not load version details.');
+        setInfo(null);
+        return;
+      }
+      setInfo(body);
+    } catch {
+      setLoadError('Could not load version details.');
+      setInfo(null);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!open) return;
+    void loadVersion();
+  }, [open, loadVersion]);
+
+  if (hidden) return null;
+
+  const release = info?.release;
+  const latestLabel = release?.version || info?.version || label;
+  const notes = release?.notes?.trim() || '';
+
   return (
-    <span
-      className={`app-version-badge app-version-badge--${status}`}
-      title={`Build ${label} · client ${bootVersion} · ${statusLabel}`}
-    >
-      <span className="app-version-badge__dot" aria-hidden />
-      <span className="app-version-badge__text">{label}</span>
-    </span>
+    <>
+      <button
+        type="button"
+        className={`app-version-badge app-version-badge--${status} app-version-badge--button`}
+        title={`Build ${label} · client ${bootVersion} · ${statusLabel}. Click for changelog.`}
+        aria-label={`Version ${label}. Open latest version and changelog.`}
+        onClick={() => setOpen(true)}
+      >
+        <span className="app-version-badge__dot" aria-hidden />
+        <span className="app-version-badge__text">{label}</span>
+      </button>
+
+      <PsDialog open={open} title="Latest version" onClose={() => setOpen(false)} wide>
+        <div className="app-version-panel">
+          <div className="app-version-panel__hero">
+            <div className="app-version-panel__label">Running</div>
+            <div className="app-version-panel__version">{latestLabel}</div>
+            {info?.builtAt ? (
+              <div className="app-version-panel__meta">
+                Built {new Date(info.builtAt).toLocaleString()}
+                {info.shortSha ? ` · ${info.shortSha}` : ''}
+                {info.ref ? ` · ${info.ref}` : ''}
+              </div>
+            ) : null}
+            {release?.publishedAt ? (
+              <div className="app-version-panel__meta">
+                Released {new Date(release.publishedAt).toLocaleString()}
+              </div>
+            ) : null}
+          </div>
+
+          {loading ? (
+            <p className="app-version-panel__hint">Loading changelog…</p>
+          ) : loadError ? (
+            <p className="app-version-panel__hint app-version-panel__hint--error">{loadError}</p>
+          ) : notes ? (
+            <div className="app-version-panel__notes">
+              <div className="app-version-panel__notes-title">Changelog</div>
+              <pre className="app-version-panel__notes-body">{notes}</pre>
+            </div>
+          ) : (
+            <p className="app-version-panel__hint">
+              {info?.refType === 'tag'
+                ? 'No release notes were baked into this build.'
+                : 'Branch builds do not include a GitHub Release changelog. Push to release to cut a versioned release.'}
+            </p>
+          )}
+
+          {release?.url ? (
+            <a
+              className="app-version-panel__link"
+              href={release.url}
+              target="_blank"
+              rel="noreferrer noopener"
+            >
+              View on GitHub
+            </a>
+          ) : null}
+        </div>
+      </PsDialog>
+    </>
   );
 }
 

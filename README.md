@@ -59,7 +59,7 @@ By using this application, you acknowledge that you have read, understood, and a
 
 ### Technical Features
 - **Self-hosted Docker stack**: Combined Fastify API + React UI, Postgres for persistence
-- **GHCR images**: Published from the `release` branch (and tags / `develop`)
+- **GHCR images**: Production `v*` / `latest` from GitHub Releases (every `release` push); `develop` keeps branch builds
 - **Responsive Design**: Works across desktop, mobile, and Discord’s embedded layout
 - **Error Handling**: User-visible errors with graceful failure for broker/API issues
 
@@ -175,11 +175,11 @@ docker compose up --build -d
 #### Option B — Run the published GHCR image
 ```bash
 cp .env.example .env
-# fill the same variables; optionally set PISHOCK_IMAGE=ghcr.io/<owner>/<repo>:release
+# fill the same variables; optionally set PISHOCK_IMAGE=ghcr.io/<owner>/<repo>:latest
 docker compose -f docker-compose.ghcr.yml --env-file .env up -d
 ```
 
-Images are published by `.github/workflows/docker-publish.yml` on pushes to `release` / `develop` and on version tags. For CI builds, set a GitHub Actions **variable** `DISCORD_CLIENT_ID` so the UI is baked with the correct client id.
+Every push to `release` runs `.github/workflows/create-release.yml` (semver bump via `#major` / `#minor` / `#patch` in the commit message, default patch). That workflow writes `CHANGELOG.md` + `release-notes.json`, creates a GitHub Release + `v*` tag, then triggers `.github/workflows/docker-publish.yml` so the image is labeled with the clean version and `latest`. Click the in-app version badge to open **Latest version** with that release’s changelog. Branch builds still publish for `develop` (no release notes). For CI builds, set a GitHub Actions **variable** `DISCORD_CLIENT_ID` so the UI is baked with the correct client id.
 
 ---
 
@@ -396,7 +396,7 @@ Compose defaults create a local volume for Postgres (`pishock_pgdata`). Producti
 
 #### GHCR image won’t start
 **Cause**: Missing env vars or wrong image tag  
-**Solution**: Compare `.env` to [`.env.example`](.env.example); set `PISHOCK_IMAGE` to a tag that exists (`:release`, `:develop`, or a version tag)
+**Solution**: Compare `.env` to [`.env.example`](.env.example); set `PISHOCK_IMAGE` to a tag that exists (`:latest`, `:develop`, or a `v*` version tag)
 
 ### Useful Commands
 ```bash

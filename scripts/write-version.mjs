@@ -7,9 +7,12 @@
  * Fallback: local git.
  *
  * Labels:
- *   tag v1.2.3     → v1.2.3
- *   branch release → release-<shortsha>
- *   branch develop → develop-<shortsha>
+ *   tag v1.2.3       → v1.2.3   (production: create-release.yml tags every release push)
+ *   branch develop   → develop-<shortsha>
+ *   other branches   → <branch>-<shortsha>
+ *
+ * Production Docker images are built from v* tags only (not from the release branch),
+ * so the app badge / outdated gate show a clean semver, not release-<sha>.
  */
 import { execSync } from 'node:child_process';
 import fs from 'node:fs';

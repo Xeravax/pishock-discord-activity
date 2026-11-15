@@ -4,18 +4,18 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
-    "predev": "node scripts/write-version.mjs",
+    "predev": "npm run version:write",
     "dev": "tsx watch src/server/index.ts",
-    "predev:client": "node scripts/write-version.mjs",
+    "predev:client": "npm run version:write",
     "dev:client": "vite",
-    "prebuild": "node scripts/write-version.mjs",
-    "build": "prisma generate && vite build && tsc -p tsconfig.server.json && node -e \"require('fs').copyFileSync('src/server.js','dist/server.js'); require('fs').copyFileSync('version.json','dist/version.json'); require('fs').copyFileSync('version.json','client-dist/version.json')\"",
+    "prebuild": "npm run version:write",
+    "build": "prisma generate && vite build && tsc -p tsconfig.server.json && node -e \"const fs=require('fs'); fs.copyFileSync('src/server.js','dist/server.js'); fs.copyFileSync('version.json','dist/version.json'); fs.copyFileSync('version.json','client-dist/version.json'); if(fs.existsSync('release-notes.json')){fs.copyFileSync('release-notes.json','dist/release-notes.json');}\"",
     "start": "node dist/server.js",
     "typecheck": "tsc -p tsconfig.server.json --noEmit && tsc -p tsconfig.client.json --noEmit",
     "test": "node --import ./test/preload-env.mjs --import tsx --test test/**/*.test.ts",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate deploy",
-    "version:write": "node scripts/write-version.mjs"
+    "version:write": "node scripts/write-version.mjs && node scripts/write-release-notes.mjs"
   },
   "dependencies": {
     "@discord/embedded-app-sdk": "^2.5.0",

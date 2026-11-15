@@ -1090,6 +1090,108 @@ html.pip-mode #root > * {
   text-align: center;
 }
 
+button.app-version-badge--button {
+  appearance: none;
+  border: 1px solid transparent;
+  cursor: pointer;
+  font: inherit;
+  color: inherit;
+}
+
+button.app-version-badge--button:hover {
+  border-color: rgba(121, 198, 219, 0.45);
+  color: #e8e8e8;
+  background: rgba(0, 0, 0, 0.5);
+}
+
+button.app-version-badge--button:focus-visible {
+  outline: 2px solid rgba(121, 198, 219, 0.7);
+  outline-offset: 2px;
+}
+
+.app-version-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-width: 0;
+}
+
+.app-version-panel__hero {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.app-version-panel__label {
+  font-size: 0.72rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #79c6db;
+  font-family: Oxanium, geo, sans-serif;
+}
+
+.app-version-panel__version {
+  font-family: Oxanium, geo, sans-serif;
+  font-size: 1.45rem;
+  font-weight: 700;
+  color: #e8e8e8;
+  letter-spacing: 0.02em;
+}
+
+.app-version-panel__meta {
+  font-size: 0.78rem;
+  color: #9aa0a6;
+}
+
+.app-version-panel__hint {
+  margin: 0;
+  font-size: 0.85rem;
+  line-height: 1.45;
+  color: #9aa0a6;
+}
+
+.app-version-panel__hint--error {
+  color: #ffc9c9;
+}
+
+.app-version-panel__notes-title {
+  font-size: 0.72rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #79c6db;
+  font-family: Oxanium, geo, sans-serif;
+  margin-bottom: 8px;
+}
+
+.app-version-panel__notes-body {
+  margin: 0;
+  padding: 12px;
+  max-height: min(48vh, 360px);
+  overflow: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.78rem;
+  line-height: 1.45;
+  color: #d7dde0;
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid rgba(121, 198, 219, 0.22);
+  border-radius: 8px;
+}
+
+.app-version-panel__link {
+  align-self: flex-start;
+  color: #79c6db;
+  font-size: 0.85rem;
+  text-decoration: none;
+}
+
+.app-version-panel__link:hover {
+  text-decoration: underline;
+}
+
 .app-version-badge__dot {
   width: 7px;
   height: 7px;

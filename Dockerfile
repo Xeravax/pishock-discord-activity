@@ -35,7 +35,8 @@ RUN if [ -z "$VITE_DISCORD_CLIENT_ID" ]; then \
     fi
 
 RUN GIT_SHA="$GIT_SHA" GIT_REF_NAME="$GIT_REF_NAME" GIT_REF_TYPE="$GIT_REF_TYPE" \
-    node scripts/write-version.mjs
+    node scripts/write-version.mjs \
+ && node scripts/write-release-notes.mjs
 
 # Placeholders are inline (not ENV) so secret-named vars never persist in image layers.
 # Real runtime secrets come from compose / .env at container start.
@@ -72,6 +73,7 @@ COPY --from=prod-deps /app/prisma.config.ts ./prisma.config.ts
 COPY --from=build /app/dist ./dist
 COPY --from=build /app/client-dist ./client-dist
 COPY --from=build /app/version.json ./version.json
+COPY --from=build /app/release-notes.json ./release-notes.json
 COPY docker-entrypoint.sh ./docker-entrypoint.sh
 RUN chmod +x ./docker-entrypoint.sh \
  && mkdir -p /app/data/pishock-profiles \
