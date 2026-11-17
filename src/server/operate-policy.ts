@@ -1,6 +1,10 @@
 import type { PiShockCreds } from './pishock/client.js';
 import { fetchControlSnapshot, type ControlSnapshot } from './pishock/client.js';
-import { publishOperate } from './pishock/broker.js';
+import {
+  publishOperate,
+  stopAcceptingCommands,
+  waitForInflightCommands,
+} from './pishock/broker.js';
 import {
   findActivityShareByCode,
   findActivityShareByShocker,
@@ -15,12 +19,10 @@ import {
   personalBandsFromUser,
   setLimitBandConflictFactory,
   shareBandsFromRow,
-  type IntensityDurationBand,
   type ModeLimitBands,
 } from './limit-bands.js';
 import {
   atLeastWarning,
-  normalizeWarningLevel,
   type WarningLevel,
 } from '../shared/warning.js';
 import { isPiShockRowPaused } from '../shared/pishock-pause.js';
@@ -67,7 +69,16 @@ const OPERATE_RATE_WINDOW_MS = 60_000;
 const OPERATE_RATE_MAX = 30;
 
 const rateBuckets = new Map<string, number[]>();
-const holdEndTimers = new Map<string, ReturnType<typeof setTimeout>>();
+type HoldAutoEnd = {
+  timer: ReturnType<typeof setTimeout>;
+  /** Sends the broker end frame for this hold (also used to flush on shutdown). */
+  sendEnd: () => Promise<boolean>;
+};
+const holdEndTimers = new Map<string, HoldAutoEnd>();
+/** End frames currently on the wire (timer-fired or drain-initiated). */
+const endFramesInFlight = new Set<Promise<boolean>>();
+/** Set once shutdown starts draining holds; new holds are then ended immediately. */
+let holdDrain: { promise: Promise<number>; acknowledged: number } | null = null;
 
 export type OperateModeFlags = {
   canShock: boolean;
@@ -699,7 +710,7 @@ export function clearHoldAutoEnd(ownerDiscordUserId: string, shockerId: number):
   const key = holdTimerKey(ownerDiscordUserId, shockerId);
   const existing = holdEndTimers.get(key);
   if (existing) {
-    clearTimeout(existing);
+    clearTimeout(existing.timer);
     holdEndTimers.delete(key);
   }
 }
@@ -715,12 +726,13 @@ export function scheduleHoldAutoEnd(
     shareCode?: string | null;
     agentName?: string;
   },
+  publish: typeof publishOperate = publishOperate,
 ): void {
   clearHoldAutoEnd(opts.ownerDiscordUserId, opts.shockerId);
+  const key = holdTimerKey(opts.ownerDiscordUserId, opts.shockerId);
   const delay = Math.max(ABS_MIN_DURATION_MS, opts.durationMs) + HOLD_AUTO_END_GRACE_MS;
-  const timer = setTimeout(() => {
-    holdEndTimers.delete(holdTimerKey(opts.ownerDiscordUserId, opts.shockerId));
-    void publishOperate(creds, {
+  const sendEnd = () =>
+    publish(creds, {
       clientId: opts.clientId,
       shockerId: opts.shockerId,
       operation: 'e',
@@ -730,9 +742,105 @@ export function scheduleHoldAutoEnd(
       shareCode: opts.shareCode ?? undefined,
       agentName: opts.agentName ?? 'Hold Limit',
     });
+  if (holdDrain) {
+    // Shutdown is draining: a hold whose publish was still in flight when the drain started
+    // must not get a timer that dies with this process — end it right now instead.
+    const drain = holdDrain;
+    trackEndFrame(sendEnd, () => {
+      drain.acknowledged += 1;
+    });
+    return;
+  }
+  const timer = setTimeout(() => {
+    holdEndTimers.delete(key);
+    trackEndFrame(sendEnd);
   }, delay);
   timer.unref?.();
-  holdEndTimers.set(holdTimerKey(opts.ownerDiscordUserId, opts.shockerId), timer);
+  holdEndTimers.set(key, { timer, sendEnd });
+}
+
+/** Send an end frame and keep it visible to the shutdown drain until it settles. */
+function trackEndFrame(sendEnd: () => Promise<boolean>, onAck?: () => void): void {
+  const sent = sendEnd().then(
+    (ok) => {
+      if (ok) onAck?.();
+      return ok;
+    },
+    // Best effort: the broker socket may already be gone.
+    () => false,
+  );
+  endFramesInFlight.add(sent);
+  void sent.finally(() => endFramesInFlight.delete(sent));
+}
+
+/** Number of holds whose auto-end timer is still pending (diagnostics / tests). */
+export function activeHoldCount(): number {
+  return holdEndTimers.size;
+}
+
+export type HoldDrainDeps = {
+  stopAcceptingCommands: () => void;
+  waitForInflightCommands: () => Promise<void>;
+};
+
+const defaultHoldDrainDeps: HoldDrainDeps = { stopAcceptingCommands, waitForInflightCommands };
+
+async function drainHolds(drain: { acknowledged: number }, deps: HoldDrainDeps): Promise<number> {
+  // 1. No new device commands from any path (direct operate, friend operate, queue).
+  deps.stopAcceptingCommands();
+  // 2. End every hold whose timer is already registered.
+  const pending = [...holdEndTimers.values()];
+  holdEndTimers.clear();
+  for (const entry of pending) {
+    clearTimeout(entry.timer);
+    trackEndFrame(entry.sendEnd, () => {
+      drain.acknowledged += 1;
+    });
+  }
+  // 3. Commands admitted before step 1 may still be on the wire. Once they settle, their
+  //    callers register holds synchronously; scheduleHoldAutoEnd ends those immediately.
+  await deps.waitForInflightCommands();
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  // 4. Wait for every end frame (including timer-fired ones) to be acknowledged or fail.
+  while (endFramesInFlight.size > 0) {
+    await Promise.allSettled([...endFramesInFlight]);
+  }
+  return drain.acknowledged;
+}
+
+/**
+ * Graceful shutdown / crash: hold auto-end timers live only in this process, so stop admitting
+ * commands and send every hold's end frame now, instead of leaving a hold running unsupervised.
+ *
+ * The drain runs once and is shared: an overlapping caller (SIGTERM and a crash handler) waits
+ * for the same drain, each bounded by its own `timeoutMs`. Resolves with the number of end
+ * frames the broker acknowledged so far. A hard kill (SIGKILL/OOM) cannot run this — see README
+ * "Restarts & safety".
+ */
+export async function endAllActiveHolds(
+  timeoutMs = 3_000,
+  deps: HoldDrainDeps = defaultHoldDrainDeps,
+): Promise<number> {
+  if (!holdDrain) {
+    const drain = { promise: Promise.resolve(0), acknowledged: 0 };
+    holdDrain = drain;
+    drain.promise = drainHolds(drain, deps);
+  }
+  const drain = holdDrain;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<number>((resolve) => {
+    timer = setTimeout(() => resolve(drain.acknowledged), timeoutMs);
+  });
+  try {
+    return await Promise.race([drain.promise, timeout]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** Test-only: forget a completed drain so later tests can schedule holds normally. */
+export function resetHoldDrainForTests(): void {
+  holdDrain = null;
 }
 
 /** Resolve device ceilings from a live PiShock snapshot for share saves. */

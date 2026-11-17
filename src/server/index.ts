@@ -16,7 +16,10 @@ import { attachRealtime, broadcastRealtimeAll } from './realtime.js';
 import { loadAppVersion } from './app-version.js';
 import { prisma } from './db.js';
 import { closeAllBrokerSessions } from './pishock/broker.js';
+import { endAllActiveHolds } from './operate-policy.js';
 import { installPiShockKeyRejectionHandler } from './session.js';
+import { buildLoggerOptions, registerSecurity } from './security.js';
+import { installProcessErrorHandlers, registerObservability } from './observability.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -30,7 +33,10 @@ async function main() {
   const env = loadEnv();
   installPiShockKeyRejectionHandler(env);
   const appVersion = loadAppVersion();
-  const app = Fastify({ logger: true });
+  const app = Fastify({
+    logger: buildLoggerOptions(),
+    trustProxy: env.trustProxy,
+  });
   let shuttingDown = false;
 
   // Discord activity proxy prefix must rewrite before routing/auth
@@ -72,6 +78,9 @@ async function main() {
     return payload;
   });
 
+  registerObservability(app);
+  installProcessErrorHandlers(app.log);
+  await registerSecurity(app, env);
   await app.register(authPlugin, { env });
   await app.register(authRoutes, { env });
   await app.register(pishockSessionRoutes, { env });
@@ -118,6 +127,15 @@ async function main() {
     try {
       broadcastRealtimeAll({ type: 'server_shutting_down', at: Date.now() });
       await new Promise((resolve) => setTimeout(resolve, SHUTDOWN_NOTIFY_MS));
+      // Must run while broker sockets are still open: refuse new device commands, wait for
+      // in-flight ones, and end every hold whose in-memory auto-end timer would otherwise be
+      // lost with this process. Broker sockets are only closed after every end frame has been
+      // acknowledged or failed; the force timer (started above, so it always fires first) is
+      // the only bound. Must stay finite: setTimeout(fn, Infinity) fires immediately.
+      const endedHolds = await endAllActiveHolds(SHUTDOWN_FORCE_MS);
+      if (endedHolds > 0) {
+        app.log.warn({ endedHolds }, 'Ended active holds before shutdown (acknowledged)');
+      }
       disposeRealtime();
       closeAllBrokerSessions();
       await app.close();

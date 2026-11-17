@@ -38,7 +38,7 @@ export function AnnouncementBanner() {
 
   useEffect(() => {
     let cancelled = false;
-    (async () => {
+    void (async () => {
       try {
         const res = await fetch(`${apiBase()}/announcements`, {
           headers: { Accept: 'application/json' },
