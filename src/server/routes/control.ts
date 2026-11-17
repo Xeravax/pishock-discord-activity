@@ -63,6 +63,7 @@ import {
   setEmergencyStops,
   gateEmergencyStops,
   isEmergencyStopped,
+  isEmergencyStopLatched,
 } from '../session.js';
 import { broadcastRealtimeAll } from '../realtime.js';
 import {
@@ -280,7 +281,6 @@ export const controlRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app, op
       }
     } else {
       result = await setEmergencyStops(req.discordUser.id, shockerIds, false);
-      gateEmergencyStops(req.discordUser.id, shockerIds, false);
       commandQueue.releaseAdvance(req.discordUser.id);
     }
 
@@ -534,6 +534,10 @@ export const controlRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app, op
 
       // Prefer broker for owned V3 devices (same channel emergency stop cancels)
       if (shockerId != null && clientId != null && !shareCode) {
+        // Publish-time guard: a STOP that completed during any earlier await blocks this command.
+        if (shockerId != null && isEmergencyStopLatched(policy.ownerDiscordUserId, shockerId)) {
+          return reply.code(423).send({ error: 'Owner has emergency stop engaged', code: 'EMERGENCY_STOP' });
+        }
         const published = await publishOperate(creds, {
           clientId,
           shockerId,
@@ -582,6 +586,10 @@ export const controlRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app, op
       }
 
       if ((hold || warning) && shockerId != null && clientId != null) {
+        // Publish-time guard: a STOP that completed during any earlier await blocks this command.
+        if (shockerId != null && isEmergencyStopLatched(policy.ownerDiscordUserId, shockerId)) {
+          return reply.code(423).send({ error: 'Owner has emergency stop engaged', code: 'EMERGENCY_STOP' });
+        }
         const published = await publishOperate(creds, {
           clientId,
           shockerId,
@@ -654,9 +662,16 @@ export const controlRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app, op
         });
       }
 
+      // Publish-time guard: a STOP that completed during any earlier await blocks this command.
       if (shareCode) {
+        if (shockerId != null && isEmergencyStopLatched(policy.ownerDiscordUserId, shockerId)) {
+          return reply.code(423).send({ error: 'Owner has emergency stop engaged', code: 'EMERGENCY_STOP' });
+        }
         await operateByShare(creds, shareCode, op, Math.max(1, intensity), durationMs);
       } else {
+        if (isEmergencyStopLatched(policy.ownerDiscordUserId, shockerId!)) {
+          return reply.code(423).send({ error: 'Owner has emergency stop engaged', code: 'EMERGENCY_STOP' });
+        }
         await operateById(creds, shockerId!, op, Math.max(1, intensity), durationMs);
       }
 

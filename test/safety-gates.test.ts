@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { describe, it } from 'node:test';
+import { afterEach, describe, it } from 'node:test';
 import { randomBytes } from 'node:crypto';
 import nacl from 'tweetnacl';
 import type { FastifyRequest } from 'fastify';
@@ -15,6 +15,7 @@ import {
   assertModeAllowed,
   assertOperateRateLimit,
   endAllActiveHolds,
+  resetHoldDrainForTests,
   scheduleHoldAutoEnd,
   assertWithinCeilings,
   clampDurationMs,
@@ -650,7 +651,7 @@ describe('should refuse — must not proceed', () => {
   });
 });
 
-describe('hold auto-end survives graceful shutdown', () => {
+describe('hold auto-end survives shutdown and crashes', () => {
   const creds = { userId: '1', token: 't', username: 'u' } as unknown as Parameters<
     typeof scheduleHoldAutoEnd
   >[0];
@@ -661,26 +662,112 @@ describe('hold auto-end survives graceful shutdown', () => {
     durationMs: 60_000,
     shareCode: null,
   });
-
-  it('endAllActiveHolds sends an end frame for every pending hold and clears timers', async () => {
-    const sent: Array<{ shockerId: number; end?: boolean; operation: string }> = [];
-    const publish = async (_c: unknown, input: { shockerId: number; end?: boolean; operation: string }) => {
+  type Frame = { shockerId: number; end?: boolean; operation: string };
+  const recorder = (result: boolean | (() => Promise<boolean>) = true) => {
+    const sent: Frame[] = [];
+    const publish = async (_c: unknown, input: Frame) => {
       sent.push(input);
-      return true;
+      return typeof result === 'function' ? result() : result;
     };
-    scheduleHoldAutoEnd(creds, opts(1), publish as never);
-    scheduleHoldAutoEnd(creds, opts(2), publish as never);
+    return { sent, publish: publish as never };
+  };
+  /** Drain deps with no broker: nothing in flight unless the test says so. */
+  const deps = (waitForInflightCommands: () => Promise<void> = async () => undefined) => {
+    let stopped = false;
+    return {
+      stopAcceptingCommands: () => {
+        stopped = true;
+      },
+      waitForInflightCommands,
+      get stopped() {
+        return stopped;
+      },
+    };
+  };
+
+  afterEach(async () => {
+    await endAllActiveHolds(50, deps()); // flush leftovers from a failing test
+    resetHoldDrainForTests();
+  });
+
+  it('stops admitting commands and ends every pending hold with an end frame', async () => {
+    const { sent, publish } = recorder();
+    scheduleHoldAutoEnd(creds, opts(1), publish);
+    scheduleHoldAutoEnd(creds, opts(2), publish);
     assert.equal(activeHoldCount(), 2);
+    const d = deps();
 
-    const ended = await endAllActiveHolds(500);
+    const acknowledged = await endAllActiveHolds(500, d);
 
-    assert.equal(ended, 2);
+    assert.equal(d.stopped, true);
+    assert.equal(acknowledged, 2);
     assert.equal(activeHoldCount(), 0);
     assert.deepEqual(sent.map((s) => s.shockerId).sort((a, b) => a - b), [1, 2]);
     assert.ok(sent.every((s) => s.end === true && s.operation === 'e'));
   });
 
-  it('a failing or hung publish cannot block shutdown beyond the timeout', async () => {
+  it('counts only end frames the broker acknowledged', async () => {
+    let n = 0;
+    const { publish } = recorder(async () => ++n === 1);
+    scheduleHoldAutoEnd(creds, opts(1), publish);
+    scheduleHoldAutoEnd(creds, opts(2), publish);
+    assert.equal(await endAllActiveHolds(500, deps()), 1);
+  });
+
+  it('ends a hold whose publish was still in flight when the drain started', async () => {
+    let finishInflight!: () => void;
+    const inflight = new Promise<void>((resolve) => {
+      finishInflight = resolve;
+    });
+    const { sent, publish } = recorder();
+    const draining = endAllActiveHolds(1_000, deps(() => inflight));
+    // The route's publish resolves after the snapshot, then it registers the hold.
+    finishInflight();
+    scheduleHoldAutoEnd(creds, opts(7), publish);
+
+    assert.equal(await draining, 1);
+    assert.equal(activeHoldCount(), 0, 'no timer may outlive the drain');
+    assert.deepEqual(sent.map((s) => [s.shockerId, s.end]), [[7, true]]);
+  });
+
+  it('waits for in-flight commands before resolving', async () => {
+    let finishInflight!: () => void;
+    const inflight = new Promise<void>((resolve) => {
+      finishInflight = resolve;
+    });
+    let settled = false;
+    const draining = endAllActiveHolds(1_000, deps(() => inflight)).then((n) => {
+      settled = true;
+      return n;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.equal(settled, false, 'drain finished while a command was still in flight');
+    finishInflight();
+    assert.equal(await draining, 0);
+  });
+
+  it('an overlapping caller (crash during shutdown) waits for the shared drain', async () => {
+    let ack!: (ok: boolean) => void;
+    const slow = () =>
+      new Promise<boolean>((resolve) => {
+        ack = resolve;
+      });
+    const { publish } = recorder(slow);
+    scheduleHoldAutoEnd(creds, opts(3), publish);
+
+    const first = endAllActiveHolds(1_000, deps());
+    let secondDone = false;
+    const second = endAllActiveHolds(1_000, deps()).then((n) => {
+      secondDone = true;
+      return n;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.equal(secondDone, false, 'second caller returned before the end frame was sent');
+    ack(true);
+    assert.deepEqual(await Promise.all([first, second]), [1, 1]);
+  });
+
+  it('a hung or failing publish cannot block a caller beyond its timeout', async () => {
     const hang = () => new Promise<boolean>(() => {});
     const boom = async () => {
       throw new Error('socket closed');
@@ -688,17 +775,18 @@ describe('hold auto-end survives graceful shutdown', () => {
     scheduleHoldAutoEnd(creds, opts(3), hang as never);
     scheduleHoldAutoEnd(creds, opts(4), boom as never);
     const started = Date.now();
-    await endAllActiveHolds(150);
+    assert.equal(await endAllActiveHolds(150, deps()), 0);
     assert.ok(Date.now() - started < 1_000);
     assert.equal(activeHoldCount(), 0);
   });
 
   it('is a no-op when nothing is pending, and re-scheduling replaces the old timer', async () => {
-    assert.equal(await endAllActiveHolds(50), 0);
-    const publish = async () => true;
-    scheduleHoldAutoEnd(creds, opts(5), publish as never);
-    scheduleHoldAutoEnd(creds, opts(5), publish as never);
+    const { publish } = recorder();
+    scheduleHoldAutoEnd(creds, opts(5), publish);
+    scheduleHoldAutoEnd(creds, opts(5), publish);
     assert.equal(activeHoldCount(), 1);
-    await endAllActiveHolds(50);
+    assert.equal(await endAllActiveHolds(50, deps()), 1);
+    resetHoldDrainForTests();
+    assert.equal(await endAllActiveHolds(50, deps()), 0);
   });
 });

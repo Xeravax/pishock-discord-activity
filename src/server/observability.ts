@@ -39,8 +39,13 @@ export function installProcessErrorHandlers(
     if (crashing) return;
     crashing = true;
     log.fatal({ err }, `${kind} — ending active holds and exiting`);
+    // Shares the shutdown drain if one is already running; bounded so a dead broker
+    // cannot keep a crashed process alive.
     void endAllActiveHolds(2_000)
-      .catch(() => undefined)
+      .then(
+        (acknowledged) => log.fatal({ acknowledgedHoldEnds: acknowledged }, 'Hold drain finished'),
+        () => undefined,
+      )
       .finally(() => exit(1));
   };
   process.on('uncaughtException', crash('uncaughtException'));

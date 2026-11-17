@@ -173,5 +173,33 @@ describe('device-firing code paths', () => {
     assert.match(frame, /end: true/);
     assert.match(frame, /intensity: 0/);
     assert.equal(src.match(/\bpublish\(creds/g)?.length, 1, 'unexpected extra publish call');
+    // Only the injected end-frame callback may publish: no direct firing primitives here.
+    assert.equal(
+      FIRING.test(src),
+      false,
+      'operate-policy must not call publishOperate/operateById/operateByShare directly',
+    );
+  });
+
+  it('operate routes re-check the e-stop synchronously right before each device command', () => {
+    for (const [method, url] of [
+      ['POST', '/api/operate'],
+      ['POST', '/api/participants/:targetDiscordUserId/operate'],
+    ] as const) {
+      const text = find(method, url).text;
+      const commands = [...text.matchAll(/await (publishOperate|operateById|operateByShare)\(/g)];
+      for (const m of commands) {
+        const before = text.slice(0, m.index);
+        // End frames (operation: 'e') never need the guard.
+        const call = text.slice(m.index, text.indexOf(');', m.index));
+        if (/operation: 'e'/.test(call)) continue;
+        const lastGuard = before.lastIndexOf('isEmergencyStopLatched(');
+        const lastAwait = before.lastIndexOf('await ');
+        assert.ok(
+          lastGuard >= 0 && lastGuard > lastAwait,
+          `${method} ${url}: ${m[1]} needs isEmergencyStopLatched() after the last await`,
+        );
+      }
+    }
   });
 });

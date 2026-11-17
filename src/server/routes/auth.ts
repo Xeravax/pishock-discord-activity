@@ -25,7 +25,7 @@ const profileCache = new Map<
 const PROFILE_CACHE_TTL_MS = 5 * 60 * 1000;
 
 export const authRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app, opts) => {
-  app.post('/api/auth/discord', strictRateLimit(20), async (req, reply) => {
+  app.post('/api/auth/discord', strictRateLimit(20, { byIp: true }), async (req, reply) => {
     const body = parseBody(discordAuthBody, req, reply);
     if (!body) return reply;
     try {

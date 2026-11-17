@@ -3,8 +3,9 @@ import type { DiscordParticipant, ParticipantStatus } from '../participants';
 
 /**
  * Builds the controllable shocker list for the selected friends from their server-reported
- * status. UI gating only (the server re-enforces everything): an engaged e-stop or a paused
- * device disables every mode, and ceilings are clamped to the device maximum.
+ * status. UI gating only (the server re-enforces everything): an engaged e-stop, a paused
+ * device, or a target without consent or a linked PiShock session disables every mode, while
+ * the rows stay visible with their e-stop / pause state. Ceilings are clamped to the device max.
  */
 export function buildFriendShockers(
   selectedTargetIds: string[],
@@ -21,6 +22,8 @@ export function buildFriendShockers(
     if (!status || status.bannedYou) continue;
     // E-stop / paused / etc: still show shockers (buttons disabled via flags)
     if (!status.shockers?.length) continue;
+    // The server refuses commands to someone without consent or a linked session.
+    const reachable = status.consent && status.linked;
     for (const s of status.shockers) {
       const deviceMaxIntensity = Math.min(100, s.deviceMaxIntensity ?? s.maxIntensity);
       const deviceMaxDuration = Math.min(15_000, s.deviceMaxDurationMs ?? s.maxDurationMs);
@@ -81,10 +84,10 @@ export function buildFriendShockers(
         owned: false,
         targetDiscordUserId: targetId,
         paused: devicePaused,
-        canShock: !stopped && !devicePaused && s.canShock,
-        canVibrate: !stopped && !devicePaused && s.canVibrate,
-        canBeep: !stopped && !devicePaused && s.canBeep,
-        canHold: !stopped && !devicePaused && s.canHold,
+        canShock: reachable && !stopped && !devicePaused && s.canShock,
+        canVibrate: reachable && !stopped && !devicePaused && s.canVibrate,
+        canBeep: reachable && !stopped && !devicePaused && s.canBeep,
+        canHold: reachable && !stopped && !devicePaused && s.canHold,
         canPause: false,
         deviceMaxIntensity,
         deviceMaxDuration,

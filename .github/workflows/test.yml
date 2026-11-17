@@ -58,7 +58,13 @@ jobs:
       - name: Typecheck server and client
         run: npm run typecheck
 
+      - name: Apply migrations to the test database
+        run: npx prisma migrate deploy
+
       - name: Run server tests
+        env:
+          # Enables DB-backed tests (e.g. concurrent emergency-stop latching).
+          DB_TESTS: '1'
         run: npm test
 
       - name: Run client tests

@@ -71,6 +71,23 @@ describe('buildFriendShockers — access gating', () => {
     expect([live.paused, live.canShock, live.canVibrate]).toEqual([true, false, false]);
   });
 
+  it('a target without consent or a linked session keeps rows visible but disables every mode', () => {
+    for (const st of [status({ consent: false }), status({ linked: false })]) {
+      const [s] = build({ u1: st });
+      expect(s).toBeDefined();
+      expect([s!.canShock, s!.canVibrate, s!.canBeep, s!.canHold]).toEqual([false, false, false, false]);
+    }
+    const stopped = build({
+      u1: status({ consent: false, shockers: [shocker({ emergencyStop: true, paused: true })] }),
+    })[0]!;
+    expect([stopped.emergencyStop, stopped.paused]).toEqual([true, true]);
+  });
+
+  it('available:false alone does not disable controls (consent + session decide)', () => {
+    const [s] = build({ u1: status({ available: false }) });
+    expect(s!.canShock).toBe(true);
+  });
+
   it('respects the share capability flags when not stopped', () => {
     const [s] = build({ u1: status({ shockers: [shocker({ canShock: false, canHold: false })] }) });
     expect([s!.canShock, s!.canVibrate, s!.canBeep, s!.canHold]).toEqual([false, true, true, false]);

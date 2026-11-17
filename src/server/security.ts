@@ -42,9 +42,39 @@ export function buildLoggerOptions() {
   };
 }
 
+const TOKEN_PARAM_NAMES = new Set(['token', 'access_token']);
+
+/**
+ * Lenient form-urlencoded name decoding (never throws): `+` is a space and each valid `%XX`
+ * becomes its byte. Enough to recognise ASCII names such as `%74oken`, which URLSearchParams
+ * — and therefore the WebSocket token lookup — would decode to `token`.
+ */
+function decodeParamName(raw: string): string {
+  return raw
+    .replace(/\+/g, ' ')
+    .replace(/%([0-9a-fA-F]{2})/g, (_m, hex: string) => String.fromCharCode(parseInt(hex, 16)));
+}
+
+/** Redact token / access_token query values, matching names after percent-decoding. */
 export function redactQueryTokens(url: string | undefined): string | undefined {
   if (!url) return url;
-  return url.replace(/([?&](?:access_token|token)=)[^&]*/gi, '$1[redacted]');
+  const q = url.indexOf('?');
+  if (q < 0) return url;
+  const hash = url.indexOf('#', q);
+  const end = hash < 0 ? url.length : hash;
+  const query = url
+    .slice(q + 1, end)
+    .split('&')
+    .map((part) => {
+      const eq = part.indexOf('=');
+      if (eq < 0) return part;
+      const rawName = part.slice(0, eq);
+      if (!TOKEN_PARAM_NAMES.has(decodeParamName(rawName).toLowerCase())) return part;
+      // Keep the parameter's original (possibly encoded) name.
+      return `${rawName}=[redacted]`;
+    })
+    .join('&');
+  return `${url.slice(0, q + 1)}${query}${url.slice(end)}`;
 }
 
 function apiPathOf(req: FastifyRequest): string {
@@ -109,7 +139,18 @@ export async function registerSecurity(app: FastifyInstance, env: AppEnv) {
   });
 }
 
-/** Stricter per-route limits for unauthenticated / credential-handling endpoints. */
-export const strictRateLimit = (max: number) => ({
-  config: { rateLimit: { max, timeWindow: '1 minute' } },
+/**
+ * Stricter per-route limits for unauthenticated / credential-handling endpoints.
+ * `byIp` keys the bucket by client IP only: use it on routes that need no bearer, where a
+ * caller could otherwise rotate made-up Authorization headers to get fresh buckets.
+ * (Behind a reverse proxy this needs TRUST_PROXY=1, or every client shares one bucket.)
+ */
+export const strictRateLimit = (max: number, opts: { byIp?: boolean } = {}) => ({
+  config: {
+    rateLimit: {
+      max,
+      timeWindow: '1 minute',
+      ...(opts.byIp ? { keyGenerator: (req: FastifyRequest) => `ip:${req.ip}` } : {}),
+    },
+  },
 });

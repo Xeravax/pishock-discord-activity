@@ -101,8 +101,12 @@ export async function loadPiShockCreds(
       select: { discordUserId: true },
     });
     if (displaced.length > 0) {
+      // Re-check the hash: a row relinked to a different key meanwhile must survive.
       await prisma.piShockSession.deleteMany({
-        where: { discordUserId: { in: displaced.map((other) => other.discordUserId) } },
+        where: {
+          apiKeyHash,
+          discordUserId: { in: displaced.map((other) => other.discordUserId) },
+        },
       });
       for (const other of displaced) disconnectBroker(other.discordUserId);
     }

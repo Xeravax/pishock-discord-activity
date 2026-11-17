@@ -42,6 +42,7 @@ import {
   getEmergencyStopShockerIds,
   getPersonalActivityLimits,
   isEmergencyStopped,
+  isEmergencyStopLatched,
   isExecutorBanned,
   listEnabledActivityShares,
   isQueueStarred,
@@ -789,6 +790,14 @@ export const participantRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app
         return { ok: true, via: 'broker', canceled: true };
       }
       if ((hold || warning) && clientId != null) {
+        // Publish-time guard: a STOP that completed during an earlier await (e.g. the PiShock
+        // pause lookup) must still block this command.
+        if (isEmergencyStopLatched(targetDiscordUserId, shockerId)) {
+          return reply.code(423).send({
+            error: 'Owner has emergency stop engaged',
+            code: 'EMERGENCY_STOP',
+          });
+        }
         const published = await publishOperate(targetCreds, {
           clientId,
           shockerId,
@@ -862,6 +871,14 @@ export const participantRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app
         });
       }
 
+      // Publish-time guard: a STOP that completed during an earlier await (e.g. the PiShock
+      // pause lookup) must still block this command.
+      if (isEmergencyStopLatched(targetDiscordUserId, shockerId)) {
+        return reply.code(423).send({
+          error: 'Owner has emergency stop engaged',
+          code: 'EMERGENCY_STOP',
+        });
+      }
       await operateById(
         targetCreds,
         shockerId,
