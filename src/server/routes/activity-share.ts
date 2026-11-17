@@ -1,3 +1,4 @@
+import { activityShareReplaceBody, activityShareSaveBody, parseBody } from '../schemas/index.js';
 import type { FastifyPluginAsync } from 'fastify';
 import type { AppEnv } from '../env.js';
 import {
@@ -204,20 +205,12 @@ export const activityShareRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (a
       return reply.code(401).send({ error: 'PiShock login required', code: 'PISHOCK_RELOGIN' });
     }
 
-    const body = req.body as {
-      personal?: {
-        activityMinIntensity?: number;
-        activityMaxIntensity?: number;
-        activityMinDurationMs?: number;
-        activityMaxDurationMs?: number;
-      };
-      shares?: IncomingShare[];
-      bannedDiscordUserIds?: string[];
-    };
+    const body = parseBody(activityShareSaveBody, req, reply);
+    if (!body) return reply;
 
     const existing = await listActivityShares(req.discordUser.id);
     const existingByShocker = new Map(existing.map((s) => [s.shockerId, s]));
-    const incoming = Array.isArray(body.shares) ? body.shares : null;
+    const incoming = body.shares ? (body.shares as IncomingShare[]) : null;
 
     const normalizedRows: Parameters<typeof replaceActivityShares>[1] = [];
     if (incoming) {
@@ -289,15 +282,13 @@ export const activityShareRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (a
       return reply.code(401).send({ error: 'PiShock login required', code: 'PISHOCK_RELOGIN' });
     }
 
-    const body = req.body as {
-      shares?: IncomingShare[];
-      bannedDiscordUserIds?: string[];
-    };
+    const body = parseBody(activityShareReplaceBody, req, reply);
+    if (!body) return reply;
 
     const existing = await listActivityShares(req.discordUser.id);
     const existingByShocker = new Map(existing.map((s) => [s.shockerId, s]));
 
-    const incoming = Array.isArray(body.shares) ? body.shares : [];
+    const incoming = (body.shares ?? []) as IncomingShare[];
     const normalized = [];
     for (const s of incoming) {
       const result = await normalizeShareRow(s, existingByShocker.get(Number(s.shockerId)), req.pishockCreds);

@@ -1,3 +1,4 @@
+import { claimShareBody, createShareBody, emergencyStopBody, operateBody, parseBody, pauseBody } from '../schemas/index.js';
 import type { FastifyPluginAsync } from 'fastify';
 import { ShockerOp } from '../../shared/constants.js';
 import type { AppEnv } from '../env.js';
@@ -67,7 +68,6 @@ import { broadcastRealtimeAll } from '../realtime.js';
 import {
   resolveActivityLocation,
   type ActivityLocationContext,
-  type ClientLocationHint,
 } from '../discord-location.js';
 
 /** Activity feed row: always attribute to the device owner so the public log can dedupe. */
@@ -198,12 +198,8 @@ export const controlRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app, op
     const blocked = requireSession(req, reply);
     if (blocked) return blocked;
 
-    const body = req.body as {
-      shockerId?: number;
-      shockerIds?: number[];
-      engaged?: boolean;
-      clientId?: number | string;
-    };
+    const body = parseBody(emergencyStopBody, req, reply);
+    if (!body) return reply;
     const requested = [
       ...(Array.isArray(body.shockerIds) ? body.shockerIds : []),
       body.shockerId,
@@ -360,26 +356,8 @@ export const controlRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app, op
       throw err;
     }
 
-    const body = req.body as {
-      shockerId?: number;
-      shareCode?: string;
-      operation?: 'shock' | 'vibrate' | 'beep' | 'hold' | 'warning' | 'stop' | 'end';
-      intensity?: number;
-      durationMs?: number;
-      // Intentionally ignored for policy — kept only so old clients do not break parsing
-      canShock?: boolean;
-      canVibrate?: boolean;
-      canBeep?: boolean;
-      canHold?: boolean;
-      maxIntensity?: number;
-      maxDuration?: number;
-      clientId?: number | string;
-      hold?: boolean;
-      warning?: { Active: boolean; Min: number; Max: number } | null;
-      warningLevel?: WarningLevel | string;
-      instanceId?: string;
-      locationHint?: ClientLocationHint | null;
-    };
+    const body = parseBody(operateBody, req, reply);
+    if (!body) return reply;
 
     const operation = body.operation;
     if (!operation) {
@@ -731,14 +709,9 @@ export const controlRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app, op
   app.post('/api/pause', async (req, reply) => {
     const blocked = requireSession(req, reply);
     if (blocked) return blocked;
-    const body = req.body as {
-      shareId?: number;
-      pauseState?: boolean | null;
-    };
+    const body = parseBody(pauseBody, req, reply);
+    if (!body) return reply;
     try {
-      if (body.shareId == null) {
-        return reply.code(400).send({ error: 'shareId required' });
-      }
       const result = await pauseShare(req.pishockCreds!, body.shareId, body.pauseState ?? null);
       invalidateControlSnapshot(req.pishockCreds!.userId);
       if (result.status === 404 || result.status === 405) {
@@ -759,8 +732,10 @@ export const controlRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app, op
   app.post('/api/shares', async (req, reply) => {
     const blocked = requireSession(req, reply);
     if (blocked) return blocked;
+    const shareBody = parseBody(createShareBody, req, reply);
+    if (!shareBody) return reply;
     try {
-      const result = await createShare(req.pishockCreds!, req.body as Record<string, unknown>);
+      const result = await createShare(req.pishockCreds!, shareBody);
       invalidateControlSnapshot(req.pishockCreds!.userId);
       if (result.status === 404 || result.status === 405) {
         return reply.code(result.status).send({ error: 'Create share unavailable' });
@@ -775,7 +750,8 @@ export const controlRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app, op
   app.put('/api/shares', async (req, reply) => {
     const blocked = requireSession(req, reply);
     if (blocked) return blocked;
-    const body = req.body as { code?: string; ShareCode?: string; Shares?: string[] };
+    const body = parseBody(claimShareBody, req, reply);
+    if (!body) return reply;
     const codes = Array.isArray(body.Shares)
       ? body.Shares
       : [body.code ?? body.ShareCode ?? '']

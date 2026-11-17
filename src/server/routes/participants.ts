@@ -1,3 +1,4 @@
+import { parseBody, participantOperateBody, participantsStatusBody } from '../schemas/index.js';
 import type { FastifyPluginAsync } from 'fastify';
 import { ShockerOp } from '../../shared/constants.js';
 import type { AppEnv } from '../env.js';
@@ -53,7 +54,6 @@ import { broadcastRealtime } from '../realtime.js';
 import {
   resolveActivityLocation,
   type ActivityLocationContext,
-  type ClientLocationHint,
 } from '../discord-location.js';
 import { commandQueue } from '../pishock/command-queue-runtime.js';
 import { CommandQueueError, type QueuedOperation } from '../pishock/command-queue.js';
@@ -193,7 +193,8 @@ export const participantRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app
       return reply.code(403).send({ error: 'Consent required', code: 'CONSENT_REQUIRED' });
     }
 
-    const body = req.body as { discordUserIds?: string[]; instanceId?: string };
+    const body = parseBody(participantsStatusBody, req, reply);
+    if (!body) return reply;
     const instanceId = body.instanceId ? String(body.instanceId) : '';
     try {
       await verifyActivityInstance(opts.env, instanceId, {
@@ -348,18 +349,8 @@ export const participantRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app
     const targetDiscordUserId = String(
       (req.params as { targetDiscordUserId: string }).targetDiscordUserId,
     );
-    const body = req.body as {
-      instanceId?: string;
-      locationHint?: ClientLocationHint | null;
-      shockerId?: number;
-      operation?: 'shock' | 'vibrate' | 'beep' | 'hold' | 'warning' | 'stop' | 'end';
-      intensity?: number;
-      durationMs?: number;
-      hold?: boolean;
-      warning?: boolean;
-      warningLevel?: WarningLevel | string;
-      clientId?: string | number;
-    };
+    const body = parseBody(participantOperateBody, req, reply);
+    if (!body) return reply;
 
     const instanceId = body.instanceId ? String(body.instanceId) : '';
     let instanceInfo = null;

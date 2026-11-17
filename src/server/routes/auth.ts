@@ -1,3 +1,4 @@
+import { discordAuthBody, parseBody } from '../schemas/index.js';
 import { strictRateLimit } from '../security.js';
 import type { FastifyPluginAsync } from 'fastify';
 import { DiscordAuthError, exchangeDiscordCode } from '../discord.js';
@@ -25,10 +26,8 @@ const PROFILE_CACHE_TTL_MS = 5 * 60 * 1000;
 
 export const authRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app, opts) => {
   app.post('/api/auth/discord', strictRateLimit(20), async (req, reply) => {
-    const body = req.body as { code?: string };
-    if (!body?.code) {
-      return reply.code(400).send({ error: 'Missing code' });
-    }
+    const body = parseBody(discordAuthBody, req, reply);
+    if (!body) return reply;
     try {
       const result = await exchangeDiscordCode(opts.env, body.code);
       return {
