@@ -33,6 +33,18 @@ Run `npm run lint && npm run typecheck && npm test && npm run test:client` befor
 7. Secrets: PiShock tokens are AES-GCM encrypted (`TOKEN_KEY`) and never sent to the
    browser. Don't log tokens, bearer headers, or `?token=` URLs (logger redacts these).
 
+## Layout
+- `src/server/routes/` thin-ish HTTP handlers; the operate routes deliberately keep their
+  safety gates inline (the invariant test inspects them — don't hide gates in helpers).
+- `src/server/services/` DB-backed domain logic (`session.ts` is a re-export barrel):
+  pishock-session, consent-store, activity-limits, command-log, emergency-stop,
+  command-queue-settings, bans.
+- `src/server/schemas/` Zod request schemas; `security.ts` helmet/rate-limit/log redaction;
+  `observability.ts` error handler + crash-safe hold flush.
+- `src/client/app/` pure, tested derivations extracted from the 3k-line `App.tsx`
+  (device normalisation, friend shockers, limits, hubs); `components/official/` holds the
+  helpers and sub-components split out of `OfficialController.tsx`.
+
 ## Conventions
 - Request bodies are validated with Zod in `src/server/schemas/` via `parseBody()`.
   Schemas are non-strict (strip unknown keys) so older clients keep working; keep the
