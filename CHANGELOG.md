@@ -1,5 +1,33 @@
 # Changelog
 
+## v2.4.0 — 2026-11-17
+
+## What's changed
+
+- #minor Harden app with CI enforcement, security headers, and validation (de96c0a)
+- Merge pull request #14 from Xeravax/chore/hardening (d486e63)
+- fix(shutdown): only the force timer bounds the hold drain (db822f4)
+- ci: check the client build, bundle size and served app on every PR (082ca76)
+- fix(safety): address review findings on e-stop, hold drain and hardening (68b1850)
+- ci: make npm audit advisory (996c16a)
+- docs: describe new server/client module layout in CLAUDE.md (46ea0ef)
+- refactor(server): split session.ts into domain service modules (cb1736f)
+- refactor(client): split OfficialController into helpers and controls (4c31225)
+- refactor(client): extract personal-limit and hub derivations, add tests (0555689)
+- refactor(client): extract friend shocker derivation, add safety tests (5c0c1d3)
+- refactor(client): extract App types and device helpers, add tests (f975f72)
+- test(client): add Vitest + Testing Library with safety-UI tests (d7cf802)
+- docs: add CLAUDE.md / AGENTS.md with safety invariants and conventions (0ea711e)
+- feat(server): generic 5xx responses, request ids, crash-safe holds (cf89da9)
+- chore: tidy build and repo hygiene (3544adf)
+- test: add structural invariants for device-firing routes (8976a58)
+- fix(safety): end active holds on graceful shutdown (fe0bb2d)
+- feat(server): validate request bodies with Zod (82eea9a)
+- feat(server): add security headers, rate limiting and log redaction (5cde63c)
+- chore: make CI blocking and add type-aware linting (e901df9)
+
+**Full changelog**: https://github.com/Xeravax/pishock-discord-activity/compare/v2.3.0...v2.4.0
+
 ## v2.3.0 — 2026-11-15
 
 ## What's changed
