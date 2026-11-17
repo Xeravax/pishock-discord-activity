@@ -19,6 +19,7 @@ import { closeAllBrokerSessions } from './pishock/broker.js';
 import { endAllActiveHolds } from './operate-policy.js';
 import { installPiShockKeyRejectionHandler } from './session.js';
 import { buildLoggerOptions, registerSecurity } from './security.js';
+import { installProcessErrorHandlers, registerObservability } from './observability.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -77,6 +78,8 @@ async function main() {
     return payload;
   });
 
+  registerObservability(app);
+  installProcessErrorHandlers(app.log);
   await registerSecurity(app, env);
   await app.register(authPlugin, { env });
   await app.register(authRoutes, { env });
