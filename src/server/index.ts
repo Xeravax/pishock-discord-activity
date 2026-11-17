@@ -17,6 +17,7 @@ import { loadAppVersion } from './app-version.js';
 import { prisma } from './db.js';
 import { closeAllBrokerSessions } from './pishock/broker.js';
 import { installPiShockKeyRejectionHandler } from './session.js';
+import { buildLoggerOptions, registerSecurity } from './security.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -30,7 +31,10 @@ async function main() {
   const env = loadEnv();
   installPiShockKeyRejectionHandler(env);
   const appVersion = loadAppVersion();
-  const app = Fastify({ logger: true });
+  const app = Fastify({
+    logger: buildLoggerOptions(),
+    trustProxy: env.trustProxy,
+  });
   let shuttingDown = false;
 
   // Discord activity proxy prefix must rewrite before routing/auth
@@ -72,6 +76,7 @@ async function main() {
     return payload;
   });
 
+  await registerSecurity(app, env);
   await app.register(authPlugin, { env });
   await app.register(authRoutes, { env });
   await app.register(pishockSessionRoutes, { env });

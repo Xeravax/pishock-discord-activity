@@ -1,3 +1,4 @@
+import { strictRateLimit } from '../security.js';
 import type { FastifyPluginAsync } from 'fastify';
 import { DiscordAuthError, exchangeDiscordCode } from '../discord.js';
 import type { AppEnv } from '../env.js';
@@ -23,7 +24,7 @@ const profileCache = new Map<
 const PROFILE_CACHE_TTL_MS = 5 * 60 * 1000;
 
 export const authRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app, opts) => {
-  app.post('/api/auth/discord', async (req, reply) => {
+  app.post('/api/auth/discord', strictRateLimit(20), async (req, reply) => {
     const body = req.body as { code?: string };
     if (!body?.code) {
       return reply.code(400).send({ error: 'Missing code' });
