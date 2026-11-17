@@ -94,9 +94,10 @@ import type {
 } from './app/types';
 import { formatQueueEta } from './app/queueFormat';
 import { buildFriendShockers } from './app/friendShockers';
+import { derivePersonalLimits } from './app/limits';
+import { buildHubOptions } from './app/hubs';
 import {
   collectClientIds,
-  hubClientId,
   normalizeClientKey,
   normalizeShockers,
   pauseRowsFromDevices,
@@ -955,39 +956,10 @@ export function App() {
     return () => window.clearInterval(id);
   }, [token, refreshParticipantStatus]);
 
-  const personalLimits = useMemo<PersonalLimits>(() => {
-    const p = me?.personal;
-    const maxI = Math.max(1, Math.min(100, p?.activityMaxIntensity ?? 100));
-    const maxD = Math.max(16, Math.min(15_000, p?.activityMaxDurationMs ?? 15_000));
-    const vibMaxI = Math.max(1, Math.min(100, p?.activityVibMaxIntensity ?? maxI));
-    const vibMaxD = Math.max(16, Math.min(15_000, p?.activityVibMaxDurationMs ?? maxD));
-    const beepMaxI = Math.max(1, Math.min(100, p?.activityBeepMaxIntensity ?? maxI));
-    const beepMaxD = Math.max(16, Math.min(15_000, p?.activityBeepMaxDurationMs ?? maxD));
-    return {
-      activityMinIntensity: Math.max(1, Math.min(maxI, p?.activityMinIntensity ?? 1)),
-      activityMaxIntensity: maxI,
-      activityMinDurationMs: Math.max(16, Math.min(maxD, p?.activityMinDurationMs ?? 16)),
-      activityMaxDurationMs: maxD,
-      activityVibMinIntensity: Math.max(1, Math.min(vibMaxI, p?.activityVibMinIntensity ?? 1)),
-      activityVibMaxIntensity: vibMaxI,
-      activityVibMinDurationMs: Math.max(16, Math.min(vibMaxD, p?.activityVibMinDurationMs ?? 16)),
-      activityVibMaxDurationMs: vibMaxD,
-      activityBeepMinIntensity: Math.max(1, Math.min(beepMaxI, p?.activityBeepMinIntensity ?? 1)),
-      activityBeepMaxIntensity: beepMaxI,
-      activityBeepMinDurationMs: Math.max(16, Math.min(beepMaxD, p?.activityBeepMinDurationMs ?? 16)),
-      activityBeepMaxDurationMs: beepMaxD,
-      activityCanShock: true,
-      activityCanVibrate: true,
-      activityCanBeep: true,
-      activityCanHold: true,
-      activityRequiredWarningLevel:
-        p?.activityRequiredWarningLevel === 'small' ||
-        p?.activityRequiredWarningLevel === 'mid' ||
-        p?.activityRequiredWarningLevel === 'long'
-          ? p.activityRequiredWarningLevel
-          : 'none',
-    };
-  }, [me?.personal]);
+  const personalLimits = useMemo<PersonalLimits>(
+    () => derivePersonalLimits(me?.personal),
+    [me?.personal],
+  );
 
   const emergencyStopIds = useMemo(
     () => new Set(me?.emergencyStopShockerIds ?? []),
@@ -1011,42 +983,10 @@ export function App() {
     });
   }, [devices, online, personalLimits, emergencyStopIds, discordShareLimits, livePausedIds]);
 
-  const hubOptions = useMemo(() => {
-    const hubs = devices?.hubs ?? [];
-    if (!hubs.length) {
-      const fallbackOnline = ownedAndShared.some((s) => s.online);
-      return [
-        {
-          id: ownedAndShared[0]?.clientId
-            ? normalizeClientKey(String(ownedAndShared[0].clientId)) || '0'
-            : '0',
-          name: 'PiShock',
-          online: fallbackOnline,
-          lastSeen: fallbackOnline ? 'Seen a few seconds ago' : 'Checking…',
-        },
-      ];
-    }
-    return hubs.map((h) => {
-      const id = normalizeClientKey(hubClientId(h) ?? '') || '0';
-      const name = String(h.Name ?? h.name ?? 'Hub');
-      const known = id in online ? online[id] : undefined;
-      const fromShockers = ownedAndShared.some(
-        (s) => normalizeClientKey(String(s.clientId ?? '')) === id && s.online,
-      );
-      const isOnline = known === true || fromShockers;
-      return {
-        id,
-        name,
-        online: isOnline,
-        lastSeen:
-          known === true || fromShockers
-            ? 'Seen a few seconds ago'
-            : known === false
-              ? 'Offline'
-              : 'Checking…',
-      };
-    });
-  }, [devices?.hubs, ownedAndShared, online]);
+  const hubOptions = useMemo(
+    () => buildHubOptions(devices?.hubs, ownedAndShared, online),
+    [devices?.hubs, ownedAndShared, online],
+  );
 
   useEffect(() => {
     if (!hubOptions.length) return;
