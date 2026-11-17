@@ -28,11 +28,6 @@ const __dirname = path.dirname(__filename);
 const SHUTDOWN_FORCE_MS = 8_000;
 /** Brief window so clients can receive the WS shutdown signal before listen closes. */
 const SHUTDOWN_NOTIFY_MS = 250;
-/**
- * Hold end frames may wait for the broker's acknowledgement up to this long — the rest of the
- * force-exit budget, minus time to close the server and the database.
- */
-const SHUTDOWN_HOLD_DRAIN_MS = SHUTDOWN_FORCE_MS - SHUTDOWN_NOTIFY_MS - 1_500;
 
 async function main() {
   const env = loadEnv();
@@ -134,8 +129,10 @@ async function main() {
       await new Promise((resolve) => setTimeout(resolve, SHUTDOWN_NOTIFY_MS));
       // Must run while broker sockets are still open: refuse new device commands, wait for
       // in-flight ones, and end every hold whose in-memory auto-end timer would otherwise be
-      // lost with this process. Waits for broker acknowledgements up to the drain budget.
-      const endedHolds = await endAllActiveHolds(SHUTDOWN_HOLD_DRAIN_MS);
+      // lost with this process. Broker sockets are only closed after every end frame has been
+      // acknowledged or failed; the force timer (started above, so it always fires first) is
+      // the only bound. Must stay finite: setTimeout(fn, Infinity) fires immediately.
+      const endedHolds = await endAllActiveHolds(SHUTDOWN_FORCE_MS);
       if (endedHolds > 0) {
         app.log.warn({ endedHolds }, 'Ended active holds before shutdown (acknowledged)');
       }
