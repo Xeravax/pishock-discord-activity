@@ -7,12 +7,13 @@ change near device control as safety-critical.
 ## Commands
 ```bash
 npm test             # node --test: safety gates, validation, route invariants
+npm run test:client  # vitest + Testing Library (src/client/**/*.test.tsx)
 npm run lint         # oxlint --type-aware (typescript-eslint doesn't support TS 7)
 npm run typecheck    # server + client (does NOT cover test/)
 npm run build        # prisma generate + vite + tsc + scripts/postbuild.mjs
 npm run dev          # API (tsx watch)   |   npm run dev:client   # Vite UI
 ```
-Run `npm run lint && npm run typecheck && npm test` before finishing. CI is blocking.
+Run `npm run lint && npm run typecheck && npm test && npm run test:client` before finishing. CI is blocking.
 
 ## Safety invariants — never weaken these
 1. **Limits are enforced server-side only.** The client may send `canShock`, `maxIntensity`,

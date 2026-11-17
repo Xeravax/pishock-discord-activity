@@ -58,8 +58,11 @@ jobs:
       - name: Typecheck server and client
         run: npm run typecheck
 
-      - name: Run tests
+      - name: Run server tests
         run: npm test
+
+      - name: Run client tests
+        run: npm run test:client
 
       - name: Audit production dependencies
         run: npm audit --omit=dev --audit-level=high
