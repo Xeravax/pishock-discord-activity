@@ -361,6 +361,18 @@ Compose defaults create a local volume for Postgres (`pishock_pgdata`). Producti
 - Command logging
 - TAP continuous hold only when the share/device allows hold
 
+### Restarts & safety (single instance only)
+The server keeps short-lived control state in memory, so **run exactly one instance**
+(a second replica would not see the first one's rate limits, holds, or queue timers).
+
+| State | Where it lives | On restart |
+| --- | --- | --- |
+| E-STOP latches | Postgres (`emergencyStopShockerIds`) | **Preserved** — commands stay blocked |
+| Activity limits, bans, shares, queue settings | Postgres | Preserved |
+| Pending hold waiting out its warning | memory | Dropped — the hold never starts (fails safe) |
+| Hold auto-end timers | memory | On graceful shutdown (SIGTERM, e.g. `docker stop`/deploys) every active hold is **ended before exit**. A hard crash (SIGKILL/OOM) cannot do this, so the device's own PiShock duration limit is the last line of defense |
+| Operate rate-limit window, pending PiShock login/confirm | memory | Reset — users retry |
+
 ### Data Protection
 - PiShock session tokens encrypted at rest (`TOKEN_KEY` → AES-256-GCM)
 - Browser never receives the PiShock token

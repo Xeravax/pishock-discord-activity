@@ -16,6 +16,7 @@ import { attachRealtime, broadcastRealtimeAll } from './realtime.js';
 import { loadAppVersion } from './app-version.js';
 import { prisma } from './db.js';
 import { closeAllBrokerSessions } from './pishock/broker.js';
+import { endAllActiveHolds } from './operate-policy.js';
 import { installPiShockKeyRejectionHandler } from './session.js';
 import { buildLoggerOptions, registerSecurity } from './security.js';
 
@@ -123,6 +124,10 @@ async function main() {
     try {
       broadcastRealtimeAll({ type: 'server_shutting_down', at: Date.now() });
       await new Promise((resolve) => setTimeout(resolve, SHUTDOWN_NOTIFY_MS));
+      // Must run while broker sockets are still open: stop any hold whose in-memory
+      // auto-end timer would otherwise be lost with this process.
+      const endedHolds = await endAllActiveHolds();
+      if (endedHolds > 0) app.log.warn({ endedHolds }, 'Ended active holds before shutdown');
       disposeRealtime();
       closeAllBrokerSessions();
       await app.close();

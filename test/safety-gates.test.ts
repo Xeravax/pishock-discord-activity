@@ -11,8 +11,11 @@ import {
   validateConsentAcknowledgements,
 } from '../src/server/consent.js';
 import {
+  activeHoldCount,
   assertModeAllowed,
   assertOperateRateLimit,
+  endAllActiveHolds,
+  scheduleHoldAutoEnd,
   assertWithinCeilings,
   clampDurationMs,
   clampIntensity,
@@ -644,5 +647,58 @@ describe('should refuse — must not proceed', () => {
       () => validateDiscordProxyHeaders(badSig.env, badSig.req),
       (err: unknown) => err instanceof ProxyAuthError,
     );
+  });
+});
+
+describe('hold auto-end survives graceful shutdown', () => {
+  const creds = { userId: '1', token: 't', username: 'u' } as unknown as Parameters<
+    typeof scheduleHoldAutoEnd
+  >[0];
+  const opts = (shockerId: number) => ({
+    ownerDiscordUserId: 'owner',
+    shockerId,
+    clientId: 9,
+    durationMs: 60_000,
+    shareCode: null,
+  });
+
+  it('endAllActiveHolds sends an end frame for every pending hold and clears timers', async () => {
+    const sent: Array<{ shockerId: number; end?: boolean; operation: string }> = [];
+    const publish = async (_c: unknown, input: { shockerId: number; end?: boolean; operation: string }) => {
+      sent.push(input);
+      return true;
+    };
+    scheduleHoldAutoEnd(creds, opts(1), publish as never);
+    scheduleHoldAutoEnd(creds, opts(2), publish as never);
+    assert.equal(activeHoldCount(), 2);
+
+    const ended = await endAllActiveHolds(500);
+
+    assert.equal(ended, 2);
+    assert.equal(activeHoldCount(), 0);
+    assert.deepEqual(sent.map((s) => s.shockerId).sort((a, b) => a - b), [1, 2]);
+    assert.ok(sent.every((s) => s.end === true && s.operation === 'e'));
+  });
+
+  it('a failing or hung publish cannot block shutdown beyond the timeout', async () => {
+    const hang = () => new Promise<boolean>(() => {});
+    const boom = async () => {
+      throw new Error('socket closed');
+    };
+    scheduleHoldAutoEnd(creds, opts(3), hang as never);
+    scheduleHoldAutoEnd(creds, opts(4), boom as never);
+    const started = Date.now();
+    await endAllActiveHolds(150);
+    assert.ok(Date.now() - started < 1_000);
+    assert.equal(activeHoldCount(), 0);
+  });
+
+  it('is a no-op when nothing is pending, and re-scheduling replaces the old timer', async () => {
+    assert.equal(await endAllActiveHolds(50), 0);
+    const publish = async () => true;
+    scheduleHoldAutoEnd(creds, opts(5), publish as never);
+    scheduleHoldAutoEnd(creds, opts(5), publish as never);
+    assert.equal(activeHoldCount(), 1);
+    await endAllActiveHolds(50);
   });
 });

@@ -65,7 +65,12 @@ const OPERATE_RATE_WINDOW_MS = 60_000;
 const OPERATE_RATE_MAX = 30;
 
 const rateBuckets = new Map<string, number[]>();
-const holdEndTimers = new Map<string, ReturnType<typeof setTimeout>>();
+type HoldAutoEnd = {
+  timer: ReturnType<typeof setTimeout>;
+  /** Sends the broker end frame for this hold (also used to flush on shutdown). */
+  sendEnd: () => Promise<boolean>;
+};
+const holdEndTimers = new Map<string, HoldAutoEnd>();
 
 export type OperateModeFlags = {
   canShock: boolean;
@@ -697,7 +702,7 @@ export function clearHoldAutoEnd(ownerDiscordUserId: string, shockerId: number):
   const key = holdTimerKey(ownerDiscordUserId, shockerId);
   const existing = holdEndTimers.get(key);
   if (existing) {
-    clearTimeout(existing);
+    clearTimeout(existing.timer);
     holdEndTimers.delete(key);
   }
 }
@@ -713,12 +718,13 @@ export function scheduleHoldAutoEnd(
     shareCode?: string | null;
     agentName?: string;
   },
+  publish: typeof publishOperate = publishOperate,
 ): void {
   clearHoldAutoEnd(opts.ownerDiscordUserId, opts.shockerId);
+  const key = holdTimerKey(opts.ownerDiscordUserId, opts.shockerId);
   const delay = Math.max(ABS_MIN_DURATION_MS, opts.durationMs) + HOLD_AUTO_END_GRACE_MS;
-  const timer = setTimeout(() => {
-    holdEndTimers.delete(holdTimerKey(opts.ownerDiscordUserId, opts.shockerId));
-    void publishOperate(creds, {
+  const sendEnd = () =>
+    publish(creds, {
       clientId: opts.clientId,
       shockerId: opts.shockerId,
       operation: 'e',
@@ -728,9 +734,40 @@ export function scheduleHoldAutoEnd(
       shareCode: opts.shareCode ?? undefined,
       agentName: opts.agentName ?? 'Hold Limit',
     });
+  const timer = setTimeout(() => {
+    holdEndTimers.delete(key);
+    void sendEnd().catch(() => {
+      // Best effort: the broker socket may already be gone.
+    });
   }, delay);
   timer.unref?.();
-  holdEndTimers.set(holdTimerKey(opts.ownerDiscordUserId, opts.shockerId), timer);
+  holdEndTimers.set(key, { timer, sendEnd });
+}
+
+/** Number of holds whose auto-end timer is still pending (diagnostics / tests). */
+export function activeHoldCount(): number {
+  return holdEndTimers.size;
+}
+
+/**
+ * Graceful shutdown: the auto-end timers live only in this process, so a restart would
+ * silently drop them. Send every pending end frame now (bounded by `timeoutMs`) instead
+ * of leaving a hold running unsupervised. Returns how many holds were ended.
+ * A hard crash (SIGKILL/OOM) cannot run this — see README "Restarts & safety".
+ */
+export async function endAllActiveHolds(timeoutMs = 3_000): Promise<number> {
+  const pending = [...holdEndTimers.values()];
+  for (const entry of pending) clearTimeout(entry.timer);
+  holdEndTimers.clear();
+  if (pending.length === 0) return 0;
+  const sends = Promise.allSettled(pending.map((entry) => entry.sendEnd()));
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<void>((resolve) => {
+    timer = setTimeout(resolve, timeoutMs);
+  });
+  await Promise.race([sends, timeout]);
+  clearTimeout(timer);
+  return pending.length;
 }
 
 /** Resolve device ceilings from a live PiShock snapshot for share saves. */
