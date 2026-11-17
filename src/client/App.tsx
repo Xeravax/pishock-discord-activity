@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ApiError, apiBase, apiFetch, isEmbedded } from './api';
+import { ApiError, apiFetch, isEmbedded } from './api';
 import {
   bootstrapDiscord,
   buildPresenceSnapshot,
@@ -521,7 +521,7 @@ export function App() {
       setBootLabel(label);
     };
 
-    (async () => {
+    void (async () => {
       try {
         report(4, 'Starting…');
         const authState = await bootstrapDiscord(setPip, ({ progress, label }) => {
@@ -2701,7 +2701,7 @@ export function App() {
               const queueHalted = Boolean(queue?.enabled && queue.halted);
               if (starBlocked || queueHalted) return;
             }
-            operate({
+            void operate({
               ...input,
               targetDiscordUserId: targetId,
             });
@@ -3274,20 +3274,6 @@ function pauseRowsFromDevices(devices: DevicesResponse): Array<Record<string, un
         )
       : [];
   return [...(devices.shockers ?? []), ...(shared as Array<Record<string, unknown>>)];
-}
-
-function dropResolvedPause(
-  live: Set<number>,
-  rows: Array<Record<string, unknown>>,
-): Set<number> {
-  if (live.size === 0) return live;
-  const next = new Set(live);
-  for (const row of rows) {
-    const id = Number(row.ShockerId ?? row.shockerId ?? row.Id ?? row.id);
-    if (!Number.isFinite(id)) continue;
-    if (isPiShockRowPaused(row) || isPiShockRowExplicitlyUnpaused(row)) next.delete(id);
-  }
-  return next.size === live.size ? live : next;
 }
 
 function rowIsPaused(

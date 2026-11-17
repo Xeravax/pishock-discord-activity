@@ -287,10 +287,6 @@ function storedWarningLevel(value: unknown): Exclude<WarningLevel, 'none'> | nul
   return level === 'none' ? null : level;
 }
 
-/** @deprecated use cleanLoggedName */
-function cleanLoggedShockerName(value: string | null | undefined): string | null {
-  return cleanLoggedName(value);
-}
 
 type ActivityShareLogMeta = {
   shockerName: string | null;

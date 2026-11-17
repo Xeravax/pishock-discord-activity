@@ -15,12 +15,10 @@ import {
   personalBandsFromUser,
   setLimitBandConflictFactory,
   shareBandsFromRow,
-  type IntensityDurationBand,
   type ModeLimitBands,
 } from './limit-bands.js';
 import {
   atLeastWarning,
-  normalizeWarningLevel,
   type WarningLevel,
 } from '../shared/warning.js';
 import { isPiShockRowPaused } from '../shared/pishock-pause.js';
