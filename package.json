@@ -9,7 +9,7 @@
     "predev:client": "npm run version:write",
     "dev:client": "vite",
     "prebuild": "npm run version:write",
-    "build": "prisma generate && vite build && tsc -p tsconfig.server.json && node -e \"const fs=require('fs'); fs.copyFileSync('src/server.js','dist/server.js'); fs.copyFileSync('version.json','dist/version.json'); fs.copyFileSync('version.json','client-dist/version.json'); if(fs.existsSync('release-notes.json')){fs.copyFileSync('release-notes.json','dist/release-notes.json');}\"",
+    "build": "prisma generate && vite build && tsc -p tsconfig.server.json && node scripts/postbuild.mjs",
     "start": "node dist/server.js",
     "typecheck": "tsc -p tsconfig.server.json --noEmit && tsc -p tsconfig.client.json --noEmit",
     "test": "node --import ./test/preload-env.mjs --import tsx --test test/**/*.test.ts",
@@ -18,7 +18,8 @@
     "version:write": "node scripts/write-version.mjs && node scripts/write-release-notes.mjs",
     "lint": "oxlint --type-aware",
     "format": "prettier --write .",
-    "format:check": "prettier --check ."
+    "format:check": "prettier --check .",
+    "hooks:install": "git config core.hooksPath .githooks"
   },
   "dependencies": {
     "@discord/embedded-app-sdk": "^2.5.0",
@@ -53,5 +54,8 @@
     "tsx": "^4.23.15",
     "typescript": "^7.0.2",
     "vite": "^8.3.7"
+  },
+  "engines": {
+    "node": ">=22"
   }
 }

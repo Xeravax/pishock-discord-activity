@@ -267,7 +267,11 @@ npm run dev:client   # Vite UI (separate terminal)
 | `npm run dev:client` | Vite frontend |
 | `npm run build` | Prisma generate + Vite build + server compile |
 | `npm start` | Run compiled `dist/server.js` |
+| `npm test` | Safety-gate, validation and invariant tests (`node --test`) |
+| `npm run lint` | Type-aware lint (oxlint + tsgolint; works with TypeScript 7) |
 | `npm run typecheck` | TypeScript checks (server + client) |
+| `npm run format` / `format:check` | Prettier (not enforced yet — the codebase predates it) |
+| `npm run hooks:install` | Opt-in pre-commit hook (typecheck + lint) |
 | `npm run prisma:generate` | Generate Prisma client |
 | `npm run prisma:migrate` | Apply migrations (`prisma migrate deploy`) |
 
@@ -284,6 +288,9 @@ npm run dev:client   # Vite UI (separate terminal)
 | `TOKEN_KEY` | Runtime | Yes | AES-256-GCM key material |
 | `PUBLIC_URL` | Runtime | Yes | Public activity origin |
 | `PORT` | Runtime | No | Listen / host port (default 3000) |
+| `TRUST_PROXY` | Runtime | Optional | `1` behind a reverse proxy so rate limits see real client IPs |
+| `RATE_LIMIT_MAX` | Runtime | Optional | API requests/minute per caller (default 600) |
+| `CSP_ENFORCE` | Runtime | Optional | `1` to enforce the Content-Security-Policy (default: report-only) |
 | `VITE_DISCORD_CLIENT_ID` | Build | Yes* | Usually set from `DISCORD_CLIENT_ID` during Docker/CI build |
 
 \*Required for a working Discord embed; without it the client falls back to a dummy id and Discord rejects the origin.

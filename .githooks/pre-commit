@@ -1,0 +1,5 @@
+#!/usr/bin/env sh
+# Opt-in: `npm run hooks:install`. Fast checks before every commit.
+set -e
+npm run --silent typecheck
+npm run --silent lint
