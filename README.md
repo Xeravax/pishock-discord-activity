@@ -267,7 +267,11 @@ npm run dev:client   # Vite UI (separate terminal)
 | `npm run dev:client` | Vite frontend |
 | `npm run build` | Prisma generate + Vite build + server compile |
 | `npm start` | Run compiled `dist/server.js` |
+| `npm test` | Safety-gate, validation and invariant tests (`node --test`) |
+| `npm run lint` | Type-aware lint (oxlint + tsgolint; works with TypeScript 7) |
 | `npm run typecheck` | TypeScript checks (server + client) |
+| `npm run format` / `format:check` | Prettier (not enforced yet — the codebase predates it) |
+| `npm run hooks:install` | Opt-in pre-commit hook (typecheck + lint) |
 | `npm run prisma:generate` | Generate Prisma client |
 | `npm run prisma:migrate` | Apply migrations (`prisma migrate deploy`) |
 
@@ -284,6 +288,9 @@ npm run dev:client   # Vite UI (separate terminal)
 | `TOKEN_KEY` | Runtime | Yes | AES-256-GCM key material |
 | `PUBLIC_URL` | Runtime | Yes | Public activity origin |
 | `PORT` | Runtime | No | Listen / host port (default 3000) |
+| `TRUST_PROXY` | Runtime | Optional | `1` behind a reverse proxy so rate limits see real client IPs |
+| `RATE_LIMIT_MAX` | Runtime | Optional | API requests/minute per caller (default 600) |
+| `CSP_ENFORCE` | Runtime | Optional | `1` to enforce the Content-Security-Policy (default: report-only) |
 | `VITE_DISCORD_CLIENT_ID` | Build | Yes* | Usually set from `DISCORD_CLIENT_ID` during Docker/CI build |
 
 \*Required for a working Discord embed; without it the client falls back to a dummy id and Discord rejects the origin.
@@ -360,6 +367,18 @@ Compose defaults create a local volume for Postgres (`pishock_pgdata`). Producti
 - Ban list for Discord users
 - Command logging
 - TAP continuous hold only when the share/device allows hold
+
+### Restarts & safety (single instance only)
+The server keeps short-lived control state in memory, so **run exactly one instance**
+(a second replica would not see the first one's rate limits, holds, or queue timers).
+
+| State | Where it lives | On restart |
+| --- | --- | --- |
+| E-STOP latches | Postgres (`emergencyStopShockerIds`) | **Preserved** — commands stay blocked |
+| Activity limits, bans, shares, queue settings | Postgres | Preserved |
+| Pending hold waiting out its warning | memory | Dropped — the hold never starts (fails safe) |
+| Hold auto-end timers | memory | On graceful shutdown (SIGTERM, e.g. `docker stop`/deploys) every active hold is **ended before exit**. A hard crash (SIGKILL/OOM) cannot do this, so the device's own PiShock duration limit is the last line of defense |
+| Operate rate-limit window, pending PiShock login/confirm | memory | Reset — users retry |
 
 ### Data Protection
 - PiShock session tokens encrypted at rest (`TOKEN_KEY` → AES-256-GCM)

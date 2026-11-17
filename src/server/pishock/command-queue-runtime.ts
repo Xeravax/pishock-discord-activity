@@ -524,7 +524,12 @@ export const commandQueue = createCommandQueue({
   validateBeforeRun: validateQueuedItem,
   execute: executeQueuedItem,
   endActive: endQueuedItem,
-  onStateChange: emitQueueState,
+  onStateChange: (state) => {
+    // Fire-and-forget: a failed settings read must not become an unhandled rejection.
+    emitQueueState(state).catch((err: unknown) => {
+      console.error('[command-queue] failed to emit queue state', err);
+    });
+  },
   onTicket: (ticket) => {
     broadcastRealtime(ticket, { discordUserId: ticket.executorDiscordUserId });
   },

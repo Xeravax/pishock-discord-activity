@@ -1,9 +1,9 @@
-name: Tests (optional)
+name: Tests
 
 on:
   pull_request:
   push:
-    branches: [release, develop, feature/api-key]
+    branches: [release, develop]
   workflow_dispatch:
 
 concurrency:
@@ -12,13 +12,29 @@ concurrency:
 
 jobs:
   test:
-    name: Safety gates + typecheck
+    name: Lint, typecheck, tests, build smoke
     # Pin until ready for ubuntu-26 (ubuntu-latest migrates Oct 2026)
     runs-on: ubuntu-24.04
-    # Keep this check visible without blocking merges unless you later make it required.
-    continue-on-error: true
     permissions:
       contents: read
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: pishock
+          POSTGRES_PASSWORD: pishock
+          POSTGRES_DB: pishock_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U pishock"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      DATABASE_URL: postgresql://pishock:pishock@127.0.0.1:5432/pishock_test?schema=public
 
     steps:
       - name: Checkout
@@ -34,13 +50,74 @@ jobs:
         run: npm ci
 
       - name: Generate Prisma client
-        env:
-          # Generate only — Prisma does not connect during generate.
-          DATABASE_URL: postgresql://build:build@127.0.0.1:5432/build?schema=public
         run: npx prisma generate
 
-      - name: Run safety gate tests
-        run: npm test
+      - name: Lint
+        run: npm run lint
 
       - name: Typecheck server and client
         run: npm run typecheck
+
+      - name: Apply migrations to the test database
+        run: npx prisma migrate deploy
+
+      - name: Run server tests
+        env:
+          # Enables DB-backed tests (e.g. concurrent emergency-stop latching).
+          DB_TESTS: '1'
+        run: npm test
+
+      - name: Run client tests (with coverage)
+        run: npm run test:client -- --coverage
+
+      - name: Client coverage summary
+        if: always()
+        run: node scripts/ci/coverage-summary.mjs
+
+      - name: Production build (client bundle + server)
+        env:
+          # Only baked into the bundle; a placeholder is fine for CI.
+          VITE_DISCORD_CLIENT_ID: ${{ vars.DISCORD_CLIENT_ID || 'ci-build' }}
+        run: npm run build
+
+      - name: Client bundle size budget
+        run: node scripts/ci/client-bundle-report.mjs
+
+      - name: Smoke test the built app
+        # Boots dist/server.js: index.html, every JS/CSS asset and font it references,
+        # SPA fallback, security headers, then a clean SIGTERM shutdown.
+        run: node scripts/ci/smoke-built-app.mjs
+
+      - name: Audit production dependencies
+        # Advisory only: the current high finding is a nested zod inside
+        # @discord/embedded-app-sdk with no upstream fix. Drop continue-on-error once
+        # `npm audit` is clean so new vulnerabilities start blocking.
+        continue-on-error: true
+        run: npm audit --omit=dev --audit-level=high
+
+  docker:
+    name: Docker image builds
+    # The publish workflow only builds after merge; this catches a broken Dockerfile or
+    # client build inside the image on the PR itself. Nothing is pushed.
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Build image (no push)
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: ./Dockerfile
+          push: false
+          build-args: |
+            VITE_DISCORD_CLIENT_ID=${{ vars.DISCORD_CLIENT_ID || 'ci-build' }}
+            GIT_SHA=${{ github.sha }}
+            GIT_REF_NAME=${{ github.ref_name }}
+            GIT_REF_TYPE=${{ github.ref_type }}
+          cache-from: type=gha

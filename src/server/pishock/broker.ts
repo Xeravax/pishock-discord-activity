@@ -291,6 +291,23 @@ export function getOnlineMap(discordUserId: string): Record<string, boolean> {
   return Object.fromEntries(session.online.entries());
 }
 
+/** False once shutdown starts: new device commands are refused, end/stop frames still go out. */
+let acceptingCommands = true;
+/** Non-end commands handed to the broker and not yet acknowledged or failed. */
+const inflightCommands = new Set<Promise<boolean>>();
+
+/** Shutdown: refuse new non-end device commands (end / emergency-stop frames still publish). */
+export function stopAcceptingCommands(): void {
+  acceptingCommands = false;
+}
+
+/** Resolves once every command admitted before `stopAcceptingCommands` has settled. */
+export async function waitForInflightCommands(): Promise<void> {
+  while (inflightCommands.size > 0) {
+    await Promise.allSettled([...inflightCommands]);
+  }
+}
+
 /**
  * Publish via broker (hold / warning / emergency stop).
  * Matches pishock.com control page: owned devices use ty "ow", shares use "sc".
@@ -319,6 +336,7 @@ export async function publishOperate(
         ? 'v'
         : 'b';
   const isEnd = mode === 'e';
+  if (!isEnd && !acceptingCommands) return false;
   const target = input.shareCode
     ? `c${input.clientId}-sops-${input.shareCode}`
     : `c${input.clientId}-ops`;
@@ -350,7 +368,13 @@ export async function publishOperate(
     PublishCommands: [{ Target: target, Body: body }],
   });
 
-  return publishPayload(creds, payload);
+  const sent = publishPayload(creds, payload);
+  if (!isEnd) {
+    inflightCommands.add(sent);
+    const settle = () => inflightCommands.delete(sent);
+    void sent.then(settle, settle);
+  }
+  return sent;
 }
 
 function idForSession(session: BrokerSession): string | null {

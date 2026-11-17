@@ -1,3 +1,4 @@
+import { parseBody, queueEnabledBody, queueHaltedBody, queuePausedBody, queueProgressBody, queueSettingsBody, queueStarBody } from '../schemas/index.js';
 import type { FastifyPluginAsync } from 'fastify';
 import type { AppEnv } from '../env.js';
 import { broadcastRealtime, broadcastRealtimeAll } from '../realtime.js';
@@ -95,12 +96,8 @@ export const queueRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app) => {
     const blocked = requireConsent(req, reply);
     if (blocked) return blocked;
 
-    const body = req.body as Partial<{
-      enabled: boolean;
-      progressMs: number;
-      maxPerSender: number;
-      starOnly: boolean;
-    }>;
+    const body = parseBody(queueSettingsBody, req, reply);
+    if (!body) return reply;
 
     const before = await getCommandQueueSettings(req.discordUser.id);
     const settings = await setCommandQueueSettings(req.discordUser.id, body);
@@ -123,10 +120,8 @@ export const queueRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app) => {
     const blocked = requireConsent(req, reply);
     if (blocked) return blocked;
 
-    const body = req.body as { enabled?: boolean };
-    if (typeof body.enabled !== 'boolean') {
-      return reply.code(400).send({ error: 'enabled boolean required' });
-    }
+    const body = parseBody(queueEnabledBody, req, reply);
+    if (!body) return reply;
 
     const settings = await setCommandQueueSettings(req.discordUser.id, {
       enabled: body.enabled,
@@ -149,10 +144,8 @@ export const queueRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app) => {
     const blocked = requireConsent(req, reply);
     if (blocked) return blocked;
 
-    const body = req.body as { progressMs?: number };
-    if (typeof body.progressMs !== 'number' || !Number.isFinite(body.progressMs)) {
-      return reply.code(400).send({ error: 'progressMs number required' });
-    }
+    const body = parseBody(queueProgressBody, req, reply);
+    if (!body) return reply;
 
     const settings = await setCommandQueueSettings(req.discordUser.id, {
       progressMs: body.progressMs,
@@ -174,10 +167,8 @@ export const queueRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app) => {
       return reply.code(409).send({ error: 'Command queue is disabled', code: 'QUEUE_DISABLED' });
     }
 
-    const body = req.body as { paused?: boolean };
-    if (typeof body.paused !== 'boolean') {
-      return reply.code(400).send({ error: 'paused boolean required' });
-    }
+    const body = parseBody(queuePausedBody, req, reply);
+    if (!body) return reply;
 
     const state = await commandQueue.setPaused(req.discordUser.id, body.paused);
     broadcastRealtimeAll({
@@ -197,10 +188,8 @@ export const queueRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app) => {
       return reply.code(409).send({ error: 'Command queue is disabled', code: 'QUEUE_DISABLED' });
     }
 
-    const body = req.body as { halted?: boolean };
-    if (typeof body.halted !== 'boolean') {
-      return reply.code(400).send({ error: 'halted boolean required' });
-    }
+    const body = parseBody(queueHaltedBody, req, reply);
+    if (!body) return reply;
 
     const state = await commandQueue.setHalted(req.discordUser.id, body.halted);
     broadcastRealtimeAll({
@@ -273,10 +262,8 @@ export const queueRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app) => {
     const starredDiscordUserId = String(
       (req.params as { discordUserId: string }).discordUserId,
     );
-    const body = req.body as { starred?: boolean };
-    if (typeof body.starred !== 'boolean') {
-      return reply.code(400).send({ error: 'starred boolean required' });
-    }
+    const body = parseBody(queueStarBody, req, reply);
+    if (!body) return reply;
     if (starredDiscordUserId === req.discordUser.id) {
       return reply.code(400).send({ error: 'Cannot star yourself' });
     }
