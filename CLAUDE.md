@@ -58,6 +58,9 @@ Run `npm run lint && npm run typecheck && npm test && npm run test:client` befor
   3k-line `App.tsx` / `OfficialController.tsx`; don't add new ones.
 - Prettier config exists but the repo isn't reformatted — don't mass-format in feature PRs.
 - `scripts/dev/` holds manual probes that can send real commands; never run them in CI.
+- `scripts/ci/` runs in CI after `npm run build`: `client-bundle-report.mjs` (gzip budget —
+  raise it deliberately, don't just bump it to pass), `smoke-built-app.mjs` (boots the build,
+  checks the client is served + clean SIGTERM), `coverage-summary.mjs` (report only).
 
 ## Not covered by tests (check by hand)
 Discord iframe behaviour (CSP is report-only until `CSP_ENFORCE=1`), real PiShock API
