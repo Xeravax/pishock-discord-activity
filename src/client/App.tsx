@@ -30,19 +30,21 @@ import { PrivacyPolicy } from './components/PrivacyPolicy';
 import { LoginPanel } from './components/LoginPanel';
 import { PiShockLinkingScreen } from './components/PiShockLinkingScreen';
 import { OfficialController } from './components/OfficialController';
-import { AppVersionBadge } from './components/AppVersionBadge';
+import { BrandHeader } from './components/BrandHeader';
 import { markServerShuttingDown } from './hooks/useAppHealth';
 import type { ShockerView } from './components/ShockerCard';
 import { SharesPanel } from './components/SharesPanel';
 import {
   OfficialLogsFab,
   OfficialLogsPanel,
+  describeBypassedGates,
   normalizePublicLogs,
   type OfficialLogEntry,
 } from './components/OfficialLogsPanel';
 import {
   PipIncomingShock,
   type IncomingShockHit,
+  type PipControls,
   type PipQueueNext,
 } from './components/PipIncomingShock';
 import { participantAvatarUrl } from './participants';
@@ -53,6 +55,7 @@ import {
   type ShareLimitRow,
 } from './components/ActivityLimitsSettings';
 import { FriendsParticipantList } from './components/FriendsParticipantList';
+import { activityMenuItems } from './app/menuItems';
 import {
   isPiShockRowExplicitlyUnpaused,
   isPiShockRowPaused,
@@ -66,6 +69,48 @@ import { PsDialog } from './components/PsDialog';
 import { LinkConfirmPanel } from './components/LinkConfirmPanel';
 import { ApiKeyRevealPanel } from './components/ApiKeyRevealPanel';
 import { AuthLoadingScreen } from './components/AuthLoadingScreen';
+import { SafetyFeaturesSettings } from './components/SafetyFeaturesSettings';
+import {
+  ApprovalPrompts,
+  ApproveEachStrip,
+  CheckInMissedBanner,
+  CheckInPrompt,
+  playAppBeep,
+} from './components/SafetyPrompts';
+import { PersonLimitsDialog } from './components/PersonLimitsDialog';
+import { MyDataPanel } from './components/MyDataPanel';
+import { MyHistoryPanel } from './components/MyHistoryPanel';
+import { AdminPanel } from './components/AdminPanel';
+import { JoinDiscordPanel } from './components/JoinDiscordPanel';
+import { GlobalBanScreen } from './components/GlobalBanScreen';
+import { AppNoticeBanner } from './components/AppNoticeBanner';
+import { markGloballyBanned, useGlobalBan } from './hooks/useGlobalBan';
+import {
+  RouletteSpinOverlay,
+  RouletteStartDialog,
+  RouletteVotePrompts,
+  type RouletteSpinView,
+  type RouletteVoteView,
+} from './components/Roulette';
+import {
+  ackCheckIn,
+  adminConsentStep,
+  answerApproval,
+  revokeAdminConsent,
+  clearPersonLimit,
+  loadPersonLimits,
+  loadSafety,
+  raiseBudget,
+  resetBudget as resetSafetyBudget,
+  resumeAfterCheckIn,
+  safetyErrorMessage,
+  savePersonLimit,
+  saveSafety,
+  type ApprovalRequest,
+  type PersonLimit,
+  type SafetySnapshot,
+  type WearerSafety,
+} from './safety';
 import { DefaultMenuPrompt } from './components/DefaultMenuPrompt';
 import {
   loadDefaultStartMenu,
@@ -79,6 +124,11 @@ import {
   type SetupChoices,
 } from './components/SetupWizard';
 import { SetupDiscordShareScreen } from './components/SetupDiscordShareScreen';
+import {
+  LogPrivacySettings,
+  normalizeLogPrivacy,
+  type LogPrivacy,
+} from './components/LogPrivacySettings';
 import type { ActivityShareConfig } from './components/AvailabilitySettings';
 import type { DiscordParticipant, ParticipantStatus } from './participants';
 import { connectRealtime, type RealtimeEvent } from './realtime';
@@ -103,6 +153,14 @@ import {
   pauseRowsFromDevices,
 } from './app/devices';
 
+/** Logs query; the instance id lets the server apply "same server / channel" log scopes. */
+function logsQuery(): string {
+  const instanceId = getActivityInstanceId();
+  return instanceId
+    ? `/logs?limit=200&instanceId=${encodeURIComponent(instanceId)}`
+    : '/logs?limit=200';
+}
+
 const PARTICIPANT_STATUS_TTL_MS = 3 * 60 * 1000;
 
 let participantStatusCache: {
@@ -114,6 +172,8 @@ let participantStatusCache: {
 export function App() {
   const [auth, setAuth] = useState<AuthState | null>(null);
   const [me, setMe] = useState<MeResponse | null>(null);
+  /** Banned from the app by an admin (from /api/me, any 403, or realtime). */
+  const globalBan = useGlobalBan();
   /** Server nick / guild avatar from CURRENT_GUILD_MEMBER_UPDATE (client-only). */
   const [guildNick, setGuildNick] = useState<string | null>(null);
   const [guildAvatarHash, setGuildAvatarHash] = useState<string | null>(null);
@@ -163,9 +223,38 @@ export function App() {
   const [selectedTargetIds, setSelectedTargetIds] = useState<string[]>([]);
   const selectedTargetId = selectedTargetIds[0] ?? null;
   const [selectedHubId, setSelectedHubId] = useState<string | null>(null);
+  /** Controller's Multi toggle (own mode shows every hub while it's on). */
+  const [ownMultiShock, setOwnMultiShock] = useState(false);
+  // Multi off → back to one person (the friend list keeps multi-selections otherwise).
+  useEffect(() => {
+    if (!ownMultiShock) setSelectedTargetIds((prev) => (prev.length > 1 ? prev.slice(0, 1) : prev));
+  }, [ownMultiShock]);
   const [pinging, setPinging] = useState(false);
   const [pairDialog, setPairDialog] = useState<ShockerView | null>(null);
   const [lastIncoming, setLastIncoming] = useState<IncomingShockHit | null>(null);
+  /** Extra features (wearer safety): settings snapshot + live prompts. */
+  const [safety, setSafety] = useState<SafetySnapshot | null>(null);
+  const [approvalQueue, setApprovalQueue] = useState<ApprovalRequest[]>([]);
+  const [approvalBusyId, setApprovalBusyId] = useState<string | null>(null);
+  const [checkInDeadline, setCheckInDeadline] = useState<number | null>(null);
+  const [checkInMissed, setCheckInMissed] = useState(false);
+  const [safetyBusy, setSafetyBusy] = useState(false);
+  const [personLimits, setPersonLimits] = useState<Record<string, PersonLimit>>({});
+  const [personLimitTarget, setPersonLimitTarget] = useState<{ id: string; name: string } | null>(
+    null,
+  );
+  /** Roulette: start dialog target, open votes, and the spin being shown. */
+  const [rouletteTarget, setRouletteTarget] = useState<{ id: string; name: string } | null>(null);
+  const [rouletteBusy, setRouletteBusy] = useState(false);
+  const [rouletteVotes, setRouletteVotes] = useState<RouletteVoteView[]>([]);
+  const [rouletteSpin, setRouletteSpin] = useState<RouletteSpinView | null>(null);
+  /** Unread session recaps (badge on Menu → My history). */
+  const [unreadRecaps, setUnreadRecaps] = useState(0);
+  const markRecapsSeen = useCallback(() => setUnreadRecaps(0), []);
+  /** Admin only: next fire skips soft gates (and limits where the wearer consented). */
+  const [adminBypassArmed, setAdminBypassArmed] = useState(false);
+  /** Groups one multishock fire (several shockers, same tick) into one cooldown / approval. */
+  const operateBatchRef = useRef<{ id: string; at: number } | null>(null);
   /** Per-shocker Discord share caps (what guests are limited to) */
   const [discordShareLimits, setDiscordShareLimits] = useState<Record<number, ShareLimitRow>>(
     {},
@@ -184,8 +273,33 @@ export function App() {
     nextEstimatedStartAt: null,
   });
   const [queueBusy, setQueueBusy] = useState(false);
+  /** Owner's own queue stars / block list — drives PIP favorite + block chips. */
+  const [ownStarredIds, setOwnStarredIds] = useState<Set<string>>(() => new Set());
+  const [ownBannedIds, setOwnBannedIds] = useState<Set<string>>(() => new Set());
   const [queueOpen, setQueueOpen] = useState(false);
-  const [myQueueTicket, setMyQueueTicket] = useState<SenderQueueTicket | null>(null);
+  /** Sender-side queue tickets, one per queued command (multishock can queue several). */
+  const [myQueueTickets, setMyQueueTickets] = useState<Record<string, SenderQueueTicket>>({});
+  const putQueueTicket = useCallback((t: SenderQueueTicket) => {
+    setMyQueueTickets((prev) => ({ ...prev, [t.itemId]: t }));
+  }, []);
+  const liveQueueTickets = Object.values(myQueueTickets).filter(
+    (t) => t.status === 'queued' || t.status === 'started',
+  );
+  /** Banner shows the running one, else the next in line; the rest are counted. */
+  const myQueueTicket =
+    liveQueueTickets.find((t) => t.status === 'started') ??
+    [...liveQueueTickets].sort((a, b) => (a.position ?? 99) - (b.position ?? 99))[0] ??
+    null;
+  /** Multishock: one combined result toast per fire. */
+  const batchAggRef = useRef<{
+    id: string;
+    expected: number;
+    done: number;
+    sent: number;
+    queued: number;
+    failed: string[];
+    skipped: Array<{ name: string; reason: string }>;
+  } | null>(null);
   /** Shocker ids PiShock just rejected with 503, until a device list says otherwise. */
   const [livePausedIds, setLivePausedIds] = useState<Set<number>>(() => new Set());
 
@@ -205,6 +319,7 @@ export function App() {
   const loadSettingsRef = useRef<(() => Promise<unknown>) | null>(null);
   const refreshQueue = useCallback(async (accessToken: string) => {
     const data = await apiFetch<QueueState & { stars?: string[] }>('/queue', accessToken);
+    if (Array.isArray(data.stars)) setOwnStarredIds(new Set(data.stars.map(String)));
     setQueueState({
       enabled: Boolean(data.enabled),
       progressMs: Number(data.progressMs) || 0,
@@ -243,6 +358,7 @@ export function App() {
   const refreshMe = useCallback(
     async (accessToken: string) => {
       const data = await apiFetch<MeResponse>('/me', accessToken);
+      if (data.globalBan) markGloballyBanned(data.globalBan);
       const merged: MeResponse = {
         ...data,
         user: applySdkUserOverlay(data.user),
@@ -370,7 +486,7 @@ export function App() {
     const data = await apiFetch<{
       public?: Array<Record<string, unknown>>;
       activity?: Array<Record<string, unknown>>;
-    }>('/logs?limit=200', accessToken);
+    }>(logsQuery(), accessToken);
     const feed = normalizePublicLogs(
       (data.public ?? []) as Parameters<typeof normalizePublicLogs>[0],
       participantAvatarUrl,
@@ -738,6 +854,14 @@ export function App() {
 
     const handleEvent = (event: RealtimeEvent) => {
       if (event.type === 'ping' || event.type === 'hello_ok') return;
+      if (event.type === 'global_ban') {
+        markGloballyBanned(event.ban);
+        return;
+      }
+      if (event.type === 'app_notice') {
+        setMe((prev) => (prev ? { ...prev, appNotice: event.notice } : prev));
+        return;
+      }
       if (event.type === 'server_shutting_down') {
         markServerShuttingDown();
         return;
@@ -798,12 +922,18 @@ export function App() {
           setMe((prev) =>
             prev ? { ...prev, commandQueueEnabled: Boolean(event.enabled) } : prev,
           );
+          // Queue "stars only" and Extra features "Favorites only" are one setting.
+          setSafety((prev) =>
+            prev && prev.settings.favoritesOnly !== Boolean(event.starOnly)
+              ? { ...prev, settings: { ...prev.settings, favoritesOnly: Boolean(event.starOnly) } }
+              : prev,
+          );
         }
         return;
       }
       if (event.type === 'queue_ticket') {
         if (selfIdRef.current && event.executorDiscordUserId === selfIdRef.current) {
-          setMyQueueTicket({
+          putQueueTicket({
             ownerDiscordUserId: event.ownerDiscordUserId,
             itemId: event.itemId,
             status: event.status,
@@ -819,9 +949,120 @@ export function App() {
             event.status === 'failed'
           ) {
             window.setTimeout(() => {
-              setMyQueueTicket((prev) => (prev?.itemId === event.itemId ? null : prev));
+              setMyQueueTickets((prev) => {
+                if (!prev[event.itemId]) return prev;
+                const next = { ...prev };
+                delete next[event.itemId];
+                return next;
+              });
             }, 2500);
           }
+        }
+        return;
+      }
+      if (event.type === 'approval_request') {
+        if (selfIdRef.current && event.ownerDiscordUserId === selfIdRef.current) {
+          const { type: _type, ...req } = event;
+          setApprovalQueue((prev) => [...prev.filter((r) => r.approvalId !== req.approvalId), req]);
+        }
+        return;
+      }
+      if (event.type === 'approval_resolved') {
+        setApprovalQueue((prev) => prev.filter((r) => r.approvalId !== event.approvalId));
+        return;
+      }
+      if (event.type === 'roulette_vote_open') {
+        const nameOf = (id: string) =>
+          participantsRef.current.find((p) => p.id === id)?.displayName ?? 'Someone';
+        const isTarget = event.targetDiscordUserId === selfIdRef.current;
+        const isStarter = event.starterDiscordUserId === selfIdRef.current;
+        if (isStarter) return; // the starter's vote already counts as yes
+        setRouletteVotes((prev) => [
+          ...prev.filter((v) => v.voteId !== event.voteId),
+          {
+            voteId: event.voteId,
+            targetDiscordUserId: event.targetDiscordUserId,
+            targetName: nameOf(event.targetDiscordUserId),
+            starterName: nameOf(event.starterDiscordUserId),
+            actions: event.actions,
+            endsAt: Date.now() + Math.max(0, event.endsAt - event.at),
+            isTarget,
+          },
+        ]);
+        if (isTarget) playAppBeep(true);
+        return;
+      }
+      if (event.type === 'roulette_vote_closed') {
+        setRouletteVotes((prev) => prev.filter((v) => v.voteId !== event.voteId));
+        if (event.outcome !== 'passed' && event.targetDiscordUserId !== selfIdRef.current) {
+          setActionNotice(
+            event.outcome === 'vetoed'
+              ? 'The wheel was vetoed.'
+              : event.outcome === 'canceled'
+                ? 'The wheel vote was canceled.'
+                : `The wheel vote didn't pass (${event.yes} yes, ${event.no} no).`,
+          );
+        }
+        return;
+      }
+      if (event.type === 'roulette_spin') {
+        const targetName =
+          participantsRef.current.find((p) => p.id === event.targetDiscordUserId)?.displayName ?? 'them';
+        // Map the server start time onto our clock using the event's own timestamp.
+        setRouletteSpin({
+          spinId: event.spinId,
+          targetName,
+          segments: event.segments,
+          resultIndex: event.resultIndex,
+          startsAtLocal: Date.now() + Math.max(0, event.startAt - event.at),
+          spinMs: event.spinMs,
+        });
+        return;
+      }
+      if (event.type === 'roulette_result') {
+        setRouletteSpin((prev) =>
+          prev && prev.spinId === event.spinId
+            ? { ...prev, result: { outcome: event.outcome, message: event.message } }
+            : prev,
+        );
+        return;
+      }
+      if (event.type === 'admin_bypass') {
+        if (selfIdRef.current && event.targetDiscordUserId === selfIdRef.current) {
+          const gates = describeBypassedGates(event.gates);
+          setActionNotice(null);
+          setActionError(
+            `An admin (${event.adminName ?? 'admin'}) bypassed your ${gates} — ${event.intensity}% for ${(
+              event.durationMs / 1000
+            ).toFixed(1)}s. This is in your log.`,
+          );
+          void refreshLogs(token).catch(() => undefined);
+        }
+        return;
+      }
+      if (event.type === 'checkin_due') {
+        if (selfIdRef.current && event.ownerDiscordUserId === selfIdRef.current) {
+          setCheckInDeadline(event.deadline);
+        }
+        return;
+      }
+      if (event.type === 'checkin_missed') {
+        if (selfIdRef.current && event.ownerDiscordUserId === selfIdRef.current) {
+          setCheckInDeadline(null);
+          setCheckInMissed(true);
+          void refreshMe(token).catch(() => undefined);
+        }
+        return;
+      }
+      if (event.type === 'budget_exhausted') {
+        if (selfIdRef.current && event.ownerDiscordUserId === selfIdRef.current) {
+          setActionError(null);
+          setActionNotice(
+            `Your shock budget is used up (${event.usedShocks} shocks). Reset or raise it in Extra features.`,
+          );
+          void loadSafety(token)
+            .then(setSafety)
+            .catch(() => undefined);
         }
         return;
       }
@@ -1001,12 +1242,13 @@ export function App() {
   );
 
   const ownShockers = useMemo(() => {
-    if (!selectedHubId) return ownedAndShared;
+    // Multishock picks across every hub; the hub picker only narrows single control.
+    if (!selectedHubId || ownMultiShock) return ownedAndShared;
     const filtered = ownedAndShared.filter(
       (s) => !s.clientId || normalizeClientKey(String(s.clientId)) === selectedHubId,
     );
     return filtered.length ? filtered : ownedAndShared;
-  }, [ownedAndShared, selectedHubId]);
+  }, [ownedAndShared, selectedHubId, ownMultiShock]);
 
   const shockers = friendsMode ? friendShockers : ownShockers;
 
@@ -1108,6 +1350,7 @@ export function App() {
     if (!item) return null;
     const fromRoster = participants.find((p) => p.id === item.executorDiscordUserId);
     return {
+      executorDiscordUserId: item.executorDiscordUserId,
       displayName:
         fromRoster?.displayName ||
         item.executorGlobalName ||
@@ -1134,6 +1377,23 @@ export function App() {
     queueState.nextStartsInMs,
     participants,
   ]);
+
+  // PIP quick actions need the block list and owned shocker ids (for STOP ALL).
+  useEffect(() => {
+    if (!pip || !token || !me?.consent || !me.pishockLinked) return;
+    void apiFetch<{ bannedDiscordUserIds: string[] }>('/activity/bans', token)
+      .then((data) => setOwnBannedIds(new Set((data.bannedDiscordUserIds ?? []).map(String))))
+      .catch(() => undefined);
+    if (!devices) void refreshDevices(token).catch(() => undefined);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pip, token, me?.consent, me?.pishockLinked]);
+
+  // PIP has no dismissable toast — let errors fade so the window does not stay red.
+  useEffect(() => {
+    if (!pip || !actionError) return;
+    const id = window.setTimeout(() => setActionError(null), 6_000);
+    return () => window.clearTimeout(id);
+  }, [pip, actionError]);
 
   // While PIP is open, refresh logs so hits still show if WS was missed
   useEffect(() => {
@@ -1551,18 +1811,96 @@ export function App() {
     openLinkFlow();
   };
 
+  const finishBatch = (agg: NonNullable<typeof batchAggRef.current>) => {
+    if (batchAggRef.current === agg) batchAggRef.current = null;
+    const parts: string[] = [];
+    if (agg.sent) parts.push(`Sent to ${agg.sent}`);
+    if (agg.queued) parts.push(`queued ${agg.queued}`);
+    if (agg.skipped.length) {
+      const reasons = [...new Set(agg.skipped.map((x) => x.reason))].join(', ');
+      parts.push(`skipped ${agg.skipped.length} (${reasons})`);
+    }
+    if (agg.failed.length) parts.push(`failed ${agg.failed.length}: ${agg.failed.join('; ')}`);
+    const text = parts.join(' · ') || 'Nothing was sent';
+    if (agg.failed.length || (!agg.sent && !agg.queued)) {
+      setActionNotice(null);
+      setActionError(text);
+    } else {
+      setActionError(null);
+      setActionNotice(text);
+    }
+  };
+
+  /** Controller announces a multishock fire before its per-target commands go out. */
+  const planBatch = (info: { count: number; skipped: Array<{ name: string; reason: string }> }) => {
+    const now = Date.now();
+    const id = `b${now.toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+    operateBatchRef.current = { id, at: now };
+    const agg = { id, expected: info.count, done: 0, sent: 0, queued: 0, failed: [], skipped: [...info.skipped] };
+    batchAggRef.current = agg;
+    if (info.count === 0) finishBatch(agg);
+  };
+
+  /** A target the client refuses locally (favorites only / queue closed) counts as skipped. */
+  const skipInBatch = (name: string, reason: string) => {
+    const agg = batchAggRef.current;
+    if (!agg || !operateBatchRef.current || operateBatchRef.current.id !== agg.id) return false;
+    agg.skipped.push({ name, reason });
+    agg.expected -= 1;
+    if (agg.done >= agg.expected) finishBatch(agg);
+    return true;
+  };
+
   const operate = async (input: Record<string, unknown>) => {
     if (!token) return;
-    operateInflightRef.current += 1;
-    setBusy(true);
+    const targetId =
+      typeof input.targetDiscordUserId === 'string'
+        ? input.targetDiscordUserId
+        : selectedTargetId && friendsMode
+          ? selectedTargetId
+          : null;
+    // Commands fired in the same tick (multishock) share one batch id.
+    const nowMs = Date.now();
+    if (!operateBatchRef.current || nowMs - operateBatchRef.current.at > 250) {
+      operateBatchRef.current = {
+        id: `b${nowMs.toString(36)}${Math.random().toString(36).slice(2, 8)}`,
+        at: nowMs,
+      };
+    }
+    const batchId = operateBatchRef.current.id;
+    const agg = batchAggRef.current?.id === batchId ? batchAggRef.current : null;
+    const targetLabel = () => {
+      const person = targetId ? participants.find((p) => p.id === targetId)?.displayName : null;
+      const shocker = shockers.find((s) => s.id === Number(input.shockerId))?.name;
+      return [person, shocker].filter(Boolean).join(': ') || 'a shocker';
+    };
+    /** One result per target; the batch toast is shown when every target has answered. */
+    const settle = (outcome: 'sent' | 'queued' | 'failed', message?: string) => {
+      if (!agg) return;
+      agg.done += 1;
+      if (outcome === 'sent') agg.sent += 1;
+      else if (outcome === 'queued') agg.queued += 1;
+      else agg.failed.push(`${targetLabel()} — ${message ?? 'failed'}`);
+      if (agg.done >= agg.expected) finishBatch(agg);
+    };
+    const fail = (message: string) => {
+      if (agg) settle('failed', message);
+      else setActionError(message);
+    };
+    // Admin bypass is one fire at a time: disarm right after this (multishock) batch.
+    if (adminBypassArmed) window.setTimeout(() => setAdminBypassArmed(false), 300);
+    // Approve-each wearers hold the request until they answer — don't lock the controls meanwhile.
+    const awaitsApproval = Boolean(targetId && participantStatus[targetId]?.safety?.approveEachCommand);
+    if (!awaitsApproval) {
+      operateInflightRef.current += 1;
+      setBusy(true);
+    }
     setActionError(null);
+    if (awaitsApproval && targetId) {
+      const who = participants.find((p) => p.id === targetId)?.displayName ?? 'They';
+      setActionNotice(`Waiting for ${who} to accept…`);
+    }
     try {
-      const targetId =
-        typeof input.targetDiscordUserId === 'string'
-          ? input.targetDiscordUserId
-          : selectedTargetId && friendsMode
-            ? selectedTargetId
-            : null;
       const instanceId = getActivityInstanceId();
       const locationHint = await resolveActivityLocationHint(token).catch(() => null);
       if (targetId) {
@@ -1574,12 +1912,24 @@ export function App() {
           paused?: boolean;
           estimatedWaitMs?: number;
           estimatedStartAt?: number;
+          clampedReason?: string | null;
         }>(`/participants/${targetId}/operate`, token, {
           method: 'POST',
-          body: JSON.stringify({ ...input, instanceId, locationHint }),
+          body: JSON.stringify({
+            ...input,
+            instanceId,
+            locationHint,
+            batchId,
+            ...(adminBypassArmed && me?.isAdmin ? { adminBypass: true } : {}),
+          }),
         });
+        if (awaitsApproval) setActionNotice(null);
+        if (result.clampedReason === 'escalation') {
+          setActionNotice('Intensity was lowered — they limit how fast shocks can escalate.');
+        }
+        settle(result.queued ? 'queued' : 'sent');
         if (result.queued && result.itemId) {
-          setMyQueueTicket({
+          putQueueTicket({
             ownerDiscordUserId: targetId,
             itemId: result.itemId,
             status: 'queued',
@@ -1600,6 +1950,7 @@ export function App() {
           method: 'POST',
           body: JSON.stringify({ ...input, instanceId, locationHint }),
         });
+        settle('sent');
       }
       await refreshLogs(token).catch(() => undefined);
       const sentId = Number(input.shockerId);
@@ -1616,19 +1967,39 @@ export function App() {
         await handleReloginNeeded();
         requirePiShockLink('PiShock API key expired — link again to control your own devices.');
       } else if (err instanceof ApiError && err.code === 'EMERGENCY_STOP') {
-        setActionError('Emergency stop is engaged — owner must release STOP');
+        fail('Emergency stop is engaged — owner must release STOP');
         if (token) void refreshParticipantStatus(token, participants, true).catch(() => undefined);
-      } else if (err instanceof ApiError && err.code === 'STAR_ONLY') {
-        setActionError('They only accept commands from starred people');
+      } else if (
+        err instanceof ApiError &&
+        (err.code === 'STAR_ONLY' || err.code === 'FAVORITES_ONLY')
+      ) {
+        setActionNotice(null);
+        fail(safetyErrorMessage(err.code, err.message));
         if (token) void refreshParticipantStatus(token, participants, true).catch(() => undefined);
+      } else if (
+        err instanceof ApiError &&
+        [
+          'COOLDOWN',
+          'BUDGET_EXHAUSTED',
+          'APPROVAL_DENIED',
+          'APPROVAL_TIMEOUT',
+          'APPROVAL_CANCELED',
+          'PERSON_LIMIT',
+        ].includes(err.code ?? '')
+      ) {
+        setActionNotice(null);
+        fail(safetyErrorMessage(err.code, err.message));
+        if (err.code === 'BUDGET_EXHAUSTED' && token) {
+          void refreshParticipantStatus(token, participants, true).catch(() => undefined);
+        }
       } else if (err instanceof ApiError && err.code === 'QUEUE_HALTED') {
-        setActionError('Their queue is closed to new commands');
+        fail('Their queue is closed to new commands');
         if (token) void refreshParticipantStatus(token, participants, true).catch(() => undefined);
       } else if (
         err instanceof ApiError &&
         (err.code === 'QUEUE_SENDER_FULL' || err.code === 'QUEUE_FULL')
       ) {
-        setActionError(err.message);
+        fail(err.message);
       } else if (err instanceof ApiError && err.code === 'PISHOCK_PAUSED') {
         const pausedId = Number(input.shockerId);
         if (Number.isFinite(pausedId) && pausedId > 0) {
@@ -1638,7 +2009,7 @@ export function App() {
             return next;
           });
         }
-        setActionError(
+        fail(
           'This shocker is paused on PiShock. Controls stay off until it is unpaused there.',
         );
         void refreshDevices(token).catch(() => undefined);
@@ -1646,11 +2017,13 @@ export function App() {
           void refreshParticipantStatus(token, participantsRef.current, true).catch(() => undefined);
         }
       } else {
-        setActionError(err instanceof Error ? err.message : String(err));
+        fail(err instanceof Error ? err.message : String(err));
       }
     } finally {
-      operateInflightRef.current = Math.max(0, operateInflightRef.current - 1);
-      if (operateInflightRef.current === 0) setBusy(false);
+      if (!awaitsApproval) {
+        operateInflightRef.current = Math.max(0, operateInflightRef.current - 1);
+        if (operateInflightRef.current === 0) setBusy(false);
+      }
     }
   };
 
@@ -1806,6 +2179,12 @@ export function App() {
         method: 'PUT',
         body: JSON.stringify({ starred }),
       });
+      setOwnStarredIds((prev) => {
+        const next = new Set(prev);
+        if (starred) next.add(discordUserId);
+        else next.delete(discordUserId);
+        return next;
+      });
       setParticipantStatus((prev) => {
         const row = prev[discordUserId];
         if (!row) return prev;
@@ -1824,6 +2203,36 @@ export function App() {
       if (queueState.enabled) {
         void refreshQueue(token).catch(() => undefined);
       }
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  /** Block / unblock one sender (PIP quick action). Server also drops their queued commands. */
+  const setSenderBlocked = async (discordUserId: string, blocked: boolean) => {
+    if (!token) return;
+    setActionError(null);
+    try {
+      const result = await apiFetch<{ bannedDiscordUserIds: string[] }>(
+        `/activity/bans/${encodeURIComponent(discordUserId)}`,
+        token,
+        { method: 'PUT', body: JSON.stringify({ banned: blocked }) },
+      );
+      setOwnBannedIds(new Set((result.bannedDiscordUserIds ?? []).map(String)));
+      if (blocked) {
+        setOwnStarredIds((prev) => {
+          if (!prev.has(discordUserId)) return prev;
+          const next = new Set(prev);
+          next.delete(discordUserId);
+          return next;
+        });
+        if (ownStarredIds.has(discordUserId)) {
+          // A blocked sender should not keep queue priority if they are later unblocked.
+          void toggleQueueStar(discordUserId, false);
+        }
+      }
+      setActionNotice(blocked ? 'Blocked — their queued commands were removed.' : 'Unblocked.');
+      if (queueState.enabled) void refreshQueue(token).catch(() => undefined);
     } catch (err) {
       setActionError(err instanceof Error ? err.message : String(err));
     }
@@ -1970,6 +2379,295 @@ export function App() {
     setDiscordShareLimits(next);
   }, []);
 
+  const [logPrivacy, setLogPrivacyState] = useState<LogPrivacy | null>(null);
+
+  useEffect(() => {
+    if (!token || !me?.consent) return;
+    let cancelled = false;
+    apiFetch<{ privacy?: Partial<LogPrivacy> }>('/logs/privacy', token)
+      .then((res) => {
+        if (!cancelled) setLogPrivacyState(normalizeLogPrivacy(res.privacy));
+      })
+      .catch(() => {
+        /* defaults are used until the user opens the settings */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [token, me?.consent]);
+
+  // Session recaps: unread count for the menu badge (refreshed when the menu opens).
+  useEffect(() => {
+    if (!token || !me?.consent || (overlay !== null && overlay !== 'menu')) return;
+    let cancelled = false;
+    apiFetch<{ unread: number }>('/me/sessions', token)
+      .then((res) => {
+        if (!cancelled) setUnreadRecaps(res.unread ?? 0);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [token, me?.consent, overlay]);
+
+  // --- Extra features (wearer safety) -------------------------------------
+  useEffect(() => {
+    if (!token || !me?.consent) return;
+    let cancelled = false;
+    loadSafety(token)
+      .then((snap) => {
+        if (cancelled) return;
+        setSafety(snap);
+        setApprovalQueue(snap.pendingApprovals);
+        setCheckInDeadline(snap.checkInDeadline);
+      })
+      .catch(() => {
+        /* feature defaults (all off) until the settings load */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [token, me?.consent]);
+
+  useEffect(() => {
+    if (!token || !safety?.settings.perPersonLimitsEnabled) {
+      setPersonLimits({});
+      return;
+    }
+    let cancelled = false;
+    loadPersonLimits(token)
+      .then((rows) => {
+        if (!cancelled) {
+          setPersonLimits(Object.fromEntries(rows.map((r) => [r.controllerDiscordUserId, r])));
+        }
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [token, safety?.settings.perPersonLimitsEnabled]);
+
+  const loadSafetyCb = useCallback(async (): Promise<SafetySnapshot> => {
+    if (!token) throw new Error('Not signed in');
+    const snap = await loadSafety(token);
+    setSafety(snap);
+    return snap;
+  }, [token]);
+
+  const saveSafetyCb = useCallback(
+    async (next: Partial<WearerSafety>): Promise<SafetySnapshot> => {
+      if (!token) throw new Error('Not signed in');
+      const snap = await saveSafety(token, next);
+      setSafety(snap);
+      setApprovalQueue(snap.pendingApprovals);
+      setCheckInDeadline(snap.checkInDeadline);
+      return snap;
+    },
+    [token],
+  );
+
+  const resetBudgetCb = useCallback(async (): Promise<SafetySnapshot> => {
+    if (!token) throw new Error('Not signed in');
+    await resetSafetyBudget(token);
+    return loadSafetyCb();
+  }, [token, loadSafetyCb]);
+
+  const raiseBudgetCb = useCallback(
+    async (add: { shocks?: number; shockMs?: number }): Promise<SafetySnapshot> => {
+      if (!token) throw new Error('Not signed in');
+      const snap = await raiseBudget(token, add);
+      setSafety(snap);
+      return snap;
+    },
+    [token],
+  );
+
+  const answerApprovalCb = useCallback(
+    async (approvalId: string, accept: boolean) => {
+      if (!token) return;
+      setApprovalBusyId(approvalId);
+      try {
+        await answerApproval(token, approvalId, accept);
+      } catch {
+        /* already expired / answered elsewhere */
+      } finally {
+        setApprovalQueue((prev) => prev.filter((r) => r.approvalId !== approvalId));
+        setApprovalBusyId(null);
+      }
+    },
+    [token],
+  );
+
+  const disableApproveEach = useCallback(async () => {
+    setSafetyBusy(true);
+    try {
+      await saveSafetyCb({ approveEachCommand: false });
+      setApprovalQueue([]);
+      setActionNotice('Approve each command is off.');
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSafetyBusy(false);
+    }
+  }, [saveSafetyCb]);
+
+  const ackCheckInCb = useCallback(async () => {
+    if (!token) return;
+    setSafetyBusy(true);
+    try {
+      await ackCheckIn(token);
+      setCheckInDeadline(null);
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSafetyBusy(false);
+    }
+  }, [token]);
+
+  const resumeAfterCheckInCb = useCallback(async () => {
+    if (!token) return;
+    setSafetyBusy(true);
+    try {
+      const n = await resumeAfterCheckIn(token);
+      setCheckInMissed(false);
+      setActionNotice(n ? `Resumed ${n} shocker${n === 1 ? '' : 's'}.` : 'Nothing to resume.');
+      void refreshMe(token).catch(() => undefined);
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSafetyBusy(false);
+    }
+  }, [token, refreshMe]);
+
+  const savePersonLimitCb = useCallback(
+    async (discordUserId: string, patch: Omit<PersonLimit, 'controllerDiscordUserId'>) => {
+      if (!token) throw new Error('Not signed in');
+      const row = await savePersonLimit(token, discordUserId, patch);
+      setPersonLimits((prev) => ({ ...prev, [discordUserId]: row }));
+    },
+    [token],
+  );
+
+  const clearPersonLimitCb = useCallback(
+    async (discordUserId: string) => {
+      if (!token) throw new Error('Not signed in');
+      await clearPersonLimit(token, discordUserId);
+      setPersonLimits((prev) => {
+        const next = { ...prev };
+        delete next[discordUserId];
+        return next;
+      });
+    },
+    [token],
+  );
+
+  const startRoulette = async (opts: { actions: string[]; mode: 'solo' | 'vote' }) => {
+    if (!token || !rouletteTarget) return;
+    setRouletteBusy(true);
+    try {
+      const shockerId = participantStatus[rouletteTarget.id]?.shockers?.[0]?.shockerId;
+      const locationHint = await resolveActivityLocationHint(token).catch(() => null);
+      const res = await apiFetch<{ mode: 'solo' | 'vote' }>('/roulette', token, {
+        method: 'POST',
+        body: JSON.stringify({
+          targetDiscordUserId: rouletteTarget.id,
+          shockerId,
+          actions: opts.actions,
+          mode: opts.mode,
+          instanceId: getActivityInstanceId(),
+          locationHint,
+        }),
+      });
+      if (res.mode === 'vote') setActionNotice('Vote started — everyone here has 20 seconds.');
+      setRouletteTarget(null);
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setRouletteBusy(false);
+    }
+  };
+
+  const voteRoulette = (voteId: string, yes: boolean) => {
+    if (!token) return;
+    setRouletteVotes((prev) => prev.map((v) => (v.voteId === voteId ? { ...v, myVote: yes } : v)));
+    void apiFetch(`/roulette/${encodeURIComponent(voteId)}/vote`, token, {
+      method: 'POST',
+      body: JSON.stringify({ yes }),
+    }).catch((err) => setActionError(err instanceof Error ? err.message : String(err)));
+  };
+
+  const vetoRoulette = (voteId: string) => {
+    if (!token) return;
+    setRouletteVotes((prev) => prev.filter((v) => v.voteId !== voteId));
+    void apiFetch(`/roulette/${encodeURIComponent(voteId)}/veto`, token, {
+      method: 'POST',
+      body: '{}',
+    }).catch((err) => setActionError(err instanceof Error ? err.message : String(err)));
+  };
+
+  const safetyOverlays = (
+    <>
+      <RouletteVotePrompts votes={rouletteVotes} onVote={voteRoulette} onVeto={vetoRoulette} />
+      {rouletteSpin ? (
+        <RouletteSpinOverlay spin={rouletteSpin} onClose={() => setRouletteSpin(null)} />
+      ) : null}
+      <RouletteStartDialog
+        open={Boolean(rouletteTarget)}
+        targetName={rouletteTarget?.name ?? ''}
+        busy={rouletteBusy}
+        onClose={() => setRouletteTarget(null)}
+        onStart={(opts) => void startRoulette(opts)}
+      />
+      <ApprovalPrompts
+        requests={approvalQueue}
+        busyId={approvalBusyId}
+        onAnswer={(id, accept) => void answerApprovalCb(id, accept)}
+      />
+      {checkInDeadline ? (
+        <CheckInPrompt deadline={checkInDeadline} busy={safetyBusy} onOk={() => void ackCheckInCb()} />
+      ) : null}
+    </>
+  );
+
+  const safetyStrips =
+    safety?.settings.approveEachCommand || checkInMissed ? (
+      <div className="safety-strips">
+        {checkInMissed ? (
+          <CheckInMissedBanner
+            busy={safetyBusy}
+            onResume={() => void resumeAfterCheckInCb()}
+            onDismiss={() => setCheckInMissed(false)}
+          />
+        ) : null}
+        {safety?.settings.approveEachCommand ? (
+          <ApproveEachStrip busy={safetyBusy} onDisable={() => void disableApproveEach()} />
+        ) : null}
+      </div>
+    ) : null;
+
+  const loadLogPrivacy = useCallback(async (): Promise<LogPrivacy> => {
+    if (!token) throw new Error('Not signed in');
+    const res = await apiFetch<{ privacy?: Partial<LogPrivacy> }>('/logs/privacy', token);
+    const next = normalizeLogPrivacy(res.privacy);
+    setLogPrivacyState(next);
+    return next;
+  }, [token]);
+
+  const saveLogPrivacy = useCallback(
+    async (next: LogPrivacy): Promise<LogPrivacy> => {
+      if (!token) throw new Error('Not signed in');
+      const res = await apiFetch<{ privacy?: Partial<LogPrivacy> }>('/logs/privacy', token, {
+        method: 'PUT',
+        body: JSON.stringify(next),
+      });
+      const saved = normalizeLogPrivacy(res.privacy);
+      setLogPrivacyState(saved);
+      void refreshLogs(token).catch(() => {});
+      return saved;
+    },
+    [token, refreshLogs],
+  );
+
   const loadSettings = useCallback(async () => {
     if (!token) throw new Error('Not authenticated');
     const data = await apiFetch<{ personal: PersonalLimits; shares: ShareLimitRow[] }>(
@@ -2006,6 +2704,8 @@ export function App() {
       shares: ActivityShareConfig[];
       personal: PersonalLimits;
       queue?: QueuePanelSettings;
+      logPrivacy?: LogPrivacy;
+      safety?: WearerSafety;
     }) => {
       setSetupShareBusy(true);
       setLinkError(null);
@@ -2036,8 +2736,14 @@ export function App() {
           canBeep: s.canBeep,
           canHold: s.canHold,
           requiredWarningLevel: s.requiredWarningLevel ?? 'none',
+          maxIntensityStep: s.maxIntensityStep ?? null,
         }));
         await saveSettings({ personal: result.personal, shares });
+        if (result.logPrivacy) await saveLogPrivacy(result.logPrivacy);
+        if (result.queue && result.safety) {
+          // One setting: "Favorites only" is also the queue's stars-only flag.
+          result.queue = { ...result.queue, starOnly: result.safety.favoritesOnly };
+        }
         if (result.queue && token) {
           const queueResult = await apiFetch<QueueState & { ok: boolean }>('/queue/settings', token, {
             method: 'POST',
@@ -2048,13 +2754,14 @@ export function App() {
             prev ? { ...prev, commandQueueEnabled: Boolean(queueResult.enabled) } : prev,
           );
         }
+        if (result.safety) await saveSafetyCb(result.safety);
         finishSetupShare();
       } catch (err) {
         setLinkError(err instanceof Error ? err.message : String(err));
         setSetupShareBusy(false);
       }
     },
-    [saveSettings, finishSetupShare, token],
+    [saveSettings, finishSetupShare, token, saveSafetyCb],
   );
 
   useEffect(() => {
@@ -2143,6 +2850,16 @@ export function App() {
     return <PrivacyPolicy onBack={() => setLegalView(null)} />;
   }
 
+  if (globalBan) {
+    return (
+      <GlobalBanScreen
+        ban={globalBan}
+        token={token}
+        displayName={me ? discordDisplayName(me.user, guildNick) : auth?.user.global_name || auth?.user.username || 'Hi'}
+      />
+    );
+  }
+
   if (!bootReady || !auth || !me) {
     return (
       <AuthLoadingScreen
@@ -2223,6 +2940,8 @@ export function App() {
         initialPersonal={personalLimits}
         initialSelectedIds={initialSelectedIds}
         initialShares={savedShareRows}
+        initialLogPrivacy={logPrivacy ?? undefined}
+        initialSafety={safety?.settings}
         initialQueue={{
           enabled: queueState.enabled,
           progressMs: queueState.progressMs,
@@ -2294,7 +3013,45 @@ export function App() {
 
     // PIP: last hit + next queue item / ETA — no header, menu, safety bar, or controls
     if (pip) {
-      return <PipIncomingShock hit={pipHit} queueNext={pipQueueNext} />;
+      const ownedStopTargets = ownedAndShared.filter((s) => s.owned);
+      const pipMessageText = actionError || actionNotice;
+      const pipControls: PipControls | null = me.pishockLinked
+        ? {
+            selfDiscordUserId: me.user?.id ?? null,
+            stopTargetCount: ownedStopTargets.length,
+            stoppedCount: ownedStopTargets.filter((s) => emergencyStopIds.has(s.id)).length,
+            onEmergencyStop: (engaged) => {
+              // Engage covers every owned shocker; release only the ones actually latched.
+              const ids = (
+                engaged
+                  ? ownedStopTargets
+                  : ownedStopTargets.filter((s) => emergencyStopIds.has(s.id))
+              ).map((s) => s.id);
+              if (!ids.length) return;
+              void setEmergencyStop({ shockerId: ids[0]!, shockerIds: ids, engaged });
+            },
+            queueEnabled: queueState.enabled,
+            queuePaused: queueState.paused,
+            queueHasActive: Boolean(queueState.active),
+            onToggleQueuePaused: (paused) => void setQueuePaused(paused),
+            onSkipActive: () => void skipQueue(),
+            isStarred: (id) => ownStarredIds.has(id),
+            isBlocked: (id) => ownBannedIds.has(id),
+            onToggleStar: (id, starred) => void toggleQueueStar(id, starred),
+            onToggleBlock: (id, blocked) => void setSenderBlocked(id, blocked),
+            busy: busy || queueBusy,
+            message: pipMessageText
+              ? { tone: actionError ? 'error' : 'ok', text: pipMessageText }
+              : null,
+          }
+        : null;
+      return (
+        <>
+          {safetyOverlays}
+          {safetyStrips}
+          <PipIncomingShock hit={pipHit} queueNext={pipQueueNext} controls={pipControls} />
+        </>
+      );
     }
 
     const toastText = actionError || actionNotice;
@@ -2302,6 +3059,8 @@ export function App() {
 
     return (
       <div className="official-activity-root">
+        {safetyOverlays}
+        {safetyStrips}
         {toastText && toastTone ? (
           <div
             className={`q-banner text-white official-error-toast${
@@ -2332,6 +3091,9 @@ export function App() {
         ) : null}
 
         <OfficialController
+          personName={(id) => participants.find((p) => p.id === id)?.displayName ?? 'Someone'}
+          onBatchPlanned={planBatch}
+          onMultiShockChange={setOwnMultiShock}
           hub={primaryHub}
           hubs={hubOptions}
           shockers={shockers}
@@ -2425,13 +3187,15 @@ export function App() {
             selectedTargetIds.every((id) => Boolean(participantStatus[id]?.queue?.starOnly))
           }
           forceControlsLocked={friendControlsLocked}
-          safetyBanner={!pip ? <SafetyNoticeBar /> : null}
-          friendsPanel={({
-            multiShock,
-            onToggleMultiShock,
-            individualIntensity,
-            onToggleIndividualIntensity,
-          }) => (
+          safetyBanner={
+            !pip ? (
+              <>
+                {me.appNotice ? <AppNoticeBanner notice={me.appNotice} /> : null}
+                <SafetyNoticeBar />
+              </>
+            ) : null
+          }
+          friendsPanel={({ multiShock, individualIntensity }) => (
             <FriendsParticipantList
               participants={participants}
               statuses={participantStatus}
@@ -2440,9 +3204,7 @@ export function App() {
               selectedTargetId={selectedTargetId}
               selectedTargetIds={selectedTargetIds}
               multiSelect={multiShock}
-              onToggleMultiSelect={onToggleMultiShock}
               individualIntensity={individualIntensity}
-              onToggleIndividualIntensity={onToggleIndividualIntensity}
               onSelect={(id) => {
                 if (!id) {
                   friendsSelectionClearedRef.current = true;
@@ -2471,6 +3233,18 @@ export function App() {
                   ? (id, starred) => void toggleQueueStar(id, starred)
                   : undefined
               }
+              onOpenPersonLimits={
+                me.pishockLinked && safety?.settings.perPersonLimitsEnabled
+                  ? (id, name) => setPersonLimitTarget({ id, name })
+                  : undefined
+              }
+              personLimitedIds={new Set(Object.keys(personLimits))}
+              onSpinRoulette={(id, name) => setRouletteTarget({ id, name })}
+              adminBypass={
+                me.isAdmin
+                  ? { armed: adminBypassArmed, onToggle: () => setAdminBypassArmed((v) => !v) }
+                  : undefined
+              }
             />
           )}
           onOperate={(input) => {
@@ -2484,7 +3258,13 @@ export function App() {
               const queue = participantStatus[targetId]?.queue;
               const starBlocked = Boolean(queue?.starOnly && !queue.starredByThem);
               const queueHalted = Boolean(queue?.enabled && queue.halted);
-              if (starBlocked || queueHalted) return;
+              // An armed admin bypass skips favorites only server-side (logged red).
+              const adminSkipsFavorites = adminBypassArmed && Boolean(me.isAdmin);
+              if ((starBlocked && !adminSkipsFavorites) || queueHalted) {
+                const who = participants.find((p) => p.id === targetId)?.displayName ?? 'Someone';
+                skipInBatch(who, starBlocked ? 'favorites only' : 'queue closed');
+                return;
+              }
             }
             void operate({
               ...input,
@@ -2569,7 +3349,7 @@ export function App() {
             </div>
             <button
               type="button"
-              className="q-btn q-btn--standard bg-secondary text-dark q-btn--rectangle"
+              className="q-btn q-btn-item non-selectable no-outline bg-secondary text-dark q-btn--standard q-btn--rectangle q-btn--actionable"
               disabled={busy || !pairDialog}
               onClick={() => {
                 if (!pairDialog) return;
@@ -2588,14 +3368,22 @@ export function App() {
                 });
               }}
             >
-              Send pair vibrate
+              <span className="q-btn__wrapper col row q-anchor--skip">
+                <span className="q-btn__content text-center col items-center q-anchor--skip justify-center row">
+                  <span className="block">Send pair vibrate</span>
+                </span>
+              </span>
             </button>
             <button
               type="button"
-              className="q-btn q-btn--outline text-secondary q-btn--rectangle"
+              className="q-btn q-btn-item non-selectable no-outline text-secondary bg-dark q-btn--outline q-btn--rectangle q-btn--actionable"
               onClick={() => setPairDialog(null)}
             >
-              Done
+              <span className="q-btn__wrapper col row q-anchor--skip">
+                <span className="q-btn__content text-center col items-center q-anchor--skip justify-center row">
+                  <span className="block">Done</span>
+                </span>
+              </span>
             </button>
           </div>
         </PsDialog>
@@ -2607,16 +3395,10 @@ export function App() {
                 ? 'PiShock linked — manage Discord availability, limits, and shares here. Mode switching is in the bottom-left dock.'
                 : 'No PiShock login needed to control Discord Shockers. Link only to share yourself or use your own devices.'}
             </div>
-            {(
-              [
-                ['availability', 'Available in Discord', 'mdi-account-check'],
-                ['settings', 'Activity Limits', 'mdi-tune'],
-                ['shares', 'Shares', 'mdi-share-variant'],
-                ['logs', 'Logs', 'mdi-message-text-clock'],
-              ] as const
-            )
-              .filter(([id]) => me.pishockLinked || id === 'logs')
-              .map(([id, label, icon]) => (
+            {activityMenuItems({
+              isAdmin: Boolean(me.isAdmin),
+              pishockLinked: me.pishockLinked,
+            }).map(([id, label, icon]) => (
               <button
                 key={id}
                 type="button"
@@ -2630,6 +3412,14 @@ export function App() {
                     openOfficialLogs();
                     return;
                   }
+                  if (id === 'logPrivacy') {
+                    setOverlay('logPrivacy');
+                    return;
+                  }
+                  if (id === 'safety' || id === 'myData' || id === 'history' || id === 'admin' || id === 'community') {
+                    setOverlay(id);
+                    return;
+                  }
                   if (id === 'settings') setSettingsFocusShockerId(null);
                   openLinkedOverlay(id);
                 }}
@@ -2640,6 +3430,11 @@ export function App() {
                 <div className="q-item__section column q-item__section--main justify-center">
                   <div className="q-item__label text-grey-3">{label}</div>
                 </div>
+                {id === 'history' && unreadRecaps > 0 ? (
+                  <span className="menu-badge" aria-label={`${unreadRecaps} new recaps`}>
+                    {unreadRecaps}
+                  </span>
+                ) : null}
               </button>
             ))}
             {me.pishockLinked ? (
@@ -2811,6 +3606,84 @@ export function App() {
           />
         </PsDialog>
 
+        <PsDialog
+          open={overlay === 'logPrivacy'}
+          title="Log sharing"
+          onClose={() => setOverlay(null)}
+          wide
+        >
+          <LogPrivacySettings onLoad={loadLogPrivacy} onSave={saveLogPrivacy} />
+        </PsDialog>
+
+        <PsDialog
+          open={overlay === 'safety'}
+          title="Extra features"
+          onClose={() => setOverlay(null)}
+          wide
+        >
+          <SafetyFeaturesSettings
+            onLoad={loadSafetyCb}
+            onSave={async (next) => {
+              const snap = await saveSafetyCb(next);
+              // Keep the queue's stars-only flag in step (same setting).
+              setQueueState((prev) => ({ ...prev, starOnly: snap.settings.favoritesOnly }));
+              return snap;
+            }}
+            onResetBudget={resetBudgetCb}
+            onRaiseBudget={raiseBudgetCb}
+            onAdminConsentStep={(step, nonce, phrase) => {
+              if (!token) return Promise.reject(new Error('Not signed in'));
+              return adminConsentStep(token, step, nonce, phrase);
+            }}
+            onRevokeAdminConsent={() => {
+              if (!token) return Promise.reject(new Error('Not signed in'));
+              return revokeAdminConsent(token);
+            }}
+            queueEnabled={queueState.enabled}
+          />
+        </PsDialog>
+
+        <PsDialog open={overlay === 'community'} title="Join our Discord" onClose={() => setOverlay(null)}>
+          {token && overlay === 'community' ? <JoinDiscordPanel token={token} /> : null}
+        </PsDialog>
+
+        {me.isAdmin ? (
+          <PsDialog open={overlay === 'admin'} title="Admin panel" onClose={() => setOverlay(null)} fill>
+            {token && overlay === 'admin' ? <AdminPanel token={token} /> : null}
+          </PsDialog>
+        ) : null}
+
+        <PsDialog open={overlay === 'history'} title="My history" onClose={() => setOverlay(null)} wide>
+          {token && overlay === 'history' ? (
+            <MyHistoryPanel token={token} onSeen={markRecapsSeen} />
+          ) : null}
+        </PsDialog>
+
+        <PsDialog open={overlay === 'myData'} title="My data" onClose={() => setOverlay(null)} wide>
+          {token ? (
+            <MyDataPanel
+              token={token}
+              onDeletionRequested={() => {
+                setActionNotice('Request received. Your PiShock key was removed and sharing is off.');
+                void refreshMe(token).catch(() => undefined);
+              }}
+            />
+          ) : null}
+        </PsDialog>
+
+        <PersonLimitsDialog
+          open={Boolean(personLimitTarget)}
+          personName={personLimitTarget?.name ?? ''}
+          initial={personLimitTarget ? (personLimits[personLimitTarget.id] ?? null) : null}
+          onClose={() => setPersonLimitTarget(null)}
+          onSave={(patch) =>
+            personLimitTarget ? savePersonLimitCb(personLimitTarget.id, patch) : Promise.resolve()
+          }
+          onClear={() =>
+            personLimitTarget ? clearPersonLimitCb(personLimitTarget.id) : Promise.resolve()
+          }
+        />
+
         <PsDialog open={overlay === 'shares'} title="Shares" onClose={() => setOverlay(null)} wide>
           <SharesPanel
             shared={
@@ -2914,6 +3787,7 @@ export function App() {
                   <div className="queue-ticket-banner__title">
                     {myQueueTicket.paused ? 'Queue paused' : 'In queue'}
                     {myQueueTicket.position != null ? ` · #${myQueueTicket.position}` : ''}
+                    {liveQueueTickets.length > 1 ? ` · +${liveQueueTickets.length - 1} more` : ''}
                   </div>
                   <div className="queue-ticket-banner__eta">
                     {(() => {
@@ -2964,13 +3838,7 @@ export function App() {
   return (
     <div className={`app-shell official-preflight consent-shell ${pip ? 'pip' : ''}`}>
       <div className="consent-shell__brand">
-        <h1 className="auth-boot__brand auth-boot__brand-row">
-          <span className="auth-boot__brand-name">
-            Pi<span>Shock</span>
-          </span>
-          <AppVersionBadge />
-        </h1>
-        <p className="auth-boot__sub">Discord Activity</p>
+        <BrandHeader sub="Discord Activity" />
         <span className="status-pill consent-shell__user">
           <span className="dot on" />
           {myDiscordName}
@@ -2978,11 +3846,9 @@ export function App() {
       </div>
 
       {!isEmbedded ? (
-        <div className="q-card q-card--dark q-dark q-pa-md" style={{ border: '1px solid rgba(121,198,219,.35)', maxWidth: 480, width: '100%' }}>
-          <div className="text-secondary text-h6" style={{ fontFamily: 'geo, Oxanium, sans-serif' }}>
-            Local preview
-          </div>
-          <p className="text-grey-5 text-body2">
+        <div className="q-card q-card--dark q-dark consent-shell__preview">
+          <div className="consent-shell__preview-title">Local preview</div>
+          <p>
             Open this activity inside Discord for real auth. Use <code>/?demo=1</code> for the
             official UI clone.
           </p>

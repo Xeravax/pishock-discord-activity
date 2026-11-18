@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { AppVersionBadge } from './AppVersionBadge';
+import { BrandHeader } from './BrandHeader';
 import { SecretValue } from './SecretValue';
 
 type Props = {
@@ -52,16 +52,7 @@ export function ApiKeyRevealPanel({
     <div className="auth-boot" role="dialog" aria-modal="true" aria-labelledby="api-key-reveal-title">
       <div className="auth-boot__glow" aria-hidden />
       <div className="auth-boot__panel auth-boot__panel--wide">
-        <div className="auth-boot__mark" aria-hidden>
-          <i className="q-icon mdi mdi-key-variant auth-boot__bolt" />
-        </div>
-        <h1 className="auth-boot__brand auth-boot__brand-row">
-          <span className="auth-boot__brand-name">
-            Pi<span>Shock</span>
-          </span>
-          <AppVersionBadge />
-        </h1>
-        <p className="auth-boot__sub">API key created</p>
+        <BrandHeader badgeIcon="mdi-key-variant" sub="API key created" />
 
         <h2 id="api-key-reveal-title" className="auth-boot__heading">
           Save this key — shown once
@@ -95,7 +86,17 @@ export function ApiKeyRevealPanel({
         ) : null}
 
         <div className="auth-boot__actions">
-          <button type="button" onClick={onExit}>Finish later</button>
+          <button
+            type="button"
+            className="q-btn q-btn-item non-selectable no-outline text-grey-5 q-btn--flat q-btn--rectangle q-btn--actionable"
+            onClick={onExit}
+          >
+            <span className="q-btn__wrapper col row q-anchor--skip">
+              <span className="q-btn__content text-center col items-center q-anchor--skip justify-center row">
+                <span className="block">Finish later</span>
+              </span>
+            </span>
+          </button>
           <button
             type="button"
             className="q-btn q-btn-item non-selectable no-outline text-secondary bg-dark q-btn--outline q-btn--rectangle q-btn--actionable"

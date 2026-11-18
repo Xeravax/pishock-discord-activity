@@ -1,6 +1,10 @@
 import type { ShockerView } from '../ShockerCard';
 import { colorForShocker } from '../../multiColors';
-import type { WarningLevel } from '../../../shared/warning';
+import {
+  atLeastWarning,
+  normalizeWarningLevel,
+  type WarningLevel,
+} from '../../../shared/warning';
 
 export function clamp(n: number, min: number, max: number) {
   return Math.max(min, Math.min(max, n));
@@ -111,6 +115,22 @@ export function nudgeIntensity(input: {
 
 export const CONTROL_PREFS_KEY = 'pishock.official-controls.v1';
 
+/** Stored values can be corrupted/hand-edited: never let NaN/Infinity into the controls. */
+function finiteOr(value: unknown, fallback: number): number {
+  const n = Number(value ?? fallback);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+export type MultiOperation = 'shock' | 'vibrate' | 'beep';
+
+/** Per-shocker settings while Multi · Individual is on. */
+export type PerTargetSettings = {
+  operation: MultiOperation;
+  intensity: number;
+  durationMs: number;
+  warningLevel: WarningLevel;
+};
+
 export type ControlPrefs = {
   shockIntensity: number;
   shockDurationMs: number;
@@ -123,7 +143,9 @@ export type ControlPrefs = {
   tapMode: boolean;
   multiShock: boolean;
   individualIntensity: boolean;
+  /** @deprecated migrated into perTarget */
   perShockIntensity: Record<string, number>;
+  perTarget: Record<string, PerTargetSettings>;
   activeId?: number;
 };
 
@@ -140,47 +162,185 @@ export const DEFAULT_CONTROL_PREFS: ControlPrefs = {
   multiShock: false,
   individualIntensity: false,
   perShockIntensity: {},
+  perTarget: {},
 };
 
-/** Stored values can be corrupted/hand-edited: never let NaN/Infinity into the controls. */
-function finiteOr(value: unknown, fallback: number): number {
-  const n = Number(value ?? fallback);
-  return Number.isFinite(n) ? n : fallback;
+export type MultiFirePlanItem = {
+  shocker: ShockerView;
+  operation: MultiOperation;
+  intensity: number;
+  durationMs: number;
+  warningLevel: WarningLevel;
+};
+
+export type MultiFireDefaults = {
+  operation: MultiOperation;
+  intensity: number;
+  durationMs: number;
+  warningLevel: WarningLevel;
+  /** When true, use each target's stored settings (still clamped to that target). */
+  individual: boolean;
+};
+
+function modeAllowed(s: ShockerView, operation: MultiOperation): boolean {
+  if (operation === 'shock') return Boolean(s.canShock);
+  if (operation === 'vibrate') return Boolean(s.canVibrate);
+  return Boolean(s.canBeep);
+}
+
+/**
+ * Build the per-target commands for a multishock fire. Every value is clamped to
+ * that shocker's own band for the chosen action; disallowed / E-STOP / paused
+ * targets are skipped with a reason.
+ */
+export function planMultiFire(
+  targets: ShockerView[],
+  perTarget: Record<string, Partial<PerTargetSettings>>,
+  defaults: MultiFireDefaults,
+  keyFor: (s: ShockerView) => string = multiColorKey,
+): { ready: MultiFirePlanItem[]; skipped: Array<{ shocker: ShockerView; reason: string }> } {
+  const ready: MultiFirePlanItem[] = [];
+  const skipped: Array<{ shocker: ShockerView; reason: string }> = [];
+  for (const shocker of targets) {
+    if (shocker.emergencyStop) {
+      skipped.push({ shocker, reason: 'E-STOP' });
+      continue;
+    }
+    if (shocker.paused) {
+      skipped.push({ shocker, reason: 'paused' });
+      continue;
+    }
+    const key = keyFor(shocker);
+    const stored = perTarget[key];
+    const operation: MultiOperation = defaults.individual
+      ? (stored?.operation ?? defaults.operation)
+      : defaults.operation;
+    if (!modeAllowed(shocker, operation)) {
+      skipped.push({
+        shocker,
+        reason:
+          operation === 'shock'
+            ? 'shock not allowed'
+            : operation === 'vibrate'
+              ? 'vibrate not allowed'
+              : 'beep not allowed',
+      });
+      continue;
+    }
+    const mode: ModeBandOp = operation;
+    const minInt = shockerUsableMinInt(shocker, mode);
+    const maxInt = shockerUsableInt(shocker, mode);
+    const minDur = shockerUsableMinDur(shocker, mode);
+    const maxDur = shockerUsableDur(shocker, mode);
+    const rawIntensity =
+      defaults.individual && stored?.intensity != null ? stored.intensity : defaults.intensity;
+    const rawDuration =
+      defaults.individual && stored?.durationMs != null ? stored.durationMs : defaults.durationMs;
+    const floor = normalizeWarningLevel(shocker.requiredWarningLevel);
+    const chosenWarning =
+      defaults.individual && stored?.warningLevel
+        ? normalizeWarningLevel(stored.warningLevel)
+        : defaults.warningLevel;
+    ready.push({
+      shocker,
+      operation,
+      intensity: clamp(Math.max(1, rawIntensity), minInt, maxInt),
+      durationMs: clamp(rawDuration, minDur, maxDur),
+      warningLevel:
+        operation === 'shock' ? atLeastWarning(chosenWarning, floor) : 'none',
+    });
+  }
+  return { ready, skipped };
+}
+
+function parsePerTarget(raw: unknown): Record<string, PerTargetSettings> {
+  if (!raw || typeof raw !== 'object') return {};
+  const out: Record<string, PerTargetSettings> = {};
+  for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+    if (!value || typeof value !== 'object') continue;
+    const v = value as Partial<PerTargetSettings>;
+    const operation =
+      v.operation === 'vibrate' || v.operation === 'beep' || v.operation === 'shock'
+        ? v.operation
+        : 'shock';
+    out[key] = {
+      operation,
+      intensity: finiteOr(v.intensity, 1),
+      durationMs: finiteOr(v.durationMs, 300),
+      warningLevel: normalizeWarningLevel(v.warningLevel),
+    };
+  }
+  return out;
+}
+
+/** Migrate legacy perShockIntensity maps into perTarget entries. */
+export function migratePerShockIntensity(
+  intensities: Record<string, number>,
+  existing: Record<string, PerTargetSettings>,
+  defaults: { intensity: number; durationMs: number; warningLevel: WarningLevel },
+): Record<string, PerTargetSettings> {
+  const next = { ...existing };
+  for (const [key, intensity] of Object.entries(intensities)) {
+    if (next[key]) continue;
+    if (typeof intensity !== 'number' || !Number.isFinite(intensity)) continue;
+    next[key] = {
+      operation: 'shock',
+      intensity,
+      durationMs: defaults.durationMs,
+      warningLevel: defaults.warningLevel,
+    };
+  }
+  return next;
 }
 
 export function loadControlPrefs(): ControlPrefs {
   try {
     const raw = localStorage.getItem(CONTROL_PREFS_KEY);
     if (!raw) return { ...DEFAULT_CONTROL_PREFS };
-    const parsed = JSON.parse(raw) as Partial<ControlPrefs>;
+    const parsed = JSON.parse(raw) as Partial<ControlPrefs> & {
+      perShockIntensity?: Record<string, number>;
+    };
+    const warningLevel = (['none', 'small', 'mid', 'long'] as const).includes(
+      parsed.warningLevel as WarningLevel,
+    )
+      ? (parsed.warningLevel as WarningLevel)
+      : (parsed as { warningOn?: boolean }).warningOn
+        ? 'small'
+        : 'none';
+    const shockDurationMs = finiteOr(parsed.shockDurationMs, DEFAULT_CONTROL_PREFS.shockDurationMs);
+    const perShockIntensity =
+      parsed.perShockIntensity && typeof parsed.perShockIntensity === 'object'
+        ? Object.fromEntries(
+            Object.entries(parsed.perShockIntensity).filter(
+              ([, v]) => typeof v === 'number' && Number.isFinite(v),
+            ),
+          )
+        : {};
+    const perTarget = migratePerShockIntensity(
+      perShockIntensity,
+      parsePerTarget(parsed.perTarget),
+      {
+        intensity: finiteOr(parsed.shockIntensity, DEFAULT_CONTROL_PREFS.shockIntensity),
+        durationMs: shockDurationMs,
+        warningLevel,
+      },
+    );
     return {
       ...DEFAULT_CONTROL_PREFS,
       ...parsed,
       shockIntensity: finiteOr(parsed.shockIntensity, DEFAULT_CONTROL_PREFS.shockIntensity),
-      shockDurationMs: finiteOr(parsed.shockDurationMs, DEFAULT_CONTROL_PREFS.shockDurationMs),
+      shockDurationMs,
       shockRandom: Boolean(parsed.shockRandom),
       shockMin: finiteOr(parsed.shockMin, 0),
       shockMax: finiteOr(parsed.shockMax, 100),
       vibIntensity: finiteOr(parsed.vibIntensity, DEFAULT_CONTROL_PREFS.vibIntensity),
       vibDurationMs: finiteOr(parsed.vibDurationMs, DEFAULT_CONTROL_PREFS.vibDurationMs),
-      warningLevel: (['none', 'small', 'mid', 'long'] as const).includes(
-        parsed.warningLevel as WarningLevel,
-      )
-        ? (parsed.warningLevel as WarningLevel)
-        : (parsed as { warningOn?: boolean }).warningOn
-          ? 'small'
-          : 'none',
+      warningLevel,
       tapMode: Boolean(parsed.tapMode),
       multiShock: Boolean(parsed.multiShock),
       individualIntensity: Boolean(parsed.individualIntensity),
-      perShockIntensity:
-        parsed.perShockIntensity && typeof parsed.perShockIntensity === 'object'
-          ? Object.fromEntries(
-              Object.entries(parsed.perShockIntensity).filter(
-                ([, v]) => typeof v === 'number' && Number.isFinite(v),
-              ),
-            )
-          : {},
+      perShockIntensity,
+      perTarget,
       activeId:
         parsed.activeId == null || Number.isNaN(Number(parsed.activeId))
           ? undefined

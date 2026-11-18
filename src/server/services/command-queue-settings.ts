@@ -16,7 +16,7 @@ const QUEUE_SETTINGS_SELECT = {
   commandQueueEnabled: true,
   commandQueueProgressMs: true,
   commandQueueMaxPerSender: true,
-  commandQueueStarOnly: true,
+  favoritesOnly: true,
 } as const;
 
 function mapQueueSettings(
@@ -24,14 +24,15 @@ function mapQueueSettings(
     commandQueueEnabled: boolean;
     commandQueueProgressMs: number;
     commandQueueMaxPerSender: number;
-    commandQueueStarOnly: boolean;
+    favoritesOnly: boolean;
   } | null,
 ): CommandQueueSettings {
   return {
     enabled: Boolean(user?.commandQueueEnabled),
     progressMs: user?.commandQueueProgressMs ?? 0,
     maxPerSender: clampQueueMaxPerSender(user?.commandQueueMaxPerSender ?? 3),
-    starOnly: Boolean(user?.commandQueueStarOnly),
+    // Same column as the global "Favorites only" extra feature.
+    starOnly: Boolean(user?.favoritesOnly),
   };
 }
 
@@ -94,7 +95,7 @@ export async function setCommandQueueSettings(
     commandQueueEnabled?: boolean;
     commandQueueProgressMs?: number;
     commandQueueMaxPerSender?: number;
-    commandQueueStarOnly?: boolean;
+    favoritesOnly?: boolean;
   } = {};
   if (typeof patch.enabled === 'boolean') data.commandQueueEnabled = patch.enabled;
   if (typeof patch.progressMs === 'number' && Number.isFinite(patch.progressMs)) {
@@ -106,7 +107,7 @@ export async function setCommandQueueSettings(
   if (typeof patch.maxPerSender === 'number' && Number.isFinite(patch.maxPerSender)) {
     data.commandQueueMaxPerSender = clampQueueMaxPerSender(patch.maxPerSender);
   }
-  if (typeof patch.starOnly === 'boolean') data.commandQueueStarOnly = patch.starOnly;
+  if (typeof patch.starOnly === 'boolean') data.favoritesOnly = patch.starOnly;
 
   if (Object.keys(data).length === 0) {
     return getCommandQueueSettings(discordUserId);

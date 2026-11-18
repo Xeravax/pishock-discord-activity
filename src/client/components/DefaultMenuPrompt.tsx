@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react';
-import { AppVersionBadge } from './AppVersionBadge';
+import { BrandHeader } from './BrandHeader';
 import type { DefaultStartMenu } from '../defaultMenuPrefs';
 
 type Props = {
@@ -21,16 +21,7 @@ export function DefaultMenuPrompt({ discordName, busy, onDismiss, onChoose }: Pr
     <div className="auth-boot" role="dialog" aria-modal="true" aria-labelledby="default-menu-title">
       <div className="auth-boot__glow" aria-hidden />
       <div className="auth-boot__panel auth-boot__panel--wide">
-        <div className="auth-boot__mark" aria-hidden>
-          <i className="q-icon mdi mdi-view-dashboard-outline auth-boot__bolt" />
-        </div>
-        <h1 className="auth-boot__brand auth-boot__brand-row">
-          <span className="auth-boot__brand-name">
-            Pi<span>Shock</span>
-          </span>
-          <AppVersionBadge />
-        </h1>
-        <p className="auth-boot__sub">Welcome back · {discordName}</p>
+        <BrandHeader badgeIcon="mdi-view-dashboard-outline" sub={`Welcome back · ${discordName}`} />
 
         <h2 id="default-menu-title" ref={headingRef} tabIndex={-1} className="auth-boot__heading">
           What should open by default?

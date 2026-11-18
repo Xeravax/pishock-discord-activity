@@ -30,7 +30,7 @@ export function MultiShockToggle({
 export function IndividualIntensityToggle({
   active,
   onToggle,
-  title = "Set each person's shocker intensity individually",
+  title = 'Give each target its own intensity and duration',
   compact,
 }: Props) {
   return (
@@ -42,10 +42,10 @@ export function IndividualIntensityToggle({
       onClick={onToggle}
       title={title}
       aria-pressed={active}
-      aria-label="Set each person's shocker individually"
+      aria-label="Set each target individually"
     >
-      <i className="q-icon mdi mdi-account-edit" aria-hidden />
-      <span>Per person</span>
+      <i className="q-icon mdi mdi-tune-variant" aria-hidden />
+      <span>Individual</span>
     </button>
   );
 }

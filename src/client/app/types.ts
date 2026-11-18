@@ -1,4 +1,6 @@
 import type { AuthState } from '../discord';
+import type { GlobalBanInfo } from '../hooks/useGlobalBan';
+import type { AppNotice } from '../realtime';
 import type { PersonalLimits } from '../components/ActivityLimitsSettings';
 import type { QueuePanelItem, QueuePanelSettings } from '../components/QueuePanel';
 
@@ -13,6 +15,12 @@ export type MeResponse = {
   personal?: PersonalLimits;
   emergencyStopShockerIds?: number[];
   commandQueueEnabled?: boolean;
+  /** Shows the admin bypass toggle; the server re-checks on every command. */
+  isAdmin?: boolean;
+  /** Banned from the app by an admin: the client shows only the ban screen. */
+  globalBan?: GlobalBanInfo | null;
+  /** App-wide notice set from the admin panel. */
+  appNotice?: AppNotice | null;
 };
 
 export type QueueState = QueuePanelSettings & {
@@ -43,7 +51,20 @@ export type DevicesResponse = {
   online: Record<string, boolean>;
 };
 
-export type Overlay = null | 'menu' | 'availability' | 'settings' | 'shares' | 'logs' | 'link';
+export type Overlay =
+  | null
+  | 'menu'
+  | 'availability'
+  | 'settings'
+  | 'shares'
+  | 'logs'
+  | 'link'
+  | 'logPrivacy'
+  | 'safety'
+  | 'myData'
+  | 'history'
+  | 'community'
+  | 'admin';
 
 export type LegalView = null | 'terms' | 'privacy';
 

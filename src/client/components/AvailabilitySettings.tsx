@@ -30,6 +30,7 @@ export type ActivityShareConfig = {
   canBeep: boolean;
   canHold: boolean;
   requiredWarningLevel: 'none' | 'small' | 'mid' | 'long';
+  maxIntensityStep?: number | null;
 };
 
 type Props = {
@@ -196,6 +197,7 @@ export function AvailabilitySettings({
       maxDurationMs: cfg.beepMaxDurationMs ?? cfg.maxDurationMs,
     },
     requiredWarningLevel: normalizeWarningLevel(cfg.requiredWarningLevel),
+    maxIntensityStep: cfg.maxIntensityStep ?? null,
   });
 
   const applyMode = (shockerId: number, m: ModeLimitsValue) => {
@@ -217,6 +219,7 @@ export function AvailabilitySettings({
       beepMinDurationMs: m.beep.minDurationMs,
       beepMaxDurationMs: m.beep.maxDurationMs,
       requiredWarningLevel: m.requiredWarningLevel,
+      maxIntensityStep: m.maxIntensityStep ?? null,
     });
   };
 
@@ -255,22 +258,22 @@ export function AvailabilitySettings({
       </div>
 
       {error ? (
-        <div className="bg-negative text-white q-pa-sm" style={{ borderRadius: 4 }}>
+        <div className="ps-callout ps-callout--error" role="alert">
           {error}
         </div>
       ) : null}
 
       <div>
-        <div className="text-secondary text-subtitle2 q-mb-sm">Your shockers</div>
+        <div className="ps-section-title">Your shockers</div>
         {ownedShockers.length === 0 ? (
           <div className="text-grey-5">No owned shockers loaded.</div>
         ) : (
-          <div className="q-list q-list--dark">
+          <div className="q-list q-list--dark ps-row-list">
             {ownedShockers.map((s) => {
               const cfg = shares.find((x) => x.shockerId === s.id);
               const on = Boolean(cfg);
               return (
-                <div key={s.id} className="q-item q-item-type column q-pa-sm" style={{ border: '1px solid hsla(0,0%,100%,.12)', marginBottom: 8 }}>
+                <div key={s.id} className={`q-item q-item-type column ps-row${on ? ' is-on' : ''}`}>
                   <label className="row items-center no-wrap cursor-pointer">
                     <div
                       className={`q-checkbox cursor-pointer no-outline row inline no-wrap items-center q-checkbox--dark q-mr-sm ${
@@ -281,7 +284,7 @@ export function AvailabilitySettings({
                         type="checkbox"
                         checked={on}
                         onChange={() => toggleShocker(s)}
-                        style={{ width: 18, height: 18, accentColor: '#79c6db' }}
+                        className="ps-check"
                       />
                     </div>
                     <div className="column">
@@ -302,8 +305,7 @@ export function AvailabilitySettings({
                         <input
                           type="checkbox"
                           checked={cfg.paused}
-                          className="q-mr-xs"
-                          style={{ accentColor: '#79c6db' }}
+                          className="q-mr-xs ps-check"
                           onChange={(e) => updateShare(s.id, { paused: e.target.checked })}
                         />
                         Paused
@@ -318,18 +320,17 @@ export function AvailabilitySettings({
       </div>
 
       <div>
-        <div className="text-secondary text-subtitle2 q-mb-sm">Block participants</div>
+        <div className="ps-section-title">Block participants</div>
         {others.length === 0 ? (
           <div className="text-grey-5">No other participants yet.</div>
         ) : (
-          <div className="q-list q-list--dark">
+          <div className="q-list q-list--dark ps-row-list">
             {others.map((p) => (
-              <label key={p.id} className="q-item q-item-type row items-center no-wrap cursor-pointer q-pa-sm">
+              <label key={p.id} className="q-item q-item-type row items-center no-wrap cursor-pointer ps-row">
                 <input
                   type="checkbox"
                   checked={banned.includes(p.id)}
-                  className="q-mr-sm"
-                  style={{ accentColor: '#79c6db' }}
+                  className="q-mr-sm ps-check"
                   onChange={() => toggleBan(p.id)}
                 />
                 <span className="q-item__label">{p.displayName}</span>
@@ -339,7 +340,7 @@ export function AvailabilitySettings({
         )}
       </div>
 
-      <div className="row justify-end">
+      <div className="row justify-end ps-actions">
         <button
           type="button"
           className="q-btn q-btn-item non-selectable no-outline bg-secondary text-dark q-btn--standard q-btn--rectangle q-btn--actionable"

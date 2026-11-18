@@ -1,4 +1,4 @@
-import { useState, type CSSProperties } from 'react';
+import { useState } from 'react';
 import { PiShockAuthDisclaimer } from './PiShockAuthDisclaimer';
 
 type Props = {
@@ -13,14 +13,6 @@ type Props = {
   onClearManualError?: () => void;
   manualBusy?: boolean;
   manualError?: string | null;
-};
-
-const fieldStyle: CSSProperties = {
-  border: '1px solid rgba(255,255,255,0.12)',
-  borderRadius: 8,
-  padding: '10px 12px',
-  outline: 'none',
-  width: '100%',
 };
 
 /** Compact start CTA for the link dialog (waiting state uses PiShockLinkingScreen). */
@@ -102,7 +94,7 @@ export function LoginPanel({
 
       {onManualSubmit ? (
         <div className="pishock-link-panel__manual">
-          <div className="text-secondary text-subtitle2">Or paste an existing API key</div>
+          <div className="ps-section-title">Or paste an existing API key</div>
           <p className="text-grey-5 text-body2" style={{ marginTop: 4, marginBottom: 10 }}>
             Use your PiShock username and a named API key from the website. We store it encrypted
             until it stops working (same as auto-created keys).
@@ -132,8 +124,7 @@ export function LoginPanel({
               }}
               placeholder="PiShock username"
               autoComplete="username"
-              className="bg-dark text-grey-3"
-              style={fieldStyle}
+              className="ps-field ps-field--block"
               disabled={linking || manualBusy}
             />
             <input
@@ -146,8 +137,7 @@ export function LoginPanel({
               placeholder="API key"
               autoComplete="off"
               spellCheck={false}
-              className="bg-dark text-grey-3"
-              style={fieldStyle}
+              className="ps-field ps-field--block"
               disabled={linking || manualBusy}
             />
             <button

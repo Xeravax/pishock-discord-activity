@@ -1,4 +1,4 @@
-import { AppVersionBadge } from './AppVersionBadge';
+import { BrandHeader } from './BrandHeader';
 
 type Props = {
   progress: number;
@@ -14,16 +14,7 @@ export function AuthLoadingScreen({ progress, label, error }: Props) {
     <div className="auth-boot" role="status" aria-live="polite" aria-busy={!error}>
       <div className="auth-boot__glow" aria-hidden />
       <div className="auth-boot__panel">
-        <div className="auth-boot__mark" aria-hidden>
-          <i className="q-icon mdi mdi-flash auth-boot__bolt" />
-        </div>
-        <h1 className="auth-boot__brand auth-boot__brand-row">
-          <span className="auth-boot__brand-name">
-            Pi<span>Shock</span>
-          </span>
-          <AppVersionBadge />
-        </h1>
-        <p className="auth-boot__sub">Discord Activity</p>
+        <BrandHeader pulse={!error} sub="Discord Activity" />
 
         {error ? (
           <div className="auth-boot__error">

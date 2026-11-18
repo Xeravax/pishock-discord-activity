@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
-import { AppVersionBadge } from './AppVersionBadge';
+import { useEffect, useMemo, useState } from 'react';
+import { BrandHeader } from './BrandHeader';
 import type { ShockerView } from './ShockerCard';
 import type { ActivityShareConfig } from './AvailabilitySettings';
 import type { PersonalLimits, ShareLimitRow } from './ActivityLimitsSettings';
@@ -10,33 +10,23 @@ import {
 } from './LimitSlider';
 import { normalizeWarningLevel } from '../../shared/warning';
 import type { QueuePanelSettings } from './QueuePanel';
+import {
+  EffectiveCap,
+  LimitsTabs,
+  PersonalLimitsExplainer,
+  SharedLimitsExplainer,
+  TabPanel,
+  type LimitsTab,
+} from './LimitsTabs';
+import {
+  DEFAULT_LOG_PRIVACY,
+  LogPrivacyForm,
+  type LogPrivacy,
+} from './LogPrivacySettings';
+import { SafetyFeaturesForm } from './SafetyFeaturesForm';
+import { normalizeWearerSafety, type WearerSafety } from '../safety';
 
-function SetupLimitsPane({
-  title,
-  open,
-  onToggle,
-  children,
-}: {
-  title: string;
-  open: boolean;
-  onToggle: () => void;
-  children: ReactNode;
-}) {
-  return (
-    <section className={`setup-limits-pane${open ? ' is-open' : ' is-collapsed'}`}>
-      <button type="button" className="setup-limits-pane__toggle" onClick={onToggle}>
-        <span className="setup-limits-pane__title">{title}</span>
-        <i
-          className={`q-icon mdi ${open ? 'mdi-chevron-down' : 'mdi-chevron-right'}`}
-          aria-hidden
-        />
-      </button>
-      {open ? <div className="setup-limits-pane__body">{children}</div> : null}
-    </section>
-  );
-}
-
-type SetupStep = 'loading' | 'devices' | 'limits' | 'queue';
+type SetupStep = 'loading' | 'devices' | 'limits' | 'logs' | 'features';
 
 type Props = {
   shockers: ShockerView[];
@@ -50,6 +40,12 @@ type Props = {
   initialShares?: ShareLimitRow[];
   /** Current queue settings. Leaving the step unchanged posts these, not disabled defaults. */
   initialQueue?: QueuePanelSettings;
+  /** Current log sharing settings (defaults when unknown). */
+  initialLogPrivacy?: LogPrivacy;
+  /** Current extra-feature safety settings (defaults when unknown). */
+  initialSafety?: WearerSafety;
+  /** Demo / review only: open directly on this step once devices are ready. */
+  startStep?: 'devices' | 'limits' | 'logs' | 'features';
   /** True after post-confirm device fetch finishes (even if the list is empty). */
   devicesReady?: boolean;
   busy?: boolean;
@@ -58,6 +54,8 @@ type Props = {
     shares: ActivityShareConfig[];
     personal: PersonalLimits;
     queue?: QueuePanelSettings;
+    logPrivacy?: LogPrivacy;
+    safety?: WearerSafety;
   }) => void | Promise<void>;
   onSkip: () => void;
 };
@@ -195,6 +193,7 @@ function savedShareToMode(s: ShockerView, row: ShareLimitRow): ModeLimitsValue {
       maxDurationMs: beepMaxD,
     },
     requiredWarningLevel: normalizeWarningLevel(row.requiredWarningLevel),
+    maxIntensityStep: row.maxIntensityStep ?? null,
   };
 }
 
@@ -231,16 +230,23 @@ function toShare(
     canBeep: mode.canBeep,
     canHold: mode.canHold,
     requiredWarningLevel: mode.requiredWarningLevel,
+    maxIntensityStep: mode.maxIntensityStep ?? null,
   };
 }
 
-/** Post-link setup: load devices → pick Discord shockers → set activity limits. */
+/**
+ * Post-link setup: load devices → pick Discord shockers → set activity limits →
+ * log sharing → extra features (command queue; only when something is shared).
+ */
 export function SetupDiscordShareScreen({
   shockers,
   initialPersonal,
   initialSelectedIds,
   initialShares,
   initialQueue,
+  initialLogPrivacy,
+  initialSafety,
+  startStep,
   devicesReady = false,
   busy,
   error,
@@ -257,8 +263,26 @@ export function SetupDiscordShareScreen({
   const [editedShareIds, setEditedShareIds] = useState<Set<number>>(() => new Set());
   const [queue, setQueue] = useState<QueuePanelSettings>(initialQueue ?? DEFAULT_QUEUE);
   const [queueTouched, setQueueTouched] = useState(false);
-  const [defaultsOpen, setDefaultsOpen] = useState(true);
-  const [sharesOpen, setSharesOpen] = useState(true);
+  const [limitsTab, setLimitsTab] = useState<LimitsTab>('personal');
+  const [logPrivacy, setLogPrivacy] = useState<LogPrivacy>(
+    () => initialLogPrivacy ?? { ...DEFAULT_LOG_PRIVACY },
+  );
+  const [logTouched, setLogTouched] = useState(false);
+  const [openFeature, setOpenFeature] = useState<'queue' | null>(null);
+  const [safety, setSafety] = useState<WearerSafety>(() =>
+    normalizeWearerSafety(initialSafety ?? { favoritesOnly: initialQueue?.starOnly ?? false }),
+  );
+  const [safetyTouched, setSafetyTouched] = useState(false);
+
+  useEffect(() => {
+    if (safetyTouched || !initialSafety) return;
+    setSafety(normalizeWearerSafety(initialSafety));
+  }, [safetyTouched, initialSafety]);
+
+  useEffect(() => {
+    if (logTouched || !initialLogPrivacy) return;
+    setLogPrivacy(initialLogPrivacy);
+  }, [logTouched, initialLogPrivacy]);
 
   useEffect(() => {
     setPersonal(initialPersonal);
@@ -303,8 +327,8 @@ export function SetupDiscordShareScreen({
       setShareModes(modes);
       setSeeded(true);
     }
-    setStep((prev) => (prev === 'loading' ? 'devices' : prev));
-  }, [owned, seeded, devicesReady, initialPersonal, initialSelectedIds, initialShares]);
+    setStep((prev) => (prev === 'loading' ? (startStep ?? 'devices') : prev));
+  }, [owned, seeded, devicesReady, initialPersonal, initialSelectedIds, initialShares, startStep]);
 
   const go = (next: SetupStep, dir: 'forward' | 'back') => {
     setStepDir(dir);
@@ -338,38 +362,52 @@ export function SetupDiscordShareScreen({
       shares,
       personal,
       queue: includeQueue ? queue : undefined,
+      // Untouched = what's already saved (or the server default), so don't overwrite.
+      logPrivacy: logTouched ? logPrivacy : undefined,
+      safety: includeQueue && safetyTouched ? safety : undefined,
     });
   };
 
   const afterLimits = () => {
-    if (selectedOwned.length > 0) go('queue', 'forward');
-    else submit(false);
+    go('logs', 'forward');
   };
 
+  /** Extras (queue + safety features) only matter once something is shared. */
+  const hasExtras = selectedOwned.length > 0;
+
   const stepIndex =
-    step === 'queue' ? 3 : step === 'limits' ? 2 : step === 'devices' ? 1 : 0;
-  const stepTotal = selectedOwned.length > 0 || step === 'queue' ? 3 : 2;
+    step === 'features'
+      ? 4
+      : step === 'logs'
+        ? 3
+        : step === 'limits'
+          ? 2
+          : step === 'devices'
+            ? 1
+            : 0;
+  const stepTotal = hasExtras ? 4 : 3;
 
   return (
     <div className="auth-boot" role="dialog" aria-modal="true" aria-labelledby="setup-share-title">
       <div className="auth-boot__glow" aria-hidden />
-      <div className="auth-boot__panel auth-boot__panel--wide auth-boot__panel--setup">
-        <div className="auth-boot__mark" aria-hidden>
-          <i
-            className={`q-icon mdi auth-boot__bolt ${
-              step === 'limits' ? 'mdi-tune-vertical' : 'mdi-account-group'
-            }`}
-          />
-        </div>
-        <h1 className="auth-boot__brand auth-boot__brand-row">
-          <span className="auth-boot__brand-name">
-            Pi<span>Shock</span>
-          </span>
-          <AppVersionBadge />
-        </h1>
-        <p className="auth-boot__sub">
-          Setup{step !== 'loading' ? ` · ${stepIndex}/${stepTotal}` : ''}
-        </p>
+      <div
+        className={`auth-boot__panel auth-boot__panel--wide auth-boot__panel--setup${
+          step === 'limits' ? '' : ' is-compact'
+        }${step === 'features' || step === 'logs' ? ' is-features' : ''}`}
+      >
+        <BrandHeader
+          compact
+          badgeIcon={
+            step === 'limits'
+              ? 'mdi-tune-vertical'
+              : step === 'features'
+                ? 'mdi-puzzle-outline'
+                : step === 'logs'
+                  ? 'mdi-text-box-search-outline'
+                  : 'mdi-account-group'
+          }
+          sub={`Setup${step !== 'loading' ? ` · ${stepIndex}/${stepTotal}` : ''}`}
+        />
 
         <div
           key={step}
@@ -396,7 +434,7 @@ export function SetupDiscordShareScreen({
               <div className="auth-boot__actions">
                 <button
                   type="button"
-                  className="q-btn q-btn-item non-selectable no-outline text-grey-4 bg-dark q-btn--outline q-btn--rectangle q-btn--actionable"
+                  className="q-btn q-btn-item non-selectable no-outline text-secondary bg-dark q-btn--outline q-btn--rectangle q-btn--actionable"
                   disabled={busy}
                   onClick={onSkip}
                 >
@@ -479,7 +517,7 @@ export function SetupDiscordShareScreen({
               <div className="auth-boot__actions">
                 <button
                   type="button"
-                  className="q-btn q-btn-item non-selectable no-outline text-grey-4 bg-dark q-btn--outline q-btn--rectangle q-btn--actionable"
+                  className="q-btn q-btn-item non-selectable no-outline text-secondary bg-dark q-btn--outline q-btn--rectangle q-btn--actionable"
                   disabled={busy}
                   onClick={onSkip}
                 >
@@ -518,8 +556,8 @@ export function SetupDiscordShareScreen({
                 Activity limits
               </h2>
               <p className="auth-boot__hint">
-                Set shock and vibrate bands per shared shocker, toggle beep and hold, and
-                optionally enforce a warning before shock.
+                Set your own device defaults first, then the limits for each shocker you share.
+                Your defaults always cap what shared shockers can do.
               </p>
 
               {error ? (
@@ -529,20 +567,15 @@ export function SetupDiscordShareScreen({
                 </div>
               ) : null}
 
-              <div
-                className={`setup-limits-split${
-                  selectedOwned.length > 0 ? '' : ' setup-limits-split--single'
-                }`}
-              >
-                <SetupLimitsPane
-                  title="Your defaults"
-                  open={defaultsOpen}
-                  onToggle={() => setDefaultsOpen((open) => !open)}
-                >
-                  <p className="text-caption text-grey-5" style={{ margin: '0 0 8px' }}>
-                    These ranges are your saved own-device limits and the starting point for new
-                    shares. Turn actions on or off on each shared shocker below.
-                  </p>
+              <LimitsTabs
+                value={limitsTab}
+                onChange={setLimitsTab}
+                sharedCount={selectedOwned.length}
+              />
+
+              {limitsTab === 'personal' ? (
+                <TabPanel>
+                  <PersonalLimitsExplainer />
                   <ModeLimitsEditor
                     value={personalToMode(personal)}
                     deviceMaxIntensity={100}
@@ -551,15 +584,12 @@ export function SetupDiscordShareScreen({
                     hideActionToggles
                     onChange={(m) => updatePersonalDefaults(modeToPersonal(m, personal))}
                   />
-                </SetupLimitsPane>
-
-                {selectedOwned.length > 0 ? (
-                  <SetupLimitsPane
-                    title="Shared Discord shockers"
-                    open={sharesOpen}
-                    onToggle={() => setSharesOpen((open) => !open)}
-                  >
-                    {selectedOwned.map((s) => {
+                </TabPanel>
+              ) : (
+                <TabPanel>
+                  <SharedLimitsExplainer personal={personalToMode(personal)} />
+                  {selectedOwned.length > 0 ? (
+                    selectedOwned.map((s) => {
                       const deviceMaxI = Math.min(
                         100,
                         s.deviceMaxIntensity ?? s.maxIntensity ?? 100,
@@ -576,6 +606,12 @@ export function SetupDiscordShareScreen({
                             PiShock max {deviceMaxI}% ·{' '}
                             {(deviceMaxD / 1000).toFixed(deviceMaxD % 1000 ? 1 : 0)}s
                           </div>
+                          <EffectiveCap
+                            share={mode}
+                            personal={personalToMode(personal)}
+                            deviceMaxIntensity={deviceMaxI}
+                            deviceMaxDurationMs={deviceMaxD}
+                          />
                           <ModeLimitsEditor
                             value={mode}
                             deviceMaxIntensity={deviceMaxI}
@@ -591,19 +627,19 @@ export function SetupDiscordShareScreen({
                           />
                         </div>
                       );
-                    })}
-                  </SetupLimitsPane>
-                ) : (
-                  <p className="auth-boot__hint setup-limits-split__empty">
-                    No shockers selected to share — only your personal activity limits will be saved.
-                  </p>
-                )}
-              </div>
+                    })
+                  ) : (
+                    <div className="ps-empty">
+                      No shockers selected to share — only your device defaults will be saved.
+                    </div>
+                  )}
+                </TabPanel>
+              )}
 
               <div className="auth-boot__actions">
                 <button
                   type="button"
-                  className="q-btn q-btn-item non-selectable no-outline text-grey-4 bg-dark q-btn--outline q-btn--rectangle q-btn--actionable"
+                  className="q-btn q-btn-item non-selectable no-outline text-secondary bg-dark q-btn--outline q-btn--rectangle q-btn--actionable"
                   disabled={busy}
                   onClick={() => go('devices', 'back')}
                 >
@@ -625,11 +661,7 @@ export function SetupDiscordShareScreen({
                         <i className="q-icon on-left mdi mdi-loading mdi-spin" aria-hidden />
                       ) : null}
                       <span className="block">
-                        {busy
-                          ? 'Saving…'
-                          : selectedOwned.length > 0
-                            ? 'Next: queue'
-                            : 'Finish setup'}
+                        {busy ? 'Saving…' : 'Next: log sharing'}
                       </span>
                     </span>
                   </span>
@@ -638,14 +670,14 @@ export function SetupDiscordShareScreen({
             </>
           ) : null}
 
-          {step === 'queue' ? (
+          {step === 'logs' ? (
             <>
               <h2 id="setup-share-title" className="auth-boot__heading">
-                Use a command queue?
+                Log sharing
               </h2>
               <p className="auth-boot__hint">
-                When several people control your shared shockers, a queue runs commands one at a
-                time. You can change this later from the queue panel.
+                Choose who can see hits on you in the shared log, and how much they see. You can
+                change this later under Log sharing in the menu.
               </p>
 
               {error ? (
@@ -655,79 +687,175 @@ export function SetupDiscordShareScreen({
                 </div>
               ) : null}
 
-              <label className={`auth-boot__shocker${queue.enabled ? ' is-on' : ''}`}>
-                <input
-                  type="checkbox"
-                  checked={queue.enabled}
+              <div className="setup-logs">
+                <LogPrivacyForm
+                  compact
+                  value={logPrivacy}
                   disabled={busy}
-                  onChange={(e) => {
-                    setQueueTouched(true);
-                    setQueue((q) => ({ ...q, enabled: e.target.checked }));
+                  onChange={(v) => {
+                    setLogTouched(true);
+                    setLogPrivacy(v);
                   }}
                 />
-                <span className="auth-boot__shocker-copy">
-                  <span className="auth-boot__shocker-name">Enable command queue</span>
-                  <span className="auth-boot__shocker-hub">
-                    Line up incoming shocks instead of firing them all at once
-                  </span>
-                </span>
-              </label>
-
-              {queue.enabled ? (
-                <div className="setup-limits-block">
-                  <div className="setup-limits-block__title">Queue settings</div>
-                  <LimitSlider
-                    label="Advance after"
-                    value={Math.max(0, queue.progressMs)}
-                    min={0}
-                    max={15_000}
-                    step={500}
-                    formatValue={(ms) => (ms <= 0 ? 'Command length' : formatDurationMs(ms))}
-                    disabled={busy}
-                    onChange={(progressMs) => {
-                      setQueueTouched(true);
-                      setQueue((q) => ({ ...q, progressMs }));
-                    }}
-                  />
-                  <LimitSlider
-                    label="Commands ahead per person"
-                    value={queue.maxPerSender}
-                    min={1}
-                    max={100}
-                    step={1}
-                    formatValue={(n) => String(n)}
-                    disabled={busy}
-                    onChange={(maxPerSender) => {
-                      setQueueTouched(true);
-                      setQueue((q) => ({ ...q, maxPerSender }));
-                    }}
-                  />
-                  <label className={`auth-boot__shocker${queue.starOnly ? ' is-on' : ''}`}>
-                    <input
-                      type="checkbox"
-                      checked={queue.starOnly}
-                      disabled={busy}
-                      onChange={(e) => {
-                        setQueueTouched(true);
-                        setQueue((q) => ({ ...q, starOnly: e.target.checked }));
-                      }}
-                    />
-                    <span className="auth-boot__shocker-copy">
-                      <span className="auth-boot__shocker-name">Stars only</span>
-                      <span className="auth-boot__shocker-hub">
-                        Only people you star can control your shockers
-                      </span>
-                    </span>
-                  </label>
-                </div>
-              ) : null}
+              </div>
 
               <div className="auth-boot__actions">
                 <button
                   type="button"
-                  className="q-btn q-btn-item non-selectable no-outline text-grey-4 bg-dark q-btn--outline q-btn--rectangle q-btn--actionable"
+                  className="q-btn q-btn-item non-selectable no-outline text-secondary bg-dark q-btn--outline q-btn--rectangle q-btn--actionable"
                   disabled={busy}
                   onClick={() => go('limits', 'back')}
+                >
+                  <span className="q-btn__wrapper col row q-anchor--skip">
+                    <span className="q-btn__content text-center col items-center q-anchor--skip justify-center row">
+                      <span className="block">Back</span>
+                    </span>
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  className="q-btn q-btn-item non-selectable no-outline bg-secondary text-dark q-btn--standard q-btn--rectangle q-btn--actionable"
+                  disabled={busy}
+                  onClick={() => (hasExtras ? go('features', 'forward') : submit(false))}
+                >
+                  <span className="q-btn__wrapper col row q-anchor--skip">
+                    <span className="q-btn__content text-center col items-center q-anchor--skip justify-center row no-wrap">
+                      {busy ? (
+                        <i className="q-icon on-left mdi mdi-loading mdi-spin" aria-hidden />
+                      ) : null}
+                      <span className="block">
+                        {busy ? 'Saving…' : hasExtras ? 'Next: extras' : 'Finish setup'}
+                      </span>
+                    </span>
+                  </span>
+                </button>
+              </div>
+            </>
+          ) : null}
+
+          {step === 'features' ? (
+            <>
+              <h2 id="setup-share-title" className="auth-boot__heading">
+                Want to control extra features?
+              </h2>
+              <p className="auth-boot__hint">
+                Optional — everything here can be changed later from the menu.
+              </p>
+
+              {error ? (
+                <div className="auth-boot__error">
+                  <div className="auth-boot__error-title">Couldn’t save</div>
+                  <p>{error}</p>
+                </div>
+              ) : null}
+
+              <SafetyFeaturesForm
+                value={safety}
+                disabled={busy}
+                queueEnabled={queue.enabled}
+                onChange={(next) => {
+                  setSafetyTouched(true);
+                  setSafety(next);
+                  if (next.favoritesOnly !== safety.favoritesOnly) {
+                    // Same setting as the queue's stars-only flag.
+                    setQueueTouched(true);
+                    setQueue((q) => ({ ...q, starOnly: next.favoritesOnly }));
+                  }
+                }}
+                leading={hasExtras ? (
+                  <section className={`setup-feature${openFeature === 'queue' ? ' is-open' : ''}`}>
+                    <button
+                      type="button"
+                      className="setup-feature__head"
+                      aria-expanded={openFeature === 'queue'}
+                      onClick={() => setOpenFeature((f) => (f === 'queue' ? null : 'queue'))}
+                    >
+                      <span className="setup-feature__icon">
+                        <i className="q-icon mdi mdi-format-list-numbered" aria-hidden />
+                      </span>
+                      <span>
+                        <span className="setup-feature__title">Command queue</span>
+                        <span className="setup-feature__summary">
+                          {queue.enabled
+                            ? 'On — incoming commands run one at a time'
+                            : 'Off — commands from several people fire immediately'}
+                        </span>
+                      </span>
+                      <i
+                        className={`q-icon mdi setup-feature__chevron ${
+                          openFeature === 'queue' ? 'mdi-chevron-up' : 'mdi-chevron-down'
+                        }`}
+                        aria-hidden
+                      />
+                    </button>
+                    {openFeature === 'queue' ? (
+                      <div className="setup-feature__body">
+                        <p className="auth-boot__hint" style={{ textAlign: 'left' }}>
+                          When several people control your shared shockers, a queue runs their
+                          commands one at a time.
+                        </p>
+                    <label className={`auth-boot__shocker${queue.enabled ? ' is-on' : ''}`}>
+                      <input
+                        type="checkbox"
+                        checked={queue.enabled}
+                        disabled={busy}
+                        onChange={(e) => {
+                          setQueueTouched(true);
+                          setQueue((q) => ({ ...q, enabled: e.target.checked }));
+                        }}
+                      />
+                      <span className="auth-boot__shocker-copy">
+                        <span className="auth-boot__shocker-name">Enable command queue</span>
+                        <span className="auth-boot__shocker-hub">
+                          Line up incoming shocks instead of firing them all at once
+                        </span>
+                      </span>
+                    </label>
+
+                    {queue.enabled ? (
+                      <div className="setup-limits-block">
+                        <div className="setup-limits-block__title">Queue settings</div>
+                        <LimitSlider
+                          label="Advance after"
+                          value={Math.max(0, queue.progressMs)}
+                          min={0}
+                          max={15_000}
+                          step={500}
+                          formatValue={(ms) => (ms <= 0 ? 'Command length' : formatDurationMs(ms))}
+                          disabled={busy}
+                          onChange={(progressMs) => {
+                            setQueueTouched(true);
+                            setQueue((q) => ({ ...q, progressMs }));
+                          }}
+                        />
+                        <LimitSlider
+                          label="Commands ahead per person"
+                          value={queue.maxPerSender}
+                          min={1}
+                          max={100}
+                          step={1}
+                          formatValue={(n) => String(n)}
+                          disabled={busy}
+                          onChange={(maxPerSender) => {
+                            setQueueTouched(true);
+                            setQueue((q) => ({ ...q, maxPerSender }));
+                          }}
+                        />
+                      </div>
+                    ) : null}
+
+                      </div>
+                    ) : null}
+                  </section>
+                ) : null}
+              />
+
+              <div className="auth-boot__actions">
+                <button
+                  type="button"
+                  className="q-btn q-btn-item non-selectable no-outline text-secondary bg-dark q-btn--outline q-btn--rectangle q-btn--actionable"
+                  disabled={busy}
+                  onClick={() => go('logs', 'back')}
                 >
                   <span className="q-btn__wrapper col row q-anchor--skip">
                     <span className="q-btn__content text-center col items-center q-anchor--skip justify-center row">

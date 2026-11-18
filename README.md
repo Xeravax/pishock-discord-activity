@@ -52,6 +52,7 @@ By using this application, you acknowledge that you have read, understood, and a
 - **Activity Logging**: Commands logged for transparency and accountability
 - **Consent Gate**: Safety warnings and acknowledgment required before use
 - **Ban System**: Block specific Discord users from controlling your devices
+- **Global bans (admins)**: App-wide ban with a documented reason; banned users see a dedicated screen
 - **Owner E-STOP**: Latched emergency stop per shocker; blocks all commands until released
 - **Encrypted Credentials**: PiShock tokens encrypted at rest with AES-256-GCM
 - **Instance Verification**: Optional Discord Activity Instance checks via bot token
@@ -198,6 +199,9 @@ Copy [`.env.example`](.env.example) → `.env` and set:
 | `TOKEN_KEY` | ✅ | 32-byte key for AES-256-GCM (64 hex chars, or any string hashed to SHA-256) |
 | `PUBLIC_URL` | ✅ | Public HTTPS URL Discord points at |
 | `PORT` | Optional | Host port mapped to the app (default `3000`) |
+| `ADMIN_DISCORD_USER_IDS` | Optional | Comma-separated admin Discord ids (admin bypass; always logged and notified) |
+| `DISCORD_COMMUNITY_GUILD_ID` | Optional | Guild users can join for recap DMs (default set; `off` disables). Bot needs Create Invite there |
+| `DISCORD_COMMUNITY_INVITE_URL` | Optional | Invite link shown when the OAuth join is declined |
 | `PISHOCK_IMAGE` | Optional | Override GHCR image when using `docker-compose.ghcr.yml` |
 
 **Security notes**
@@ -241,6 +245,18 @@ Copy [`.env.example`](.env.example) → `.env` and set:
 - Ban unwanted Discord users from controlling your devices
 - Owner emergency stop latch
 - Safety notice / reminders in the UI
+
+### Admin panel
+Admins listed in `ADMIN_DISCORD_USER_IDS` get an **Admin panel** entry in the in-app Menu. Every call is re-checked on the server (non-admins get a plain 404). The panel covers:
+
+- **Overview** — live sockets/users, command counts, active bans, E-STOPs, version/uptime
+- **People** — search by name or Discord id; open a privacy-safe profile (counts and on/off flags only — no PiShock keys, share codes, device names, or who shocked whom). Profile views are written to the admin audit log
+- **Bans** — ban or lift with a required reason the user will see; optional length (1 day … permanent). On ban: their shares are paused, their queue is cleared, and their live sockets are closed
+- **Audit log** — recent admin actions
+- **Notice** — short app-wide banner shown to everyone (info or warning; optional auto-hide)
+
+#### Global bans
+A globally banned account cannot use the activity: the auth hook refuses every API path except `/api/me` (returns the ban) and their GDPR/AVG data rights (`/api/me/data`, export, deletion). Operate, shares, roulette, and realtime sockets are blocked. The client shows a full-screen **You have been banned** UI with the reason, length, reference id, appeal link (`DISCORD_COMMUNITY_INVITE_URL`), and a My data button. Lifting a ban keeps their shares paused until they turn them back on.
 
 ---
 
@@ -288,6 +304,9 @@ npm run dev:client   # Vite UI (separate terminal)
 | `TOKEN_KEY` | Runtime | Yes | AES-256-GCM key material |
 | `PUBLIC_URL` | Runtime | Yes | Public activity origin |
 | `PORT` | Runtime | No | Listen / host port (default 3000) |
+| `ADMIN_DISCORD_USER_IDS` | Runtime | No | Admin bypass ids; exceeding limits needs the wearer's consent |
+| `DISCORD_COMMUNITY_GUILD_ID` | Runtime | No | Community guild for recap DMs (`off` disables) |
+| `DISCORD_COMMUNITY_INVITE_URL` | Runtime | No | Fallback invite link |
 | `TRUST_PROXY` | Runtime | Optional | `1` behind a reverse proxy so rate limits see real client IPs |
 | `RATE_LIMIT_MAX` | Runtime | Optional | API requests/minute per caller (default 600) |
 | `CSP_ENFORCE` | Runtime | Optional | `1` to enforce the Content-Security-Policy (default: report-only) |

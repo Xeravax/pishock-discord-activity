@@ -1,6 +1,14 @@
 import { prisma } from '../db.js';
 import { normalizeWarningLevel, type WarningLevel } from '../../shared/warning.js';
 import { findActivityShareByShocker } from './activity-limits.js';
+import {
+  LOG_PRIVACY_SELECT,
+  DEFAULT_LOG_PRIVACY,
+  applyLogPrivacy,
+  logPrivacyFromColumns,
+  type LogViewer,
+  type PublicLogRow,
+} from '../log-privacy.js';
 
 export type CommandLogSource = 'discord' | 'website';
 
@@ -103,6 +111,9 @@ export async function logCommand(input: {
   locationName?: string | null;
   locationIconUrl?: string | null;
   externalLogKey?: string | null;
+  /** Admin used bypass on this command. */
+  adminBypass?: boolean;
+  bypassedGates?: string[];
 }) {
   const ownerId = input.targetDiscordUserId || input.discordUserId;
   const needsShareLookup =
@@ -148,6 +159,8 @@ export async function logCommand(input: {
       locationName: input.locationName ?? undefined,
       locationIconUrl: input.locationIconUrl ?? undefined,
       externalLogKey: input.externalLogKey ?? undefined,
+      adminBypass: Boolean(input.adminBypass),
+      bypassedGates: input.bypassedGates ?? [],
     },
   });
 }
@@ -249,7 +262,7 @@ function publicLogPerson(
  * Dedupes dual participant writes by keeping the target's copy only.
  * Never returns share codes.
  */
-export async function listPublicCommandLogs(limit = 200) {
+export async function listPublicCommandLogs(limit = 200, viewer?: LogViewer | null) {
   const take = Math.max(1, Math.min(250, limit));
   const rows = await prisma.commandLog.findMany({
     where: {
@@ -258,7 +271,8 @@ export async function listPublicCommandLogs(limit = 200) {
       OR: [{ executorDiscordUserId: { not: null } }, { executorLabel: { not: null } }],
     },
     orderBy: { createdAt: 'desc' },
-    take: take * 3,
+    // Over-fetch: dual writes are deduped and privacy rules may hide rows.
+    take: take * 4,
     select: {
       id: true,
       discordUserId: true,
@@ -281,6 +295,8 @@ export async function listPublicCommandLogs(limit = 200) {
       guildId: true,
       channelId: true,
       createdAt: true,
+      adminBypass: true,
+      bypassedGates: true,
     },
   });
 
@@ -292,7 +308,7 @@ export async function listPublicCommandLogs(limit = 200) {
         isPublicLogAction(row.action) &&
         (row.executorDiscordUserId || row.executorLabel),
     )
-    .slice(0, take);
+    .slice(0, take * 2);
 
   const metaByKey = await activityShareLogMetaMap(
     deduped
@@ -310,20 +326,21 @@ export async function listPublicCommandLogs(limit = 200) {
 
   const userIds = [
     ...new Set(
-      deduped.flatMap(
-        (row) => [row.executorDiscordUserId, row.targetDiscordUserId].filter(Boolean) as string[],
+      deduped.flatMap((row) =>
+        [row.executorDiscordUserId, row.targetDiscordUserId].filter(Boolean) as string[],
       ),
     ),
   ];
   const users = userIds.length
     ? await prisma.discordUser.findMany({
         where: { id: { in: userIds } },
-        select: { id: true, username: true, globalName: true, avatar: true },
+        select: { id: true, username: true, globalName: true, avatar: true, ...LOG_PRIVACY_SELECT },
       })
     : [];
   const byId = new Map(users.map((u) => [u.id, u]));
+  const prefsById = new Map(users.map((u) => [u.id, logPrivacyFromColumns(u)]));
 
-  return deduped.map((row) => {
+  const shaped = deduped.map((row) => {
     const targetId = row.targetDiscordUserId!;
     const executorId = row.executorDiscordUserId;
     const executor = executorId
@@ -365,6 +382,27 @@ export async function listPublicCommandLogs(limit = 200) {
           : null,
       executor,
       target: publicLogPerson(byId.get(targetId), targetId),
-    };
+      adminBypass: row.adminBypass,
+      bypassedGates: row.bypassedGates,
+    } satisfies PublicLogRow;
   });
+
+  const out: PublicLogRow[] = [];
+  for (let i = 0; i < shaped.length && out.length < take; i++) {
+    const row = shaped[i]!;
+    const raw = deduped[i]!;
+    if (!viewer) {
+      out.push(row);
+      continue;
+    }
+    const visible = applyLogPrivacy(
+      row,
+      { guildId: raw.guildId, channelId: raw.channelId },
+      prefsById.get(raw.targetDiscordUserId!) ?? DEFAULT_LOG_PRIVACY,
+      raw.executorDiscordUserId ? (prefsById.get(raw.executorDiscordUserId) ?? null) : null,
+      viewer,
+    );
+    if (visible) out.push(visible);
+  }
+  return out;
 }

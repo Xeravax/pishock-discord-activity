@@ -1,5 +1,8 @@
 import { apiBase } from './api';
 import { getActivityInstanceId } from './discord';
+import type { ApprovalRequest } from './safety';
+
+export type AppNotice = { text: string; level: 'info' | 'warning'; expiresAt: string | null; updatedAt: string };
 
 export type RealtimeEvent =
   | {
@@ -105,6 +108,81 @@ export type RealtimeEvent =
       paused: boolean;
       estimatedWaitMs: number | null;
       estimatedStartAt: number | null;
+      at: number;
+    }
+  | ({ type: 'approval_request' } & Omit<ApprovalRequest, never>)
+  | {
+      type: 'approval_resolved';
+      approvalId: string;
+      ownerDiscordUserId: string;
+      executorDiscordUserId: string;
+      outcome: 'accepted' | 'denied' | 'expired' | 'canceled';
+      at: number;
+    }
+  | {
+      type: 'global_ban';
+      ban: { id: string; reason: string; createdAt: string; expiresAt: string | null };
+      at: number;
+    }
+  | { type: 'app_notice'; notice: AppNotice | null; at: number }
+  | { type: 'checkin_due'; ownerDiscordUserId: string; deadline: number; at: number }
+  | { type: 'checkin_missed'; ownerDiscordUserId: string; at: number }
+  | {
+      type: 'budget_exhausted';
+      ownerDiscordUserId: string;
+      usedShocks: number;
+      usedShockMs: number;
+      at: number;
+    }
+  | {
+      /** Wearer: an admin bypassed your gates / limits for this command (always shown, red). */
+      type: 'admin_bypass';
+      targetDiscordUserId: string;
+      adminDiscordUserId: string;
+      adminName: string | null;
+      action: string;
+      intensity: number;
+      durationMs: number;
+      gates: string[];
+      at: number;
+    }
+  | {
+      /** Room vote: someone wants to spin the roulette wheel on a participant. */
+      type: 'roulette_vote_open';
+      voteId: string;
+      targetDiscordUserId: string;
+      starterDiscordUserId: string;
+      actions: string[];
+      endsAt: number;
+      at: number;
+    }
+  | {
+      type: 'roulette_vote_closed';
+      voteId: string;
+      targetDiscordUserId: string;
+      outcome: 'passed' | 'failed' | 'vetoed' | 'canceled';
+      yes: number;
+      no: number;
+      at: number;
+    }
+  | {
+      /** Identical for every viewer: same segments, result and start time. */
+      type: 'roulette_spin';
+      spinId: string;
+      targetDiscordUserId: string;
+      starterDiscordUserId: string;
+      segments: Array<{ action: 'shock' | 'vibrate' | 'beep' | 'safe'; intensity: number; durationMs: number }>;
+      resultIndex: number;
+      startAt: number;
+      spinMs: number;
+      at: number;
+    }
+  | {
+      type: 'roulette_result';
+      spinId: string;
+      targetDiscordUserId: string;
+      outcome: 'sent' | 'queued' | 'safe' | 'refused';
+      message: string | null;
       at: number;
     }
   | {
@@ -214,6 +292,10 @@ export function connectRealtime(
         }
         if (data.type === 'hello_ok' && !authed) {
           afterAuth();
+        }
+        if (data.type === 'global_ban') {
+          // Banned from the app: the server closes the socket; don't keep reconnecting.
+          closed = true;
         }
         onEvent(data);
       } catch {

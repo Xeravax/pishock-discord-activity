@@ -7,7 +7,10 @@ import {
   formatDurationSec,
   intensityLabel,
   loadControlPrefs,
+  migratePerShockIntensity,
+  multiColorKey,
   nudgeIntensity,
+  planMultiFire,
   rollIntensity,
   saveControlPrefs,
   shockerUsableDur,
@@ -134,5 +137,150 @@ describe('control prefs persistence', () => {
       JSON.stringify({ perShockIntensity: { a: 5, b: 'x', c: null, d: 7 } }),
     );
     expect(loadControlPrefs().perShockIntensity).toEqual({ a: 5, d: 7 });
+  });
+
+  it('migrates legacy per-shocker intensities into perTarget', () => {
+    localStorage.setItem(
+      CONTROL_PREFS_KEY,
+      JSON.stringify({ shockDurationMs: 800, warningLevel: 'mid', perShockIntensity: { a: 5, b: 'x' } }),
+    );
+    expect(loadControlPrefs().perTarget).toEqual({
+      a: { operation: 'shock', intensity: 5, durationMs: 800, warningLevel: 'mid' },
+    });
+  });
+
+  it('sanitises stored perTarget entries', () => {
+    localStorage.setItem(
+      CONTROL_PREFS_KEY,
+      JSON.stringify({
+        perTarget: {
+          a: { operation: 'zap', intensity: 'x', durationMs: null, warningLevel: 'huge' },
+          b: 'junk',
+        },
+      }),
+    );
+    const { perTarget } = loadControlPrefs();
+    expect(Object.keys(perTarget)).toEqual(['a']);
+    expect(perTarget.a!.operation).toBe('shock');
+    expect(Number.isFinite(perTarget.a!.intensity)).toBe(true);
+    expect(Number.isFinite(perTarget.a!.durationMs)).toBe(true);
+    expect(perTarget.a!.warningLevel).toBe('none');
+  });
+});
+
+describe('migratePerShockIntensity', () => {
+  const defaults = { intensity: 10, durationMs: 1000, warningLevel: 'none' as const };
+
+  it('never overwrites an existing perTarget entry', () => {
+    const existing = {
+      a: { operation: 'vibrate' as const, intensity: 40, durationMs: 2000, warningLevel: 'none' as const },
+    };
+    const next = migratePerShockIntensity({ a: 5, b: 7 }, existing, defaults);
+    expect(next.a).toEqual(existing.a);
+    expect(next.b).toEqual({ operation: 'shock', intensity: 7, durationMs: 1000, warningLevel: 'none' });
+  });
+
+  it('skips non-finite legacy values', () => {
+    expect(migratePerShockIntensity({ a: Number.NaN, b: Infinity }, {}, defaults)).toEqual({});
+  });
+});
+
+describe('planMultiFire', () => {
+  const target = (over: Partial<ShockerView> = {}) =>
+    ({
+      id: 1,
+      name: 'S',
+      owned: true,
+      canShock: true,
+      canVibrate: true,
+      canBeep: true,
+      canHold: false,
+      deviceMaxIntensity: 100,
+      deviceMaxDuration: 15_000,
+      activityMaxIntensity: 30,
+      activityMaxDuration: 2_000,
+      vibMaxIntensity: 80,
+      vibMaxDuration: 5_000,
+      ...over,
+    }) as ShockerView;
+  const uniform = {
+    operation: 'shock' as const,
+    intensity: 90,
+    durationMs: 10_000,
+    warningLevel: 'none' as const,
+    individual: false,
+  };
+
+  it('clamps each target to its own band for the chosen action', () => {
+    const a = target({ id: 1, activityMaxIntensity: 20 });
+    const b = target({ id: 2, activityMaxIntensity: 60, activityMaxDuration: 4_000 });
+    const shock = planMultiFire([a, b], {}, uniform);
+    expect(shock.ready.map((x) => [x.intensity, x.durationMs])).toEqual([
+      [20, 2_000],
+      [60, 4_000],
+    ]);
+    const vibe = planMultiFire([a, b], {}, { ...uniform, operation: 'vibrate' });
+    expect(vibe.ready.map((x) => [x.intensity, x.durationMs])).toEqual([
+      [80, 5_000],
+      [80, 5_000],
+    ]);
+  });
+
+  it('raises values up to the minimum band and never sends 0 %', () => {
+    const s = target({ minIntensity: 5, minDuration: 500 });
+    const plan = planMultiFire([s], {}, { ...uniform, intensity: 0, durationMs: 16 });
+    expect(plan.ready[0]).toMatchObject({ intensity: 5, durationMs: 500 });
+  });
+
+  it('individual mode uses each target settings, still clamped to that action band', () => {
+    const a = target({ id: 1 });
+    const b = target({ id: 2 });
+    const perTarget = {
+      [multiColorKey(a)]: { operation: 'vibrate' as const, intensity: 99, durationMs: 9_000, warningLevel: 'long' as const },
+      [multiColorKey(b)]: { operation: 'shock' as const, intensity: 25, durationMs: 1_500, warningLevel: 'small' as const },
+    };
+    const plan = planMultiFire([a, b], perTarget, { ...uniform, individual: true });
+    expect(plan.ready).toEqual([
+      expect.objectContaining({ operation: 'vibrate', intensity: 80, durationMs: 5_000, warningLevel: 'none' }),
+      expect.objectContaining({ operation: 'shock', intensity: 25, durationMs: 1_500, warningLevel: 'small' }),
+    ]);
+    // Uniform mode ignores the stored settings.
+    expect(planMultiFire([a], perTarget, uniform).ready[0]).toMatchObject({ operation: 'shock', intensity: 30 });
+  });
+
+  it('skips targets that do not allow the chosen action', () => {
+    const a = target({ id: 1, canShock: false });
+    const b = target({ id: 2, canVibrate: false });
+    const plan = planMultiFire([a, b], {}, uniform);
+    expect(plan.ready.map((x) => x.shocker.id)).toEqual([2]);
+    expect(plan.skipped).toEqual([{ shocker: a, reason: 'shock not allowed' }]);
+    const indiv = planMultiFire(
+      [b],
+      { [multiColorKey(b)]: { operation: 'vibrate', intensity: 10, durationMs: 300, warningLevel: 'none' } },
+      { ...uniform, individual: true },
+    );
+    expect(indiv.ready).toEqual([]);
+    expect(indiv.skipped[0]!.reason).toBe('vibrate not allowed');
+  });
+
+  it('never goes below the wearer-required warning', () => {
+    const s = target({ requiredWarningLevel: 'mid' });
+    expect(planMultiFire([s], {}, uniform).ready[0]!.warningLevel).toBe('mid');
+    expect(planMultiFire([s], {}, { ...uniform, warningLevel: 'long' }).ready[0]!.warningLevel).toBe('long');
+    const perTarget = {
+      [multiColorKey(s)]: { operation: 'shock' as const, intensity: 10, durationMs: 300, warningLevel: 'none' as const },
+    };
+    expect(
+      planMultiFire([s], perTarget, { ...uniform, individual: true }).ready[0]!.warningLevel,
+    ).toBe('mid');
+  });
+
+  it('skips E-STOP and paused targets', () => {
+    const stopped = target({ id: 1, emergencyStop: true });
+    const paused = target({ id: 2, paused: true });
+    const ok = target({ id: 3 });
+    const plan = planMultiFire([stopped, paused, ok], {}, uniform);
+    expect(plan.ready.map((x) => x.shocker.id)).toEqual([3]);
+    expect(plan.skipped.map((x) => x.reason)).toEqual(['E-STOP', 'paused']);
   });
 });
