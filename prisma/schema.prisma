@@ -38,6 +38,21 @@ model DiscordUser {
   commandQueueMaxPerSender Int @default(3)
   /// When true, only starred participants may operate this wearer's shared shockers.
   commandQueueStarOnly Boolean @default(false)
+  /// Log sharing: where other people can see hits on you (everywhere|server|channel|private).
+  logVisibility      String  @default("everywhere")
+  /// Log sharing: what other people can see about hits on you.
+  logShowSender      Boolean @default(true)
+  logShowDevice      Boolean @default(true)
+  logShowIntensity   Boolean @default(true)
+  logShowLocation    Boolean @default(true)
+  /// Log sharing: which actions on you appear in the shared feed.
+  logIncludeShock    Boolean @default(true)
+  logIncludeVibrate  Boolean @default(true)
+  logIncludeBeep     Boolean @default(true)
+  /// Log sharing: whether other people may create share images of hits on you.
+  logAllowShareCards Boolean @default(true)
+  /// Log sharing: appear as "Someone" to third parties when you send commands.
+  logHideMeAsSender  Boolean @default(false)
   createdAt      DateTime        @default(now())
   updatedAt      DateTime        @updatedAt
   pishockSession PiShockSession?

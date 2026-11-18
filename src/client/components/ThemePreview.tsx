@@ -13,6 +13,8 @@ import { PsDialog } from './PsDialog';
 import { SetupDiscordShareScreen } from './SetupDiscordShareScreen';
 import { SetupWizard } from './SetupWizard';
 import { SharesPanel } from './SharesPanel';
+import { DEFAULT_LOG_PRIVACY, LogPrivacySettings } from './LogPrivacySettings';
+import { renderLogShareCard } from '../logShareCard';
 import type { ShockerView } from './ShockerCard';
 import type { DiscordParticipant } from '../participants';
 
@@ -31,11 +33,14 @@ type Boot =
   | 'api-key'
   | 'confirm'
   | 'setup'
+  | 'setup-limits'
+  | 'setup-features'
   | 'default-menu';
 
-type Dialog = 'limits' | 'availability' | 'shares' | 'login' | 'logs';
+type Dialog = 'limits' | 'limits-shared' | 'availability' | 'shares' | 'login' | 'logs' | 'log-privacy';
 
 const NOOP = () => {};
+const loadDemoLogPrivacy = async () => ({ ...DEFAULT_LOG_PRIVACY, visibility: 'server' as const, showIntensity: false });
 
 /** Wide mock profile banner (3:1) so the confirm preview shows the full image */
 const DEMO_BANNER = `data:image/svg+xml;utf8,${encodeURIComponent(
@@ -142,6 +147,56 @@ const LOGS: OfficialLogEntry[] = [
   },
 ];
 
+const SHARE_SAMPLES: OfficialLogEntry[] = [
+  {
+    ...LOGS[0]!,
+    id: 's1',
+    from: person('3', 'Xeravax'),
+    to: person('111', 'RogerfireFox the Magnificent'),
+    location: { kind: 'guild', name: 'The Basement', guildId: '1' },
+    intensity: 42,
+  },
+  {
+    ...LOGS[1]!,
+    id: 's2',
+    from: person('4', 'A very long display name 🎉'),
+    to: person('5', 'Bo'),
+    location: { kind: 'dm', name: 'Direct Message' },
+  },
+];
+
+/** Renders real share-card GIFs so their layout can be reviewed */
+function ShareCardPreview() {
+  const [urls, setUrls] = useState<string[]>([]);
+  useEffect(() => {
+    let cancelled = false;
+    const made: string[] = [];
+    void (async () => {
+      for (const entry of SHARE_SAMPLES) {
+        try {
+          const blob = await renderLogShareCard(entry);
+          made.push(URL.createObjectURL(blob));
+        } catch {
+          /* ignore in preview */
+        }
+      }
+      if (!cancelled) setUrls([...made]);
+    })();
+    return () => {
+      cancelled = true;
+      made.forEach((u) => URL.revokeObjectURL(u));
+    };
+  }, []);
+  if (!urls.length) return <p className="muted">Rendering share cards…</p>;
+  return (
+    <div className="theme-preview__stack">
+      {urls.map((u) => (
+        <img key={u} src={u} alt="Share card preview" className="theme-preview__card" />
+      ))}
+    </div>
+  );
+}
+
 /** Auth loading screen with a looping fake progress so the bar animates */
 function LoadingPreview({ error }: { error?: boolean }) {
   const [progress, setProgress] = useState(12);
@@ -197,6 +252,8 @@ export function ThemePreview({
     ['api-key', 'API key reveal'],
     ['confirm', 'Confirm account'],
     ['setup', 'Discord share setup'],
+    ['setup-limits', 'Setup: limits'],
+    ['setup-features', 'Setup: extra features'],
     ['default-menu', 'Default menu'],
   ];
   const dialogs: Array<[Dialog, string]> = [
@@ -205,6 +262,7 @@ export function ThemePreview({
     ['shares', 'Shares'],
     ['login', 'Link PiShock'],
     ['logs', 'Logs'],
+    ['log-privacy', 'Log sharing'],
   ];
 
   let bootEl: ReactNode = null;
@@ -266,10 +324,15 @@ export function ThemePreview({
       );
       break;
     case 'setup':
+    case 'setup-limits':
+    case 'setup-features':
       bootEl = (
         <SetupDiscordShareScreen
           shockers={shockers}
           initialPersonal={PERSONAL}
+          startStep={
+            boot === 'setup-limits' ? 'limits' : boot === 'setup-features' ? 'features' : undefined
+          }
           devicesReady
           onComplete={() => setBoot(null)}
           onSkip={() => setBoot(null)}
@@ -316,6 +379,13 @@ export function ThemePreview({
           </div>
         </section>
 
+        {new URLSearchParams(window.location.search).has('cards') ? (
+          <section className="panel">
+            <div className="ps-section-title">Share cards</div>
+            <ShareCardPreview />
+          </section>
+        ) : null}
+
         <section className="panel">
           <div className="ps-section-title">Primitives</div>
           <div className="theme-preview__stack">
@@ -347,9 +417,15 @@ export function ThemePreview({
         </>
       ) : null}
 
-      <PsDialog open={dialog === 'limits'} title="Activity limits" onClose={() => setDialog(null)} fill>
+      <PsDialog
+        open={dialog === 'limits' || dialog === 'limits-shared'}
+        title="Activity limits"
+        onClose={() => setDialog(null)}
+        fill
+      >
         <ActivityLimitsSettings
           ownedShockers={owned}
+          focusShockerId={dialog === 'limits-shared' ? (owned[0]?.id ?? null) : null}
           onLoad={async () => ({ personal: PERSONAL, shares: owned.map(shareRow) })}
           onSave={async () => onFlash('Would save limits')}
           onRevokeConsent={() => onFlash('Would revoke consent')}
@@ -385,6 +461,16 @@ export function ThemePreview({
           onOpen={NOOP}
           onRefresh={NOOP}
           onManualSubmit={() => onFlash('Would validate API key')}
+        />
+      </PsDialog>
+
+      <PsDialog open={dialog === 'log-privacy'} title="Log sharing" onClose={() => setDialog(null)} wide>
+        <LogPrivacySettings
+          onLoad={loadDemoLogPrivacy}
+          onSave={async (v) => {
+            onFlash('Would save log sharing settings');
+            return v;
+          }}
         />
       </PsDialog>
 

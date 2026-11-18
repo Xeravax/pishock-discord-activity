@@ -1,32 +1,15 @@
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useState } from 'react';
 import type { ShockerView } from './ShockerCard';
 import { ModeLimitsEditor, type ModeLimitsValue } from './ModeLimitsEditor';
+import {
+  EffectiveCap,
+  LimitsTabs,
+  PersonalLimitsExplainer,
+  SharedLimitsExplainer,
+  TabPanel,
+  type LimitsTab,
+} from './LimitsTabs';
 import { normalizeWarningLevel, type WarningLevel } from '../../shared/warning';
-
-export function LimitsPane({
-  title,
-  open,
-  onToggle,
-  children,
-}: {
-  title: string;
-  open: boolean;
-  onToggle: () => void;
-  children: ReactNode;
-}) {
-  return (
-    <section className={`setup-limits-pane${open ? ' is-open' : ' is-collapsed'}`}>
-      <button type="button" className="setup-limits-pane__toggle" onClick={onToggle}>
-        <span className="setup-limits-pane__title">{title}</span>
-        <i
-          className={`q-icon mdi ${open ? 'mdi-chevron-down' : 'mdi-chevron-right'}`}
-          aria-hidden
-        />
-      </button>
-      {open ? <div className="setup-limits-pane__body">{children}</div> : null}
-    </section>
-  );
-}
 
 export type PersonalLimits = {
   activityMinIntensity: number;
@@ -251,8 +234,7 @@ export function ActivityLimitsSettings({
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
-  const [personalOpen, setPersonalOpen] = useState(true);
-  const [sharesOpen, setSharesOpen] = useState(true);
+  const [tab, setTab] = useState<LimitsTab>(focusShockerId != null ? 'shared' : 'personal');
 
   useEffect(() => {
     let cancelled = false;
@@ -277,7 +259,7 @@ export function ActivityLimitsSettings({
 
   useEffect(() => {
     if (focusShockerId == null) return;
-    setSharesOpen(true);
+    setTab('shared');
   }, [focusShockerId]);
 
   useEffect(() => {
@@ -285,7 +267,7 @@ export function ActivityLimitsSettings({
     document
       .getElementById(`activity-limit-shocker-${focusShockerId}`)
       ?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-  }, [loaded, focusShockerId, sharesOpen]);
+  }, [loaded, focusShockerId, tab]);
 
   const save = async () => {
     setSaving(true);
@@ -343,8 +325,8 @@ export function ActivityLimitsSettings({
   return (
     <div className="activity-limits-shell">
       <div className="activity-limits-shell__intro text-grey-5 text-body2">
-        Expand a section, then toggle and open each action separately. Collapse what you are not
-        editing so the rest can use the space.
+        Your own limits and the limits for shockers you share to Discord are set separately. Your
+        own limits always cap what shared shockers can do.
       </div>
 
       {error ? (
@@ -358,20 +340,11 @@ export function ActivityLimitsSettings({
         </div>
       ) : null}
 
-      <div
-        className={`setup-limits-split activity-limits-shell__split${
-          ownedShockers.length > 0 ? '' : ' setup-limits-split--single'
-        }`}
-      >
-        <LimitsPane
-          title="Your own devices"
-          open={personalOpen}
-          onToggle={() => setPersonalOpen((open) => !open)}
-        >
-          <p className="text-grey-5 text-caption q-mb-sm">
-            These ranges are the saved limits for your own devices, and the starting point for a
-            new share. Turn Shock, Vibrate, Beep, and Hold on or off on each shared shocker.
-          </p>
+      <LimitsTabs value={tab} onChange={setTab} sharedCount={shares.length} />
+
+      {tab === 'personal' ? (
+        <TabPanel>
+          <PersonalLimitsExplainer />
           <ModeLimitsEditor
             value={personalToMode(personal)}
             deviceMaxIntensity={100}
@@ -383,14 +356,11 @@ export function ActivityLimitsSettings({
               setPersonal((p) => modeToPersonal(m, p));
             }}
           />
-        </LimitsPane>
-
-        {ownedShockers.length > 0 ? (
-          <LimitsPane
-            title="Discord Shockers you share"
-            open={sharesOpen}
-            onToggle={() => setSharesOpen((open) => !open)}
-          >
+        </TabPanel>
+      ) : (
+        <TabPanel>
+          <SharedLimitsExplainer personal={personalToMode(personal)} />
+          {ownedShockers.length > 0 ? (
             <div className="ps-row-list">
               {ownedShockers.map((s) => {
                 const row = shares.find((x) => x.shockerId === s.id);
@@ -425,6 +395,12 @@ export function ActivityLimitsSettings({
                     </label>
                     {row ? (
                       <div className="column q-gutter-sm q-mt-sm">
+                        <EffectiveCap
+                          share={shareToMode(row)}
+                          personal={personalToMode(personal)}
+                          deviceMaxIntensity={row.deviceMaxIntensity}
+                          deviceMaxDurationMs={row.deviceMaxDurationMs}
+                        />
                         <ModeLimitsEditor
                           value={shareToMode(row)}
                           deviceMaxIntensity={row.deviceMaxIntensity}
@@ -457,11 +433,11 @@ export function ActivityLimitsSettings({
                 );
               })}
             </div>
-          </LimitsPane>
-        ) : (
-          <div className="text-grey-5 setup-limits-split__empty">No owned shockers loaded.</div>
-        )}
-      </div>
+          ) : (
+            <div className="ps-empty">No owned shockers loaded.</div>
+          )}
+        </TabPanel>
+      )}
 
       <div className="row justify-between items-center q-gutter-sm activity-limits-shell__footer">
         {onRevokeConsent ? (

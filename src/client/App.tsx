@@ -80,6 +80,11 @@ import {
   type SetupChoices,
 } from './components/SetupWizard';
 import { SetupDiscordShareScreen } from './components/SetupDiscordShareScreen';
+import {
+  LogPrivacySettings,
+  normalizeLogPrivacy,
+  type LogPrivacy,
+} from './components/LogPrivacySettings';
 import type { ActivityShareConfig } from './components/AvailabilitySettings';
 import type { DiscordParticipant, ParticipantStatus } from './participants';
 import { connectRealtime, type RealtimeEvent } from './realtime';
@@ -118,6 +123,14 @@ type SenderQueueTicket = {
   at: number;
 };
 
+/** Logs query; the instance id lets the server apply "same server / channel" log scopes. */
+function logsQuery(): string {
+  const instanceId = getActivityInstanceId();
+  return instanceId
+    ? `/logs?limit=200&instanceId=${encodeURIComponent(instanceId)}`
+    : '/logs?limit=200';
+}
+
 function formatQueueEta(waitMs: number | null | undefined): string | null {
   if (waitMs == null || !Number.isFinite(waitMs)) return null;
   if (waitMs <= 0) return 'now';
@@ -135,7 +148,7 @@ type DevicesResponse = {
   online: Record<string, boolean>;
 };
 
-type Overlay = null | 'menu' | 'availability' | 'settings' | 'shares' | 'logs' | 'link';
+type Overlay = null | 'menu' | 'availability' | 'settings' | 'shares' | 'logs' | 'link' | 'logPrivacy';
 
 type LegalView = null | 'terms' | 'privacy';
 
@@ -421,7 +434,7 @@ export function App() {
     const data = await apiFetch<{
       public?: Array<Record<string, unknown>>;
       activity?: Array<Record<string, unknown>>;
-    }>('/logs?limit=200', accessToken);
+    }>(logsQuery(), accessToken);
     const feed = normalizePublicLogs(
       (data.public ?? []) as Parameters<typeof normalizePublicLogs>[0],
       participantAvatarUrl,
@@ -2185,6 +2198,46 @@ export function App() {
     setDiscordShareLimits(next);
   }, []);
 
+  const [logPrivacy, setLogPrivacyState] = useState<LogPrivacy | null>(null);
+
+  useEffect(() => {
+    if (!token || !me?.consent) return;
+    let cancelled = false;
+    apiFetch<{ privacy?: Partial<LogPrivacy> }>('/logs/privacy', token)
+      .then((res) => {
+        if (!cancelled) setLogPrivacyState(normalizeLogPrivacy(res.privacy));
+      })
+      .catch(() => {
+        /* defaults are used until the user opens the settings */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [token, me?.consent]);
+
+  const loadLogPrivacy = useCallback(async (): Promise<LogPrivacy> => {
+    if (!token) throw new Error('Not signed in');
+    const res = await apiFetch<{ privacy?: Partial<LogPrivacy> }>('/logs/privacy', token);
+    const next = normalizeLogPrivacy(res.privacy);
+    setLogPrivacyState(next);
+    return next;
+  }, [token]);
+
+  const saveLogPrivacy = useCallback(
+    async (next: LogPrivacy): Promise<LogPrivacy> => {
+      if (!token) throw new Error('Not signed in');
+      const res = await apiFetch<{ privacy?: Partial<LogPrivacy> }>('/logs/privacy', token, {
+        method: 'PUT',
+        body: JSON.stringify(next),
+      });
+      const saved = normalizeLogPrivacy(res.privacy);
+      setLogPrivacyState(saved);
+      void refreshLogs(token).catch(() => {});
+      return saved;
+    },
+    [token, refreshLogs],
+  );
+
   const loadSettings = useCallback(async () => {
     if (!token) throw new Error('Not authenticated');
     const data = await apiFetch<{ personal: PersonalLimits; shares: ShareLimitRow[] }>(
@@ -2221,6 +2274,7 @@ export function App() {
       shares: ActivityShareConfig[];
       personal: PersonalLimits;
       queue?: QueuePanelSettings;
+      logPrivacy?: LogPrivacy;
     }) => {
       setSetupShareBusy(true);
       setLinkError(null);
@@ -2253,6 +2307,7 @@ export function App() {
           requiredWarningLevel: s.requiredWarningLevel ?? 'none',
         }));
         await saveSettings({ personal: result.personal, shares });
+        if (result.logPrivacy) await saveLogPrivacy(result.logPrivacy);
         if (result.queue && token) {
           const queueResult = await apiFetch<QueueState & { ok: boolean }>('/queue/settings', token, {
             method: 'POST',
@@ -2438,6 +2493,7 @@ export function App() {
         initialPersonal={personalLimits}
         initialSelectedIds={initialSelectedIds}
         initialShares={savedShareRows}
+        initialLogPrivacy={logPrivacy ?? undefined}
         initialQueue={{
           enabled: queueState.enabled,
           progressMs: queueState.progressMs,
@@ -2836,9 +2892,10 @@ export function App() {
                 ['settings', 'Activity Limits', 'mdi-tune'],
                 ['shares', 'Shares', 'mdi-share-variant'],
                 ['logs', 'Logs', 'mdi-message-text-clock'],
+                ['logPrivacy', 'Log sharing', 'mdi-eye-settings-outline'],
               ] as const
             )
-              .filter(([id]) => me.pishockLinked || id === 'logs')
+              .filter(([id]) => me.pishockLinked || id === 'logs' || id === 'logPrivacy')
               .map(([id, label, icon]) => (
               <button
                 key={id}
@@ -2851,6 +2908,10 @@ export function App() {
                   if (id === 'logs') {
                     setOverlay(null);
                     openOfficialLogs();
+                    return;
+                  }
+                  if (id === 'logPrivacy') {
+                    setOverlay('logPrivacy');
                     return;
                   }
                   if (id === 'settings') setSettingsFocusShockerId(null);
@@ -3032,6 +3093,15 @@ export function App() {
               setSettingsFocusShockerId(null);
             }}
           />
+        </PsDialog>
+
+        <PsDialog
+          open={overlay === 'logPrivacy'}
+          title="Log sharing"
+          onClose={() => setOverlay(null)}
+          wide
+        >
+          <LogPrivacySettings onLoad={loadLogPrivacy} onSave={saveLogPrivacy} />
         </PsDialog>
 
         <PsDialog open={overlay === 'shares'} title="Shares" onClose={() => setOverlay(null)} wide>

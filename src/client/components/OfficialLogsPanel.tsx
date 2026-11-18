@@ -36,6 +36,8 @@ export type OfficialLogEntry = {
   intensity: number | null;
   durationSec: number | null;
   at: number;
+  /** False when the wearer doesn't allow share images of this hit (server-decided). */
+  shareable?: boolean;
 };
 
 type Props = {
@@ -236,6 +238,7 @@ export function OfficialLogsPanel({
                 const hub = hubLabel(row);
                 const shareable =
                   canShareMoment &&
+                  row.shareable !== false &&
                   Boolean(onShareEntry) &&
                   canShareLogAction(row.action);
                 const sharing = sharingEntryId === row.id;
@@ -335,6 +338,7 @@ type PublicLogApiRow = {
   durationMs?: number | null;
   createdAt?: string;
   source?: string;
+  shareable?: boolean;
   location?: OfficialLogLocation | null;
   executor?: PublicLogPersonApi;
   target?: PublicLogPersonApi;
@@ -414,6 +418,7 @@ export function normalizePublicLogs(
       intensity,
       durationSec: durationMs != null ? Math.round((durationMs / 1000) * 10) / 10 : null,
       at,
+      shareable: row.shareable !== false,
     });
   });
   return out.sort((a, b) => b.at - a.at);

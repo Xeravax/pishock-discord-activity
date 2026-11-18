@@ -57,9 +57,12 @@ type Layout = {
   descent: number;
   fromLabel: string;
   toLabel: string;
+  /** Both chips share one width so the composition is mirror-symmetric. */
+  chipW: number;
   fromW: number;
   toW: number;
   heroY: number;
+  metaY: number;
   chipY: number;
   fromX: number;
   toX: number;
@@ -395,7 +398,12 @@ function drawPersonChip(
   ctx.font = `700 ${fontPx}px ${FONT}`;
   ctx.textAlign = 'left';
   ctx.textBaseline = 'middle';
-  ctx.fillText(label, x + chipTextInset(height), y + height / 2 + 1);
+  const inset = chipTextInset(height);
+  const rightPad = Math.max(34, Math.round(height * 0.38));
+  const lane = width - inset - rightPad;
+  const labelW = measureLabel(ctx, label, fontPx);
+  const textX = x + inset + Math.max(0, (lane - labelW) / 2);
+  ctx.fillText(label, textX, y + height / 2 + 1);
 }
 
 function drawDefaultDiscordIcon(
@@ -521,19 +529,50 @@ function fillTracked(
   }
 }
 
+/** Longest a name chip may grow before its label is truncated with an ellipsis. */
+const MAX_CHIP_W = 330;
+/** Content area between the header row (logo/title) and the footer caption. */
+const BODY_TOP = 18 + 28 + 92 + 18;
+const BODY_BOTTOM = CARD_H - 18 - 36 - 26;
+
+function fitLabel(
+  ctx: CanvasRenderingContext2D,
+  label: string,
+  chipW: number,
+  chipH: number,
+  chipFont: number,
+): string {
+  ctx.font = `700 ${chipFont}px ${FONT}`;
+  const rightPad = Math.max(34, Math.round(chipH * 0.38));
+  const room = chipW - chipTextInset(chipH) - rightPad;
+  if (measureLabel(ctx, label, chipFont) <= room) return label;
+  let out = label;
+  while (out.length > 1 && measureLabel(ctx, `${out}…`, chipFont) > room) {
+    out = [...graphemes(out)].slice(0, -1).join('');
+  }
+  return `${out.trimEnd()}…`;
+}
+
+function hasDeviceMeta(entry: OfficialLogEntry): boolean {
+  return Boolean(
+    deviceCaption(entry, 'hub') || deviceCaption(entry, 'shocker') || warningCaption(entry),
+  );
+}
+
 function fitLayout(ctx: CanvasRenderingContext2D, entry: OfficialLogEntry): Layout {
   const headline = headlineFor(entry.action);
-  const fromLabel = cleanName(entry.from.displayName);
-  const toLabel = cleanName(entry.to.displayName);
-  const maxW = CARD_W - 88;
+  const rawFrom = cleanName(entry.from.displayName);
+  const rawTo = cleanName(entry.to.displayName);
+  const maxW = CARD_W - 96;
   let fontSize = 100;
   let chipFont = 32;
-  let gap = 72;
+  let gap = 56;
 
   const measure = () => {
     const chipH = Math.max(44, Math.round(chipFont * 2.05 + 14));
-    const fromW = chipWidth(ctx, fromLabel, chipH, chipFont);
-    const toW = chipWidth(ctx, toLabel, chipH, chipFont);
+    const fromW = chipWidth(ctx, rawFrom, chipH, chipFont);
+    const toW = chipWidth(ctx, rawTo, chipH, chipFont);
+    const chipW = Math.min(MAX_CHIP_W, Math.max(fromW, toW));
     ctx.font = `italic 800 ${fontSize}px ${DISPLAY}`;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
@@ -547,12 +586,12 @@ function fitLayout(ctx: CanvasRenderingContext2D, entry: OfficialLogEntry): Layo
     const visualHalf = halfW + fontSize * 0.06;
     return {
       chipH,
-      fromW,
-      toW,
+      chipW,
       halfW: visualHalf,
       ascent,
       descent,
-      total: fromW + gap + visualHalf * 2 + gap + toW,
+      // Headline stays on the card's centre line, so each side needs its own half.
+      total: 2 * (visualHalf + gap + chipW),
     };
   };
 
@@ -560,27 +599,35 @@ function fitLayout(ctx: CanvasRenderingContext2D, entry: OfficialLogEntry): Layo
   let guard = 0;
   while (m.total > maxW && guard < 120) {
     guard += 1;
-    if (fontSize > 58) fontSize -= 4;
-    else if (chipFont > 16) chipFont -= 1;
-    else if (gap > 56) gap -= 2;
-    else if (fontSize > 34) fontSize -= 2;
+    if (fontSize > 72) fontSize -= 4;
     else if (gap > 40) gap -= 2;
-    else chipFont = Math.max(9, chipFont - 1);
+    else if (chipFont > 24) chipFont -= 1;
+    else if (fontSize > 40) fontSize -= 2;
+    else if (gap > 32) gap -= 2;
+    else chipFont = Math.max(14, chipFont - 1);
     m = measure();
-    if (chipFont <= 9 && fontSize <= 34 && gap <= 40) break;
+    if (chipFont <= 14 && fontSize <= 40 && gap <= 32) break;
   }
 
-  const heroY = Math.round(CARD_H * 0.45);
-  const chipY = heroY - m.chipH / 2;
+  const fromLabel = fitLabel(ctx, rawFrom, m.chipW, m.chipH, chipFont);
+  const toLabel = fitLabel(ctx, rawTo, m.chipW, m.chipH, chipFont);
+
+  // Build the vertical stack relative to the hero line, then centre it in the body.
   const lane = Math.min(36, Math.max(16, gap * 0.42));
   const orbitRx = m.halfW + lane * 0.62;
   const orbitRy = Math.max(m.ascent, m.descent) + 36;
   const boltScale = Math.min(1, lane / 34);
-  const effectBottom =
-    entry.action === 'shock' ? heroY + orbitRy + 30 : heroY + m.descent;
-  const detailY = Math.max(effectBottom, chipY + m.chipH) + 22;
-  const cx = CARD_W / 2;
+  const shock = entry.action === 'shock';
+  const heroTop = -Math.max(m.chipH / 2, m.ascent, shock ? orbitRy + 18 : 0);
+  const effectBottom = shock ? orbitRy + 30 : m.descent;
+  const detailRel = Math.max(effectBottom, m.chipH / 2) + 22;
+  const hasDetail = detailSegments(entry).length > 0;
+  const metaRel = hasDetail ? detailRel + 54 : detailRel;
+  const blockBottom = hasDeviceMeta(entry) ? metaRel + 20 : hasDetail ? detailRel + 20 : effectBottom;
+  const blockCentre = (heroTop + blockBottom) / 2;
+  const heroY = Math.round((BODY_TOP + BODY_BOTTOM) / 2 - blockCentre);
 
+  const cx = CARD_W / 2;
   return {
     fontSize,
     chipFont,
@@ -592,13 +639,15 @@ function fitLayout(ctx: CanvasRenderingContext2D, entry: OfficialLogEntry): Layo
     descent: m.descent,
     fromLabel,
     toLabel,
-    fromW: m.fromW,
-    toW: m.toW,
+    chipW: m.chipW,
+    fromW: m.chipW,
+    toW: m.chipW,
     heroY,
-    chipY,
-    fromX: cx - m.halfW - gap - m.fromW,
-    toX: cx + m.halfW + gap,
-    detailY,
+    metaY: heroY + metaRel,
+    chipY: heroY - m.chipH / 2,
+    fromX: Math.round(cx - m.halfW - gap - m.chipW),
+    toX: Math.round(cx + m.halfW + gap),
+    detailY: heroY + detailRel,
     orbitRx,
     orbitRy,
     boltScale,
@@ -933,10 +982,10 @@ function paintCard(
 
   const wash = ctx.createRadialGradient(
     CARD_W * 0.5,
-    CARD_H * 0.46,
+    layout.heroY,
     40,
     CARD_W * 0.5,
-    CARD_H * 0.5,
+    layout.heroY + 20,
     620,
   );
   wash.addColorStop(0, 'rgba(70, 110, 130, 0.18)');
@@ -1023,12 +1072,7 @@ function paintCard(
   }
 
   drawDetail(ctx, entry, cx, layout.detailY);
-  const footerY = cardY + cardH - 36;
-  const metaY = Math.min(
-    detailSegments(entry).length ? layout.detailY + 54 : layout.detailY,
-    footerY - 46,
-  );
-  drawDeviceMeta(ctx, entry, cx, metaY);
+  drawDeviceMeta(ctx, entry, cx, layout.metaY);
 
   ctx.font = `italic 600 22px ${FONT}`;
   ctx.fillStyle = COLORS.footer;
