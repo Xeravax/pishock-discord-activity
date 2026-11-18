@@ -63,6 +63,8 @@ type Layout = {
   toW: number;
   heroY: number;
   metaY: number;
+  /** Centre line of the segmented intensity meter (when intensity is known). */
+  meterY: number;
   chipY: number;
   fromX: number;
   toX: number;
@@ -83,18 +85,6 @@ function headlineFor(action: OfficialLogEntry['action']): string {
 function intensityT(entry: OfficialLogEntry): number {
   if (entry.intensity == null || !Number.isFinite(entry.intensity)) return 0.55;
   return Math.min(1, Math.max(0, entry.intensity / 100));
-}
-
-function motionFor(entry: OfficialLogEntry): { frames: number; delay: number; t: number } {
-  const t = intensityT(entry);
-  const punch = t * t;
-  if (entry.action === 'vibrate') {
-    return { frames: 8, delay: Math.max(20, Math.round(76 - punch * 52)), t };
-  }
-  if (entry.action === 'beep') {
-    return { frames: 12, delay: Math.max(24, Math.round(108 - punch * 64)), t };
-  }
-  return { frames: 12, delay: Math.max(24, Math.round(118 - punch * 72)), t };
 }
 
 function formatDuration(sec: number): string {
@@ -617,13 +607,23 @@ function fitLayout(ctx: CanvasRenderingContext2D, entry: OfficialLogEntry): Layo
   const orbitRx = m.halfW + lane * 0.62;
   const orbitRy = Math.max(m.ascent, m.descent) + 36;
   const boltScale = Math.min(1, lane / 34);
-  const shock = entry.action === 'shock';
-  const heroTop = -Math.max(m.chipH / 2, m.ascent, shock ? orbitRy + 18 : 0);
-  const effectBottom = shock ? orbitRy + 30 : m.descent;
+  const shock = entry.action === 'shock' || entry.action === 'other';
+  // Shock arcs bow above/below the headline; vibrate's waveform needs similar clearance.
+  const fxReach = shock ? orbitRy + 18 : entry.action === 'vibrate' ? m.ascent + 30 : m.ascent;
+  const heroTop = -Math.max(m.chipH / 2, m.ascent, fxReach);
+  const effectBottom = shock ? orbitRy + 22 : entry.action === 'vibrate' ? m.descent + 24 : m.descent;
   const detailRel = Math.max(effectBottom, m.chipH / 2) + 22;
   const hasDetail = detailSegments(entry).length > 0;
-  const metaRel = hasDetail ? detailRel + 54 : detailRel;
-  const blockBottom = hasDeviceMeta(entry) ? metaRel + 20 : hasDetail ? detailRel + 20 : effectBottom;
+  const hasMeter = entry.intensity != null && Number.isFinite(entry.intensity);
+  const meterRel = hasDetail ? detailRel + 44 : detailRel;
+  const metaRel = hasMeter ? meterRel + 42 : hasDetail ? detailRel + 54 : detailRel;
+  const blockBottom = hasDeviceMeta(entry)
+    ? metaRel + 20
+    : hasMeter
+      ? meterRel + 10
+      : hasDetail
+        ? detailRel + 20
+        : effectBottom;
   const blockCentre = (heroTop + blockBottom) / 2;
   const heroY = Math.round((BODY_TOP + BODY_BOTTOM) / 2 - blockCentre);
 
@@ -644,6 +644,7 @@ function fitLayout(ctx: CanvasRenderingContext2D, entry: OfficialLogEntry): Layo
     toW: m.chipW,
     heroY,
     metaY: heroY + metaRel,
+    meterY: heroY + meterRel,
     chipY: heroY - m.chipH / 2,
     fromX: Math.round(cx - m.halfW - gap - m.chipW),
     toX: Math.round(cx + m.halfW + gap),
@@ -652,57 +653,6 @@ function fitLayout(ctx: CanvasRenderingContext2D, entry: OfficialLogEntry): Layo
     orbitRy,
     boltScale,
   };
-}
-
-function drawOrbitingBolts(
-  ctx: CanvasRenderingContext2D,
-  cx: number,
-  cy: number,
-  rx: number,
-  ry: number,
-  frame: number,
-  frames: number,
-  boltScale: number,
-  t: number,
-) {
-  const spin = (frame / frames) * Math.PI * 2;
-  const count = t < 0.28 ? 1 : t < 0.8 ? 2 : 3;
-  const spots = count === 1 ? [0] : count === 2 ? [0, Math.PI] : [0, (Math.PI * 2) / 3, (Math.PI * 4) / 3];
-  const trail = 0.22 + t * 1.05;
-  const width = 1.3 + t * 3.4;
-  const blur = 3 + t * 16;
-  const scaleMul = 0.38 + t * 1.35;
-  const sparkR = 1.4 + t * 4.2;
-  for (let i = 0; i < spots.length; i++) {
-    const a = spin + spots[i]!;
-    ctx.save();
-    ctx.strokeStyle = `rgba(255, 229, 0, ${0.35 + t * 0.6})`;
-    ctx.lineWidth = width;
-    ctx.lineCap = 'round';
-    ctx.shadowColor = COLORS.yellow;
-    ctx.shadowBlur = blur;
-    ctx.beginPath();
-    ctx.ellipse(cx, cy, rx, ry, 0, a - trail, a - 0.05);
-    ctx.stroke();
-    ctx.restore();
-
-    const x = cx + Math.cos(a) * rx;
-    const y = cy + Math.sin(a) * ry;
-    const tx = -Math.sin(a) * rx;
-    const ty = Math.cos(a) * ry;
-    const rot = Math.atan2(ty, tx) + Math.PI / 2;
-    drawFilledBolt(ctx, x, y, (i === 0 ? 1.15 : 0.78) * boltScale * scaleMul, rot, COLORS.yellow);
-    if (t > 0.12) {
-      drawStar(
-        ctx,
-        cx + Math.cos(a - 0.4) * rx,
-        cy + Math.sin(a - 0.4) * ry,
-        sparkR,
-        '#fff6c2',
-        0.4 + t * 0.55,
-      );
-    }
-  }
 }
 
 /** Speaker-style pings on either side of the word. Arcs open outward and fade as they travel. */
@@ -910,91 +860,580 @@ function drawDetail(ctx: CanvasRenderingContext2D, entry: OfficialLogEntry, cx: 
   drawMiniMark(ctx, entry.action, x + markGap + 8, cy + 1);
 }
 
-function drawHeadline(
+// ---------------------------------------------------------------------------
+// Animation engine
+//
+// Every card is a seamless loop: `p` runs 0 → 1 over the loop and every
+// periodic effect uses an integer number of cycles, so the last frame flows
+// back into the first. One-shot moments (the shock strike) sit inside the loop
+// and fully settle before it restarts.
+// ---------------------------------------------------------------------------
+
+const TAU = Math.PI * 2;
+
+function clamp01(x: number): number {
+  return Math.max(0, Math.min(1, x));
+}
+
+function easeOutCubic(x: number): number {
+  const c = clamp01(x);
+  return 1 - (1 - c) ** 3;
+}
+
+/** 0 → 1 → 0 bump centred on `c` with half-width `w`. */
+function bump(p: number, c: number, w: number): number {
+  const d = Math.abs(p - c) / w;
+  return d >= 1 ? 0 : 0.5 + 0.5 * Math.cos(Math.PI * d);
+}
+
+/** Progress of `p` through [a, b], clamped to 0..1. */
+function span(p: number, a: number, b: number): number {
+  return clamp01((p - a) / (b - a));
+}
+
+type Motion = { frames: number; delay: number; t: number };
+
+/** Loop length and speed per action. GIF delays are in 10 ms steps. */
+function motionFor(entry: OfficialLogEntry): Motion {
+  const t = intensityT(entry);
+  if (entry.action === 'vibrate') return { frames: 24, delay: 40, t };
+  if (entry.action === 'beep') return { frames: 24, delay: 50, t };
+  return { frames: 32, delay: 40, t };
+}
+
+/** Accent colour per action as an "r, g, b" triple for rgba() strings. */
+function accentRgb(action: OfficialLogEntry['action']): string {
+  if (action === 'vibrate') return '255, 75, 214';
+  if (action === 'beep') return '90, 216, 255';
+  return '255, 229, 0';
+}
+
+/** Shock timeline (fractions of the loop). */
+const SHOCK = {
+  chargeEnd: 0.14,
+  strike: 0.3,
+  arcFade: 0.62,
+} as const;
+
+type Star = { x: number; y: number; r: number; color: string; alpha: number; big: boolean; k: number; ph: number };
+
+/** Background stars, fixed per entry; they only twinkle. */
+function makeStars(seedKey: string): Star[] {
+  const rand = mulberry32(hashSeed(seedKey || 'pishock'));
+  const stars: Star[] = [];
+  for (let i = 0; i < 64; i++) {
+    const x = 64 + rand() * (CARD_W - 128);
+    const y = 130 + rand() * (CARD_H - 230);
+    const big = rand() < 0.18;
+    const r = big ? 2.8 + rand() * 3.2 : 0.8 + rand() * 1.5;
+    const alpha = (big ? 0.7 : 0.35) + rand() * 0.28;
+    const color = rand() > 0.28 ? '#ffe7a0' : '#f5fcff';
+    if (y > CARD_H - 96) continue;
+    stars.push({ x, y, r, color, alpha, big, k: rand() < 0.5 ? 1 : 2, ph: rand() });
+  }
+  return stars;
+}
+
+function drawStars(ctx: CanvasRenderingContext2D, stars: Star[], p: number) {
+  for (const s of stars) {
+    const tw = 0.35 + 0.65 * (0.5 + 0.5 * Math.sin(TAU * (p * s.k + s.ph)));
+    const a = s.alpha * tw;
+    if (s.big) drawStar(ctx, s.x, s.y, s.r * (0.8 + 0.35 * tw), s.color, a);
+    else {
+      ctx.save();
+      ctx.globalAlpha = a;
+      ctx.fillStyle = s.color;
+      ctx.beginPath();
+      ctx.arc(s.x, s.y, s.r, 0, TAU);
+      ctx.fill();
+      ctx.restore();
+    }
+  }
+}
+
+// ---- Lightning -------------------------------------------------------------
+
+type Pt = [number, number];
+
+/**
+ * Jagged path along a cubic curve from A to B bowing by `bulge` (negative = below).
+ * The control points sit straight above the endpoints, so the bolt leaves each end
+ * steeply and clears whatever lies between them.
+ */
+function lightningPath(
+  ax: number,
+  ay: number,
+  bx: number,
+  by: number,
+  bulge: number,
+  jitter: number,
+  rand: () => number,
+  segs = 26,
+): Pt[] {
+  const c1x = ax + (bx - ax) * 0.12;
+  const c2x = bx - (bx - ax) * 0.12;
+  const c1y = ay - bulge * 1.45;
+  const c2y = by - bulge * 1.45;
+  const pts: Pt[] = [];
+  for (let i = 0; i <= segs; i++) {
+    const u = i / segs;
+    const v = 1 - u;
+    const x = v ** 3 * ax + 3 * v * v * u * c1x + 3 * v * u * u * c2x + u ** 3 * bx;
+    const y = v ** 3 * ay + 3 * v * v * u * c1y + 3 * v * u * u * c2y + u ** 3 * by;
+    const dx = 3 * v * v * (c1x - ax) + 6 * v * u * (c2x - c1x) + 3 * u * u * (bx - c2x);
+    const dy = 3 * v * v * (c1y - ay) + 6 * v * u * (c2y - c1y) + 3 * u * u * (by - c2y);
+    const len = Math.hypot(dx, dy) || 1;
+    const env = Math.sin(Math.PI * u);
+    const off = (rand() * 2 - 1) * jitter * (0.25 + env * 0.75);
+    pts.push([x + (-dy / len) * off, y + (dx / len) * off]);
+  }
+  return pts;
+}
+
+function tracePath(ctx: CanvasRenderingContext2D, pts: Pt[], upto: number) {
+  const last = Math.max(1, Math.min(pts.length - 1, upto * (pts.length - 1)));
+  const whole = Math.floor(last);
+  ctx.beginPath();
+  ctx.moveTo(pts[0]![0], pts[0]![1]);
+  for (let i = 1; i <= whole; i++) ctx.lineTo(pts[i]![0], pts[i]![1]);
+  const frac = last - whole;
+  if (frac > 0 && whole + 1 < pts.length) {
+    const a = pts[whole]!;
+    const b = pts[whole + 1]!;
+    ctx.lineTo(a[0] + (b[0] - a[0]) * frac, a[1] + (b[1] - a[1]) * frac);
+  }
+}
+
+/** Three-layer neon stroke: wide haze, coloured body, white-hot core. */
+function strokeBolt(
   ctx: CanvasRenderingContext2D,
-  entry: OfficialLogEntry,
-  layout: Layout,
-  dx = 0,
-  dy = 0,
-  t = 0,
+  pts: Pt[],
+  upto: number,
+  rgb: string,
+  t: number,
+  alpha: number,
 ) {
-  const cx = CARD_W / 2 + dx;
-  const cy = layout.heroY + dy;
-  const color = wordColor(entry.action);
+  if (alpha <= 0.01) return;
+  const layers: Array<[number, string, number]> = [
+    [12 + t * 12, `rgba(${rgb}, ${0.16 * alpha})`, 26],
+    [4 + t * 3.5, `rgba(${rgb}, ${0.9 * alpha})`, 14],
+    [1.6 + t * 1.4, `rgba(255, 255, 255, ${alpha})`, 4],
+  ];
+  ctx.save();
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  ctx.shadowColor = `rgba(${rgb}, ${0.9 * alpha})`;
+  for (const [w, color, blur] of layers) {
+    ctx.lineWidth = w;
+    ctx.strokeStyle = color;
+    ctx.shadowBlur = blur;
+    tracePath(ctx, pts, upto);
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+/** A few short forks splitting off a bolt. */
+function strokeForks(
+  ctx: CanvasRenderingContext2D,
+  pts: Pt[],
+  upto: number,
+  rgb: string,
+  t: number,
+  alpha: number,
+  rand: () => number,
+) {
+  const forks = 2 + Math.round(t * 4);
+  const reach = Math.floor(upto * (pts.length - 1));
+  for (let f = 0; f < forks; f++) {
+    const at = 3 + Math.floor(rand() * Math.max(1, reach - 5));
+    const base = pts[at];
+    if (!base) continue;
+    const dir = rand() * TAU;
+    const len = 26 + rand() * (40 + t * 50);
+    const branch: Pt[] = [base];
+    for (let i = 1; i <= 4; i++) {
+      const u = i / 4;
+      branch.push([
+        base[0] + Math.cos(dir) * len * u + (rand() - 0.5) * 16,
+        base[1] + Math.sin(dir) * len * u + (rand() - 0.5) * 16,
+      ]);
+    }
+    strokeBolt(ctx, branch, 1, rgb, t * 0.4, alpha * 0.55);
+  }
+}
+
+/** Glowing orb, used for the travelling bolt head and the charge-up. */
+function drawOrb(ctx: CanvasRenderingContext2D, x: number, y: number, r: number, rgb: string, alpha: number) {
+  if (alpha <= 0.01 || r <= 0) return;
+  const g = ctx.createRadialGradient(x, y, 0, x, y, r);
+  g.addColorStop(0, `rgba(255, 255, 255, ${alpha})`);
+  g.addColorStop(0.3, `rgba(${rgb}, ${0.85 * alpha})`);
+  g.addColorStop(1, `rgba(${rgb}, 0)`);
+  ctx.fillStyle = g;
+  ctx.beginPath();
+  ctx.arc(x, y, r, 0, TAU);
+  ctx.fill();
+}
+
+type Spark = { a: number; v: number; life: number; delay: number; w: number; hot: boolean };
+
+function makeSparks(seedKey: string, t: number): Spark[] {
+  const rand = mulberry32(hashSeed(`${seedKey}:sparks`));
+  const n = 20 + Math.round(t * 30);
+  const out: Spark[] = [];
+  for (let i = 0; i < n; i++) {
+    out.push({
+      a: rand() * TAU,
+      v: 240 + rand() * (360 + t * 520),
+      life: 0.22 + rand() * 0.3,
+      delay: rand() * 0.04,
+      w: 1.5 + rand() * (1.5 + t * 2),
+      hot: rand() < 0.45,
+    });
+  }
+  return out;
+}
+
+function drawSparks(
+  ctx: CanvasRenderingContext2D,
+  sparks: Spark[],
+  ox: number,
+  oy: number,
+  p: number,
+  start: number,
+) {
+  ctx.save();
+  ctx.lineCap = 'round';
+  for (const s of sparks) {
+    const tau = span(p, start + s.delay, start + s.delay + s.life);
+    if (tau <= 0 || tau >= 1) continue;
+    const dist = s.v * easeOutCubic(tau) * 0.42;
+    const x = ox + Math.cos(s.a) * dist;
+    const y = oy + Math.sin(s.a) * dist + 120 * tau * tau;
+    const tail = 10 + s.v * 0.05 * (1 - tau);
+    ctx.globalAlpha = (1 - tau) ** 1.2;
+    ctx.strokeStyle = s.hot ? '#ffffff' : COLORS.yellow;
+    ctx.shadowColor = 'rgba(255, 214, 0, 0.9)';
+    ctx.shadowBlur = 8;
+    ctx.lineWidth = s.w;
+    ctx.beginPath();
+    ctx.moveTo(x, y);
+    ctx.lineTo(x - Math.cos(s.a) * tail, y - Math.sin(s.a) * tail - 6 * tau);
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+// ---- Shared effects ---------------------------------------------------------
+
+/** Shockwave / ripple ring. */
+function drawRing(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  rx: number,
+  ry: number,
+  rgb: string,
+  alpha: number,
+  width: number,
+) {
+  if (alpha <= 0.01) return;
+  ctx.save();
+  ctx.strokeStyle = `rgba(${rgb}, ${alpha})`;
+  ctx.lineWidth = width;
+  ctx.shadowColor = `rgba(${rgb}, ${alpha})`;
+  ctx.shadowBlur = 14;
+  ctx.beginPath();
+  ctx.ellipse(x, y, Math.max(1, rx), Math.max(1, ry), 0, 0, TAU);
+  ctx.stroke();
+  ctx.restore();
+}
+
+/** Expanding rounded-rect outline around a chip (vibrate ripples, beep flashes). */
+function drawChipOutline(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  pad: number,
+  rgb: string,
+  alpha: number,
+  width = 2.5,
+) {
+  if (alpha <= 0.01) return;
+  ctx.save();
+  roundRect(ctx, x - pad, y - pad, w + pad * 2, h + pad * 2, h / 2 + pad);
+  ctx.strokeStyle = `rgba(${rgb}, ${alpha})`;
+  ctx.lineWidth = width;
+  ctx.shadowColor = `rgba(${rgb}, ${alpha})`;
+  ctx.shadowBlur = 12;
+  ctx.stroke();
+  ctx.restore();
+}
+
+/** Oscilloscope trace across the card (vibrate). */
+function drawWaveform(
+  ctx: CanvasRenderingContext2D,
+  cy: number,
+  amp: number,
+  cycles: number,
+  phase: number,
+  rgb: string,
+  alpha: number,
+  width: number,
+) {
+  const x0 = 70;
+  const x1 = CARD_W - 70;
+  ctx.save();
+  ctx.strokeStyle = `rgba(${rgb}, ${alpha})`;
+  ctx.lineWidth = width;
+  ctx.lineJoin = 'round';
+  ctx.shadowColor = `rgba(${rgb}, ${alpha})`;
+  ctx.shadowBlur = 12;
+  ctx.beginPath();
+  for (let x = x0; x <= x1; x += 6) {
+    const u = (x - x0) / (x1 - x0);
+    const taper = Math.sin(Math.PI * u) ** 0.8;
+    const y = cy + Math.sin(u * cycles * TAU - phase) * amp * taper;
+    if (x === x0) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
+  }
+  ctx.stroke();
+  ctx.restore();
+}
+
+function roundRectPerimeter(w: number, h: number, r: number): number {
+  return 2 * (w + h) - 8 * r + TAU * r;
+}
+
+/** Two bright comets running around the neon frame — one lap per loop. */
+function drawBorderRunners(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  r: number,
+  p: number,
+  rgb: string,
+) {
+  const perim = roundRectPerimeter(w, h, r);
+  const len = 240;
+  ctx.save();
+  ctx.lineCap = 'round';
+  for (const offset of [0, 0.5]) {
+    for (const [lw, color, blur, frac] of [
+      [8, `rgba(${rgb}, 0.55)`, 26, 1],
+      [3, 'rgba(255, 255, 255, 0.95)', 10, 0.55],
+    ] as Array<[number, string, number, number]>) {
+      ctx.setLineDash([len * frac, perim - len * frac]);
+      ctx.lineDashOffset = -((p + offset) % 1) * perim - len * (1 - frac) * 0.5;
+      ctx.lineWidth = lw;
+      ctx.strokeStyle = color;
+      ctx.shadowColor = `rgba(${rgb}, 0.9)`;
+      ctx.shadowBlur = blur;
+      roundRect(ctx, x, y, w, h, r);
+      ctx.stroke();
+    }
+  }
+  ctx.restore();
+}
+
+// ---- Headline ---------------------------------------------------------------
+
+type HeadlineFx = {
+  dx: number;
+  dy: number;
+  scale: number;
+  /** RGB-split distance in px (0 = none). */
+  split: number;
+  /** Extra glow 0..1 on top of the base glow. */
+  glow: number;
+  /** Sheen band position 0..1 across the word, or null for none. */
+  sheen: number | null;
+};
+
+function setHeadlineFont(ctx: CanvasRenderingContext2D, layout: Layout) {
   ctx.font = `italic 800 ${layout.fontSize}px ${DISPLAY}`;
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  if (entry.action === 'vibrate') {
-    const ghost = 2 + t * 16;
+}
+
+function drawHeadlineFx(
+  ctx: CanvasRenderingContext2D,
+  entry: OfficialLogEntry,
+  layout: Layout,
+  fx: HeadlineFx,
+  t: number,
+  sheenCanvas: HTMLCanvasElement | null,
+) {
+  const cx = CARD_W / 2 + fx.dx;
+  const cy = layout.heroY + fx.dy;
+  const color = wordColor(entry.action);
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.scale(fx.scale, fx.scale);
+  setHeadlineFont(ctx, layout);
+
+  if (fx.split > 0.3) {
     ctx.save();
-    ctx.globalAlpha = 0.12 + t * 0.5;
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.globalAlpha = 0.55;
     ctx.fillStyle = COLORS.ghost;
-    ctx.fillText(layout.headline, cx - ghost, cy);
+    ctx.fillText(layout.headline, -fx.split, 0);
     ctx.fillStyle = COLORS.magenta;
-    ctx.globalAlpha = 0.08 + t * 0.38;
-    ctx.fillText(layout.headline, cx + ghost * 0.85, cy + 1);
-    if (t > 0.72) {
-      ctx.globalAlpha = 0.28;
-      ctx.fillStyle = COLORS.ghost;
-      ctx.fillText(layout.headline, cx + ghost * 1.45, cy + 2);
+    ctx.fillText(layout.headline, fx.split * 0.9, 1);
+    ctx.restore();
+  }
+
+  ctx.fillStyle = color;
+  ctx.shadowColor = `rgba(${accentRgb(entry.action)}, 0.95)`;
+  ctx.shadowBlur = 8 + t * 14 + fx.glow * 26;
+  ctx.fillText(layout.headline, 0, 0);
+  ctx.shadowBlur = 0;
+  ctx.fillText(layout.headline, 0, 0);
+  ctx.restore();
+
+  // Light sheen sweeping across the letters
+  if (fx.sheen != null && sheenCanvas) {
+    const sctx = sheenCanvas.getContext('2d');
+    if (!sctx) return;
+    const w = sheenCanvas.width;
+    const h = sheenCanvas.height;
+    sctx.clearRect(0, 0, w, h);
+    sctx.save();
+    sctx.translate(w / 2, h / 2);
+    sctx.scale(fx.scale, fx.scale);
+    setHeadlineFont(sctx, layout);
+    sctx.fillStyle = '#fff';
+    sctx.fillText(layout.headline, 0, 0);
+    sctx.restore();
+    sctx.save();
+    sctx.globalCompositeOperation = 'source-in';
+    const bx = -0.3 * w + fx.sheen * 1.6 * w;
+    const g = sctx.createLinearGradient(bx - 90, 0, bx + 90, h);
+    g.addColorStop(0, 'rgba(255,255,255,0)');
+    g.addColorStop(0.5, 'rgba(255,255,255,0.85)');
+    g.addColorStop(1, 'rgba(255,255,255,0)');
+    sctx.fillStyle = g;
+    sctx.fillRect(0, 0, w, h);
+    sctx.restore();
+    ctx.drawImage(sheenCanvas, cx - w / 2, cy - h / 2);
+  }
+}
+
+// ---- Intensity meter --------------------------------------------------------
+
+const METER_SEGMENTS = 20;
+
+function meterColor(i: number): string {
+  const u = i / (METER_SEGMENTS - 1);
+  // cyan → yellow → hot red
+  const stops: Array<[number, number, number]> = [
+    [90, 216, 255],
+    [255, 229, 0],
+    [255, 70, 60],
+  ];
+  const seg = u < 0.55 ? 0 : 1;
+  const local = seg === 0 ? u / 0.55 : (u - 0.55) / 0.45;
+  const a = stops[seg]!;
+  const b = stops[seg + 1]!;
+  const mix = (k: number) => Math.round(a[k]! + (b[k]! - a[k]!) * local);
+  return `rgb(${mix(0)}, ${mix(1)}, ${mix(2)})`;
+}
+
+/** Segmented intensity meter with a light front sweeping across the lit part. */
+function drawMeter(ctx: CanvasRenderingContext2D, entry: OfficialLogEntry, cy: number, sweep: number) {
+  if (entry.intensity == null || !Number.isFinite(entry.intensity)) return;
+  const lit = Math.max(1, Math.round((clamp01(entry.intensity / 100) * METER_SEGMENTS)));
+  const segW = 18;
+  const gap = 5;
+  const h = 14;
+  const total = METER_SEGMENTS * segW + (METER_SEGMENTS - 1) * gap;
+  const x0 = CARD_W / 2 - total / 2;
+  const front = sweep * (lit + 2) - 1;
+  for (let i = 0; i < METER_SEGMENTS; i++) {
+    const x = x0 + i * (segW + gap);
+    ctx.save();
+    roundRect(ctx, x, cy - h / 2, segW, h, 3);
+    if (i < lit) {
+      const near = Math.max(0, 1 - Math.abs(i - front) / 2.2);
+      ctx.fillStyle = meterColor(i);
+      ctx.globalAlpha = 0.72 + near * 0.28;
+      ctx.shadowColor = meterColor(i);
+      ctx.shadowBlur = 6 + near * 18;
+      ctx.fill();
+      if (near > 0.05) {
+        ctx.globalAlpha = near * 0.75;
+        ctx.fillStyle = '#ffffff';
+        ctx.shadowBlur = 0;
+        roundRect(ctx, x, cy - h / 2, segW, h, 3);
+        ctx.fill();
+      }
+    } else {
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.07)';
+      ctx.fill();
     }
     ctx.restore();
   }
-  ctx.fillStyle = color;
-  ctx.shadowColor = entry.action === 'vibrate' ? 'rgba(255, 75, 214, 0.95)' : entry.action === 'beep' ? 'rgba(90, 216, 255, 0.9)' : 'rgba(255, 210, 0, 0.9)';
-  ctx.shadowBlur = entry.action === 'vibrate' ? 6 + t * 11 : 6 + t * 18;
-  ctx.fillText(layout.headline, cx, cy);
-  ctx.shadowBlur = 0;
-  ctx.fillText(layout.headline, cx, cy);
 }
 
-function paintCard(
+// ---- Frame composition --------------------------------------------------------
+
+const CARD_INSET = 18;
+const CARD_RADIUS = 32;
+
+type Scene = {
+  bg: HTMLCanvasElement;
+  stars: Star[];
+  sparks: Spark[];
+  sheen: HTMLCanvasElement;
+  seed: number;
+};
+
+/** Everything that never moves: card, wash, branding, detail text, device line, base frame. */
+function paintBackground(
   ctx: CanvasRenderingContext2D,
   entry: OfficialLogEntry,
   assets: Assets,
   layout: Layout,
-  frame: number,
-  frames: number,
-  t: number,
 ) {
-  const unit = entry.action === 'vibrate' ? VIBE[frame % VIBE.length] : [0, 0];
-  const amp = entry.action === 'vibrate' ? (1.15 + t * t * 32) / 9 : 0;
-  const jx = (unit?.[0] ?? 0) * amp;
-  const rawY = (unit?.[1] ?? 0) * amp;
-  const jy = rawY < 0 ? rawY * 0.55 : rawY;
+  const cardX = CARD_INSET;
+  const cardY = CARD_INSET;
+  const cardW = CARD_W - CARD_INSET * 2;
+  const cardH = CARD_H - CARD_INSET * 2;
+  const cx = CARD_W / 2;
 
   ctx.clearRect(0, 0, CARD_W, CARD_H);
-
-  const inset = 18;
-  const radius = 32;
-  const cardX = inset;
-  const cardY = inset;
-  const cardW = CARD_W - inset * 2;
-  const cardH = CARD_H - inset * 2;
-
-  roundRect(ctx, cardX, cardY, cardW, cardH, radius);
+  roundRect(ctx, cardX, cardY, cardW, cardH, CARD_RADIUS);
   ctx.fillStyle = COLORS.card;
   ctx.fill();
 
   ctx.save();
-  roundRect(ctx, cardX, cardY, cardW, cardH, radius);
+  roundRect(ctx, cardX, cardY, cardW, cardH, CARD_RADIUS);
   ctx.clip();
 
-  const wash = ctx.createRadialGradient(
-    CARD_W * 0.5,
-    layout.heroY,
-    40,
-    CARD_W * 0.5,
-    layout.heroY + 20,
-    620,
-  );
-  wash.addColorStop(0, 'rgba(70, 110, 130, 0.18)');
-  wash.addColorStop(0.45, 'rgba(20, 28, 36, 0.05)');
-  wash.addColorStop(1, 'rgba(0, 0, 0, 0.28)');
+  const rgb = accentRgb(entry.action);
+  const wash = ctx.createRadialGradient(cx, layout.heroY, 40, cx, layout.heroY + 20, 640);
+  wash.addColorStop(0, `rgba(${rgb}, 0.10)`);
+  wash.addColorStop(0.35, 'rgba(40, 70, 90, 0.10)');
+  wash.addColorStop(1, 'rgba(0, 0, 0, 0.32)');
   ctx.fillStyle = wash;
   ctx.fillRect(cardX - 8, cardY - 8, cardW + 16, cardH + 16);
 
-  drawSparkleField(ctx, entry.id);
+  // Faint diagonal speed lines, echoing the slanted P of the logo
+  ctx.save();
+  ctx.strokeStyle = 'rgba(120, 200, 230, 0.035)';
+  ctx.lineWidth = 2;
+  for (let x = -CARD_H; x < CARD_W + CARD_H; x += 46) {
+    ctx.beginPath();
+    ctx.moveTo(x, CARD_H);
+    ctx.lineTo(x + CARD_H * 0.52, 0);
+    ctx.stroke();
+  }
+  ctx.restore();
 
   const logo = 92;
   const logoX = cardX + 36;
@@ -1021,6 +1460,41 @@ function paintCard(
     drawDiscordBadge(ctx, cardX + cardW - 36, logoY + logo / 2, place, assets.placeImg);
   }
 
+  drawDetail(ctx, entry, cx, layout.detailY);
+  drawDeviceMeta(ctx, entry, cx, layout.metaY);
+
+  ctx.font = `italic 600 22px ${FONT}`;
+  ctx.fillStyle = COLORS.footer;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText('Shared from PiShock controller', cx, cardY + cardH - 36);
+  ctx.restore();
+
+  roundRect(ctx, cardX, cardY, cardW, cardH, CARD_RADIUS);
+  ctx.save();
+  ctx.lineJoin = 'round';
+  ctx.strokeStyle = COLORS.cyan;
+  ctx.lineWidth = 6;
+  ctx.shadowColor = 'rgba(70, 220, 255, 0.95)';
+  ctx.shadowBlur = 22;
+  ctx.stroke();
+  ctx.shadowBlur = 8;
+  ctx.lineWidth = 3;
+  ctx.strokeStyle = '#c8f6ff';
+  ctx.stroke();
+  ctx.restore();
+}
+
+function drawChips(
+  ctx: CanvasRenderingContext2D,
+  entry: OfficialLogEntry,
+  assets: Assets,
+  layout: Layout,
+  from: { dx: number; dy: number },
+  to: { dx: number; dy: number },
+) {
+  ctx.save();
+  ctx.translate(from.dx, from.dy);
   drawPersonChip(
     ctx,
     layout.fromX,
@@ -1035,6 +1509,9 @@ function paintCard(
     true,
     '#17607a',
   );
+  ctx.restore();
+  ctx.save();
+  ctx.translate(to.dx, to.dy);
   drawPersonChip(
     ctx,
     layout.toX,
@@ -1049,52 +1526,197 @@ function paintCard(
     false,
     '#3c444c',
   );
-
-  const cx = CARD_W / 2;
-  drawHeadline(ctx, entry, layout, jx, jy, t);
-
-  if (entry.action === 'beep') {
-    drawBeepWaves(ctx, cx, layout.heroY, layout.halfW, layout.gap, frame, frames, t);
-  }
-
-  if (entry.action === 'shock') {
-    drawOrbitingBolts(
-      ctx,
-      cx,
-      layout.heroY,
-      layout.orbitRx,
-      layout.orbitRy,
-      frame,
-      frames,
-      layout.boltScale,
-      t,
-    );
-  }
-
-  drawDetail(ctx, entry, cx, layout.detailY);
-  drawDeviceMeta(ctx, entry, cx, layout.metaY);
-
-  ctx.font = `italic 600 22px ${FONT}`;
-  ctx.fillStyle = COLORS.footer;
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
-  ctx.fillText('Shared from PiShock controller', cx, cardY + cardH - 36);
-
   ctx.restore();
+}
 
-  roundRect(ctx, cardX, cardY, cardW, cardH, radius);
+function paintFrame(
+  ctx: CanvasRenderingContext2D,
+  entry: OfficialLogEntry,
+  assets: Assets,
+  layout: Layout,
+  scene: Scene,
+  frame: number,
+  frames: number,
+  t: number,
+) {
+  const p = frame / frames;
+  const rgb = accentRgb(entry.action);
+  const cardX = CARD_INSET;
+  const cardY = CARD_INSET;
+  const cardW = CARD_W - CARD_INSET * 2;
+  const cardH = CARD_H - CARD_INSET * 2;
+  const cy = layout.heroY;
+  const fromEdge = layout.fromX + layout.fromW;
+  const toEdge = layout.toX;
+  const toAvatarX = layout.toX + layout.chipH / 2;
+
+  ctx.clearRect(0, 0, CARD_W, CARD_H);
+  ctx.drawImage(scene.bg, 0, 0);
+
   ctx.save();
-  ctx.lineJoin = 'round';
-  ctx.strokeStyle = COLORS.cyan;
-  ctx.lineWidth = 6;
-  ctx.shadowColor = 'rgba(70, 220, 255, 0.95)';
-  ctx.shadowBlur = 22;
-  ctx.stroke();
-  ctx.shadowBlur = 8;
-  ctx.lineWidth = 3;
-  ctx.strokeStyle = '#c8f6ff';
-  ctx.stroke();
+  roundRect(ctx, cardX, cardY, cardW, cardH, CARD_RADIUS);
+  ctx.clip();
+
+  drawStars(ctx, scene.stars, p);
+
+  const fromOff = { dx: 0, dy: 0 };
+  let toOff = { dx: 0, dy: 0 };
+  const head: HeadlineFx = { dx: 0, dy: 0, scale: 1, split: 0, glow: 0, sheen: null };
+  let meterSweep = p;
+  const after: Array<() => void> = [];
+
+  if (entry.action === 'vibrate') {
+    // Oscilloscope traces behind everything, two beats per loop
+    const beat = 0.55 + 0.45 * (0.5 + 0.5 * Math.cos(TAU * p * 2));
+    const amp = (layout.chipH * 0.5 + 10 + t * 34) * beat;
+    drawWaveform(ctx, cy, amp, 7, TAU * p * 3, '255, 75, 214', 0.7, 3.5);
+    drawWaveform(ctx, cy, amp * 0.72, 11, TAU * p * 2 + 1.3, '110, 243, 255', 0.42, 2.2);
+    drawWaveform(ctx, cy, amp * 1.15, 4, -TAU * p + 0.6, '255, 75, 214', 0.18, 6);
+
+    // Target chip buzzes; ghost outlines split into magenta / cyan
+    const unit = VIBE[frame % VIBE.length] ?? [0, 0];
+    const buzz = 0.6 + t * 1.6;
+    toOff = { dx: unit[0] * buzz * 0.6, dy: unit[1] * buzz * 0.5 };
+    for (let k = 0; k < 3; k++) {
+      const q = (p * 2 + k / 3) % 1;
+      drawChipOutline(ctx, layout.toX, layout.chipY, layout.toW, layout.chipH, 4 + q * (34 + t * 40), '255, 75, 214', (1 - q) * 0.55, 2.5 * (1 - q) + 0.8);
+    }
+    after.push(() => {
+      drawChipOutline(ctx, layout.toX + toOff.dx - 5, layout.chipY + toOff.dy, layout.toW, layout.chipH, 0, '110, 243, 255', 0.35 * t + 0.1, 2);
+      drawChipOutline(ctx, layout.toX + toOff.dx + 5, layout.chipY + toOff.dy, layout.toW, layout.chipH, 0, '255, 75, 214', 0.35 * t + 0.1, 2);
+    });
+
+    const hUnit = VIBE[(frame + 3) % VIBE.length] ?? [0, 0];
+    const hAmp = (1.15 + t * t * 32) / 9;
+    head.dx = hUnit[0] * hAmp;
+    head.dy = hUnit[1] * hAmp * 0.6;
+    head.split = 2 + t * 10 * (0.6 + 0.4 * beat);
+    head.glow = 0.3 * beat;
+    head.sheen = p < 0.45 ? span(p, 0.05, 0.45) : null;
+  } else if (entry.action === 'beep') {
+    // Sonar rings launched on each of the two pings per loop
+    for (const start of [0.04, 0.54]) {
+      for (let k = 0; k < 2; k++) {
+        const raw = p - start - k * 0.07;
+        const q = span(raw < 0 ? raw + 1 : raw, 0, 0.62);
+        if (q <= 0 || q >= 1) continue;
+        const r = layout.halfW * 0.75 + easeOutCubic(q) * 560;
+        drawRing(ctx, CARD_W / 2, cy, r, r * 0.4, '90, 216, 255', (1 - q) ** 1.6 * 0.85, 4 * (1 - q) + 1.2);
+      }
+    }
+    drawBeepWaves(ctx, CARD_W / 2, cy, layout.halfW, layout.gap, frame, frames, t);
+    const ping = Math.max(bump(p, 0.06, 0.08), bump(p, 0.56, 0.08), bump(p, 1.06, 0.08));
+    head.scale = 1 + 0.06 * ping * (0.6 + t * 0.6);
+    head.glow = ping;
+    head.sheen = span(p, 0.15, 0.5) > 0 && p < 0.5 ? span(p, 0.15, 0.5) : null;
+    after.push(() => {
+      drawChipOutline(ctx, layout.fromX, layout.chipY, layout.fromW, layout.chipH, 2 + ping * 6, '90, 216, 255', ping * 0.8);
+      drawChipOutline(ctx, layout.toX, layout.chipY, layout.toW, layout.chipH, 2 + ping * 6, '90, 216, 255', ping * 0.8);
+    });
+  } else {
+    // SHOCK: charge → bolt travels sender → target → strike → crackling afterglow
+    const rand = mulberry32(scene.seed + frame * 7919);
+    const charge = span(p, 0, SHOCK.chargeEnd);
+    const travel = span(p, SHOCK.chargeEnd, SHOCK.strike);
+    const sinceStrike = p - SHOCK.strike;
+    const struck = sinceStrike >= 0;
+    const arcAlpha = !struck
+      ? p >= SHOCK.chargeEnd
+        ? 1
+        : 0
+      : 1 - span(p, SHOCK.strike + 0.12, SHOCK.arcFade);
+    const flicker = 0.75 + rand() * 0.25;
+    const jitter = 14 + t * 22;
+    // Arcs leave from the chips' top/bottom inner corners and bow clear of the word
+    const lift = layout.chipH * 0.32;
+    const bulgeUp = layout.ascent + 18;
+    const bulgeDown = -(layout.descent + 18);
+    meterSweep = span(p, SHOCK.chargeEnd, SHOCK.strike + 0.05);
+
+    // Charge-up: orb + crackles at the sender
+    if (p < SHOCK.strike) {
+      drawOrb(ctx, fromEdge + 6, cy, 18 + charge * (26 + t * 26), rgb, 0.35 + charge * 0.6);
+      const crackles = 2 + Math.round(charge * 3);
+      for (let i = 0; i < crackles; i++) {
+        const a = -Math.PI / 2 + (rand() - 0.5) * Math.PI * 1.4;
+        const len = 30 + rand() * 50 * (0.4 + charge);
+        const path = lightningPath(fromEdge, cy, fromEdge + Math.cos(a) * len + 20, cy + Math.sin(a) * len, 0, 9, rand, 6);
+        strokeBolt(ctx, path, 1, rgb, t * 0.5, (0.3 + charge * 0.6) * flicker);
+      }
+    }
+
+    // Main arcs above and below the word
+    if (arcAlpha > 0) {
+      const upto = struck ? 1 : easeOutCubic(travel);
+      for (const bulge of [bulgeUp, bulgeDown]) {
+        const y = cy - Math.sign(bulge) * lift;
+        const path = lightningPath(fromEdge - 14, y, toEdge + 14, y, bulge, jitter, rand);
+        strokeBolt(ctx, path, upto, rgb, t, arcAlpha * flicker);
+        if (struck && t > 0.15) strokeForks(ctx, path, upto, rgb, t, arcAlpha * flicker, rand);
+        if (!struck) {
+          const lead = path[Math.round(upto * (path.length - 1))];
+          if (lead) drawOrb(ctx, lead[0], lead[1], 22 + t * 16, rgb, 0.9);
+        }
+      }
+    }
+
+    // Impact: shockwave rings + sparks + shake + flash
+    if (struck) {
+      for (let k = 0; k < 2; k++) {
+        const q = span(p, SHOCK.strike + k * 0.06, SHOCK.strike + k * 0.06 + 0.36);
+        if (q > 0 && q < 1) {
+          const r = layout.chipH * 0.5 + easeOutCubic(q) * (150 + t * 210);
+          drawRing(ctx, toAvatarX, cy, r, r * 0.8, rgb, (1 - q) * 0.85, 2 + (1 - q) * (3 + t * 4));
+        }
+      }
+      after.push(() => drawSparks(ctx, scene.sparks, toAvatarX, cy, p, SHOCK.strike));
+      const decay = 1 - span(p, SHOCK.strike, SHOCK.strike + 0.2);
+      const shake = (3 + t * 13) * decay * decay;
+      const ang = sinceStrike * 140;
+      toOff = { dx: Math.sin(ang) * shake * 1.4, dy: Math.cos(ang * 1.3) * shake * 0.8 };
+      head.dx = Math.sin(ang * 0.9 + 1) * shake * 0.6;
+      head.dy = Math.cos(ang * 1.1) * shake * 0.4;
+      after.push(() => {
+        const hit = bump(p, SHOCK.strike + 0.02, 0.07);
+        drawChipOutline(ctx, layout.toX + toOff.dx, layout.chipY + toOff.dy, layout.toW, layout.chipH, 0, rgb, 0.4 + hit * 0.6, 3 + hit * 3);
+      });
+
+      // Residual crackle on the target after the arcs fade
+      if (p > SHOCK.arcFade - 0.05 && p < 0.92 && rand() < 0.55 * (0.4 + t)) {
+        const a = rand() * TAU;
+        const len = 24 + rand() * 40;
+        const path = lightningPath(toAvatarX, cy, toAvatarX + Math.cos(a) * len, cy + Math.sin(a) * len, 0, 7, rand, 5);
+        strokeBolt(ctx, path, 1, rgb, 0.2, 0.55);
+      }
+    }
+
+    const punch = bump(p, SHOCK.strike + 0.02, 0.07);
+    head.scale = 1 + (0.06 + t * 0.1) * punch;
+    head.split = (3 + t * 12) * punch;
+    head.glow = Math.max(punch, 0.15 + 0.15 * (0.5 + 0.5 * Math.sin(TAU * p * 2)));
+    head.sheen = p > 0.6 && p < 0.92 ? span(p, 0.6, 0.92) : null;
+
+    // Brief white-gold flash across the whole card on impact
+    const flash = bump(p, SHOCK.strike + 0.01, 0.035) * (0.1 + t * 0.16);
+    if (flash > 0.005) {
+      after.push(() => {
+        ctx.save();
+        ctx.globalCompositeOperation = 'lighter';
+        ctx.fillStyle = `rgba(255, 240, 180, ${flash})`;
+        ctx.fillRect(cardX, cardY, cardW, cardH);
+        ctx.restore();
+      });
+    }
+  }
+
+  drawChips(ctx, entry, assets, layout, fromOff, toOff);
+  drawHeadlineFx(ctx, entry, layout, head, t, scene.sheen);
+  drawMeter(ctx, entry, layout.meterY, meterSweep);
+  for (const fn of after) fn();
+
   ctx.restore();
+
+  drawBorderRunners(ctx, cardX, cardY, cardW, cardH, CARD_RADIUS, p, rgb);
 }
 
 async function loadAssets(entry: OfficialLogEntry): Promise<Assets> {
@@ -1187,6 +1809,7 @@ function encodeGif(frames: ImageData[], delayMs: number): Blob {
   const quantized = quantize(merged, 255);
   const palette = [[0, 0, 0], ...(quantized.length ? quantized : [[18, 23, 28]])].slice(0, 256);
   const gif = GIFEncoder();
+  let prev: Uint8Array | null = null;
   frames.forEach((frame, i) => {
     const index = applyPalette(frame.data, palette);
     const src = frame.data;
@@ -1199,13 +1822,24 @@ function encodeGif(frames: ImageData[], delayMs: number): Blob {
         index[p] = nearestOpaqueIndex(src[o] ?? 0, src[o + 1] ?? 0, src[o + 2] ?? 0, palette);
       }
     }
-    gif.writeFrame(index, frame.width, frame.height, {
+    // Frame-diff: pixels identical to the previous frame become transparent and the
+    // previous frame is kept (dispose 1). Unchanged areas then compress to almost
+    // nothing, which keeps the longer, richer loops small enough to upload.
+    let out = index;
+    if (prev) {
+      out = new Uint8Array(index);
+      for (let k = 0; k < out.length; k++) {
+        if (out[k] === prev[k]) out[k] = 0;
+      }
+    }
+    prev = index;
+    gif.writeFrame(out, frame.width, frame.height, {
       palette: i === 0 ? palette : null,
       delay: delayMs,
       repeat: 0,
       transparent: true,
       transparentIndex: 0,
-      dispose: 2,
+      dispose: 1,
     });
   });
   gif.finish();
@@ -1219,15 +1853,52 @@ function encodeGif(frames: ImageData[], delayMs: number): Blob {
  * Render a branded share banner for one public log entry.
  * Shock, vibrate, and beep are short looping GIFs.
  */
-export async function renderLogShareCard(entry: OfficialLogEntry): Promise<Blob> {
+async function buildScene(
+  entry: OfficialLogEntry,
+  assets: Assets,
+  layout: Layout,
+  t: number,
+): Promise<Scene> {
+  const bg = document.createElement('canvas');
+  bg.width = CARD_W;
+  bg.height = CARD_H;
+  const bctx = bg.getContext('2d');
+  if (!bctx) throw new Error('Canvas unsupported');
+  paintBackground(bctx, entry, assets, layout);
+  const sheen = document.createElement('canvas');
+  sheen.width = Math.ceil(layout.halfW * 2 + layout.fontSize * 1.2);
+  sheen.height = Math.ceil(layout.fontSize * 1.8);
+  return {
+    bg,
+    sheen,
+    stars: makeStars(entry.id),
+    sparks: makeSparks(entry.id, t),
+    seed: hashSeed(entry.id),
+  };
+}
+
+/** Render every frame of the looping card (also used by the demo preview). */
+export async function renderLogShareFrames(
+  entry: OfficialLogEntry,
+): Promise<{ frames: ImageData[]; delay: number }> {
   const plan = motionFor(entry);
   const assets = await loadAssets(entry);
   const { ctx } = makeCanvas();
   const layout = fitLayout(ctx, entry);
+  const scene = await buildScene(entry, assets, layout, plan.t);
   const frames: ImageData[] = [];
   for (let i = 0; i < plan.frames; i++) {
-    paintCard(ctx, entry, assets, layout, i, plan.frames, plan.t);
+    paintFrame(ctx, entry, assets, layout, scene, i, plan.frames, plan.t);
     frames.push(ctx.getImageData(0, 0, CARD_W, CARD_H));
   }
-  return encodeGif(frames, plan.delay);
+  return { frames, delay: plan.delay };
+}
+
+/**
+ * Render a branded share banner for one public log entry.
+ * Shock, vibrate, and beep are seamless looping GIFs.
+ */
+export async function renderLogShareCard(entry: OfficialLogEntry): Promise<Blob> {
+  const { frames, delay } = await renderLogShareFrames(entry);
+  return encodeGif(frames, delay);
 }

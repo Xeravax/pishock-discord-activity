@@ -14,7 +14,7 @@ import { SetupDiscordShareScreen } from './SetupDiscordShareScreen';
 import { SetupWizard } from './SetupWizard';
 import { SharesPanel } from './SharesPanel';
 import { DEFAULT_LOG_PRIVACY, LogPrivacySettings } from './LogPrivacySettings';
-import { renderLogShareCard } from '../logShareCard';
+import { renderLogShareCard, renderLogShareFrames } from '../logShareCard';
 import type { ShockerView } from './ShockerCard';
 import type { DiscordParticipant } from '../participants';
 
@@ -150,48 +150,140 @@ const LOGS: OfficialLogEntry[] = [
 const SHARE_SAMPLES: OfficialLogEntry[] = [
   {
     ...LOGS[0]!,
-    id: 's1',
+    id: 'sample-shock-strong',
+    action: 'shock',
     from: person('3', 'Xeravax'),
     to: person('111', 'RogerfireFox the Magnificent'),
     location: { kind: 'guild', name: 'The Basement', guildId: '1' },
-    intensity: 42,
+    intensity: 85,
+    durationSec: 1.5,
+    warningLevel: 'small',
+  },
+  {
+    ...LOGS[0]!,
+    id: 'sample-shock-light',
+    action: 'shock',
+    from: person('6', 'Kiwi'),
+    to: person('7', 'Nova'),
+    location: { kind: 'guild', name: 'The Basement', guildId: '1' },
+    intensity: 15,
+    durationSec: 0.5,
+    warningLevel: null,
   },
   {
     ...LOGS[1]!,
-    id: 's2',
+    id: 'sample-vibrate',
     from: person('4', 'A very long display name 🎉'),
     to: person('5', 'Bo'),
     location: { kind: 'dm', name: 'Direct Message' },
+    intensity: 60,
+  },
+  {
+    ...LOGS[1]!,
+    id: 'sample-beep',
+    action: 'beep',
+    from: person('8', 'Mira'),
+    to: person('3', 'Xeravax'),
+    location: { kind: 'guild', name: 'The Basement', guildId: '1' },
+    intensity: 40,
+    durationSec: 1,
+    shockerName: 'Arm',
   },
 ];
 
-/** Renders real share-card GIFs so their layout can be reviewed */
-function ShareCardPreview() {
-  const [urls, setUrls] = useState<string[]>([]);
+/** Every Nth frame of a card laid out in a grid, so motion can be reviewed as stills. */
+function FrameSheet({ entry }: { entry: OfficialLogEntry }) {
+  const [url, setUrl] = useState<string | null>(null);
   useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      const { frames } = await renderLogShareFrames(entry);
+      const only = new URLSearchParams(window.location.search).get('frame');
+      const picks =
+        only != null
+          ? [frames[Math.min(frames.length - 1, Number(only) || 0)]!]
+          : frames.filter((_, i) => i % Math.max(1, Math.round(frames.length / 8)) === 0).slice(0, 8);
+      const tw = only != null ? frames[0]!.width / 2 : 640;
+      const th = Math.round((tw * frames[0]!.height) / frames[0]!.width);
+      const sheet = document.createElement('canvas');
+      sheet.width = tw * 2;
+      sheet.height = th * Math.ceil(picks.length / 2);
+      const sctx = sheet.getContext('2d')!;
+      const tmp = document.createElement('canvas');
+      tmp.width = frames[0]!.width;
+      tmp.height = frames[0]!.height;
+      const tctx = tmp.getContext('2d')!;
+      picks.forEach((f, i) => {
+        tctx.putImageData(f, 0, 0);
+        sctx.drawImage(tmp, (i % 2) * tw, Math.floor(i / 2) * th, tw, th);
+      });
+      if (!cancelled) setUrl(sheet.toDataURL('image/png'));
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [entry]);
+  return url ? <img src={url} alt="Frame sheet" className="theme-preview__card" /> : <p className="muted">Rendering…</p>;
+}
+
+/** Renders real share-card GIFs so their layout and motion can be reviewed */
+function ShareCardPreview() {
+  const mode = new URLSearchParams(window.location.search).get('cards');
+  const only = new URLSearchParams(window.location.search).get('sample');
+  const samples = SHARE_SAMPLES.filter((e) => !only || e.id === `sample-${only}`);
+  const [cards, setCards] = useState<Array<{ id: string; url: string; data: string; kb: number }>>([]);
+  useEffect(() => {
+    if (mode === 'sheet') return;
     let cancelled = false;
     const made: string[] = [];
     void (async () => {
-      for (const entry of SHARE_SAMPLES) {
+      const out: Array<{ id: string; url: string; data: string; kb: number }> = [];
+      for (const entry of samples) {
         try {
           const blob = await renderLogShareCard(entry);
-          made.push(URL.createObjectURL(blob));
+          const url = URL.createObjectURL(blob);
+          made.push(url);
+          const data = await new Promise<string>((resolve) => {
+            const r = new FileReader();
+            r.onload = () => resolve(String(r.result));
+            r.readAsDataURL(blob);
+          });
+          out.push({ id: entry.id, url, data, kb: Math.round(blob.size / 1024) });
         } catch {
           /* ignore in preview */
         }
       }
-      if (!cancelled) setUrls([...made]);
+      if (!cancelled) setCards(out);
     })();
     return () => {
       cancelled = true;
       made.forEach((u) => URL.revokeObjectURL(u));
     };
-  }, []);
-  if (!urls.length) return <p className="muted">Rendering share cards…</p>;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mode, only]);
+
+  if (mode === 'sheet') {
+    return (
+      <div className="theme-preview__stack">
+        {samples.map((e) => (
+          <FrameSheet key={e.id} entry={e} />
+        ))}
+      </div>
+    );
+  }
+  if (!cards.length) return <p className="muted">Rendering share cards…</p>;
   return (
     <div className="theme-preview__stack">
-      {urls.map((u) => (
-        <img key={u} src={u} alt="Share card preview" className="theme-preview__card" />
+      {cards.map((c) => (
+        <figure key={c.id} style={{ margin: 0 }}>
+          <img src={c.url} alt="Share card preview" className="theme-preview__card" />
+          <figcaption className="muted" style={{ fontSize: '0.8rem' }}>
+            {c.id} · {c.kb} KB
+          </figcaption>
+          <a hidden data-gif-id={c.id} href={c.data}>
+            gif
+          </a>
+        </figure>
       ))}
     </div>
   );
