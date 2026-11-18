@@ -1370,40 +1370,41 @@ html.pip-mode #root > * {
   border-style: dashed;
 }
 
+/* Multi / Individual: square remote tiles (outlined → filled when on), theme-aware. */
 .multi-shock-toggle {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 5px;
+  gap: 6px;
   margin: 0;
-  padding: 4px 11px;
-  border-radius: 999px;
-  border: 1px solid rgba(121, 198, 219, 0.45);
-  background: rgba(18, 28, 32, 0.88);
-  color: #9fd7e6;
+  min-height: 32px;
+  padding: 6px 12px;
+  border-radius: var(--ps-r-sm);
+  border: 1px solid var(--ps-cyan);
+  background: transparent;
+  color: var(--ps-cyan);
   font-family: var(--ps-font-label);
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.04em;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
   line-height: 1;
   cursor: pointer;
   transition:
-    background 160ms ease,
-    border-color 160ms ease,
-    color 160ms ease,
-    box-shadow 160ms ease,
+    background 140ms ease,
+    border-color 140ms ease,
+    color 140ms ease,
     transform 120ms ease;
 }
 
 .multi-shock-toggle .q-icon {
-  font-size: 13px;
+  font-size: 1rem;
   line-height: 1;
 }
 
 .multi-shock-toggle:hover {
-  border-color: rgba(121, 198, 219, 0.75);
-  color: #d7f3fa;
-  background: rgba(28, 42, 48, 0.95);
+  background: var(--ps-tint);
+  border-color: var(--ps-cyan-strong, var(--ps-cyan));
 }
 
 .multi-shock-toggle:active {
@@ -1411,53 +1412,30 @@ html.pip-mode #root > * {
 }
 
 .multi-shock-toggle:focus-visible {
-  outline: 2px solid rgba(121, 198, 219, 0.7);
-  outline-offset: 2px;
+  outline: none;
+  box-shadow: var(--ps-focus);
 }
 
 .multi-shock-toggle.is-on {
-  border-color: transparent;
-  background: linear-gradient(135deg, var(--ps-cyan) 0%, #5eb4cc 100%);
-  color: #0b1c22;
-  box-shadow: 0 4px 14px rgba(121, 198, 219, 0.28);
+  background: var(--ps-cyan);
+  border-color: var(--ps-cyan);
+  color: var(--ps-cyan-ink);
 }
 
 .multi-shock-toggle.is-on:hover {
-  color: #061216;
-  background: linear-gradient(135deg, #8fd2e4 0%, #6dbfd5 100%);
+  background: var(--ps-cyan-strong, var(--ps-cyan));
+  border-color: var(--ps-cyan-strong, var(--ps-cyan));
 }
 
 .multi-shock-toggle.is-compact {
-  padding: 3px 9px;
-  font-size: 10px;
+  min-height: 26px;
+  padding: 4px 9px;
+  font-size: 0.66rem;
   gap: 4px;
 }
 
 .multi-shock-toggle.is-compact .q-icon {
-  font-size: 12px;
-}
-
-.multi-shock-toggle--indiv {
-  border-color: rgba(255, 183, 77, 0.45);
-  color: #ffd59a;
-}
-
-.multi-shock-toggle--indiv:hover {
-  border-color: rgba(255, 183, 77, 0.75);
-  color: #ffe7c2;
-  background: rgba(40, 32, 18, 0.95);
-}
-
-.multi-shock-toggle--indiv.is-on {
-  border-color: transparent;
-  background: linear-gradient(135deg, #ffb74d 0%, #f0a037 100%);
-  color: #1a1208;
-  box-shadow: 0 4px 14px rgba(240, 160, 55, 0.28);
-}
-
-.multi-shock-toggle--indiv.is-on:hover {
-  color: #100b04;
-  background: linear-gradient(135deg, #ffc46a 0%, #f5ad4a 100%);
+  font-size: 0.9rem;
 }
 
 .app-version-badge {
@@ -7023,4 +7001,16 @@ button.auth-boot__api-key:not(.secret-value--shown) {
   color: var(--ps-muted);
   cursor: pointer;
   padding: 2px;
+}
+
+/* Buttons inside the Multi card follow the remote's square tiles too. */
+.multi-toolbar .safety-btn {
+  border-radius: var(--ps-r-sm);
+}
+.multi-tray__send .safety-btn {
+  justify-content: center;
+  min-height: 34px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  font-size: 0.74rem;
 }
