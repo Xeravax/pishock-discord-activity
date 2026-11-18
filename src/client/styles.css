@@ -6319,10 +6319,113 @@ button.auth-boot__api-key:not(.secret-value--shown) {
   min-width: 0;
   accent-color: var(--tray-color, var(--ps-cyan));
 }
+.multi-tray__where {
+  color: var(--ps-muted);
+  font-size: 0.72rem;
+}
+.multi-tray__controls {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 4px 0 4px 22px;
+}
+.multi-tray__controls .multi-tray__sliders {
+  padding: 0;
+}
+.multi-tray__actions,
+.multi-tray__warnings {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.multi-tray__action {
+  flex: 1 1 0;
+  min-width: 0;
+  padding: 3px 6px;
+  border: 1px solid var(--ps-border);
+  border-radius: var(--ps-r-sm);
+  background: transparent;
+  color: var(--ps-text-soft);
+  font: 600 0.72rem var(--ps-font-label);
+  letter-spacing: 0.03em;
+  cursor: pointer;
+}
+.multi-tray__action:hover:not(:disabled) {
+  border-color: var(--tray-color, var(--ps-cyan));
+}
+.multi-tray__action.is-active {
+  border-color: var(--tray-color, var(--ps-cyan));
+  background: var(--tray-color, var(--ps-cyan));
+  color: #121212;
+}
+.multi-tray__action:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+.multi-tray__action:focus-visible {
+  outline: 2px solid var(--ps-cyan);
+  outline-offset: 1px;
+}
+.multi-tray__send {
+  position: sticky;
+  bottom: -8px;
+  margin: 2px -8px -8px;
+  padding: 8px;
+  background: var(--ps-surface-inset);
+  border-top: 1px solid var(--ps-border);
+  display: flex;
+}
+.multi-tray__send .safety-btn {
+  flex: 1;
+}
 @media (max-width: 480px) {
   .multi-tray__sliders {
     grid-template-columns: 1fr;
   }
+  .multi-tray__controls {
+    padding-left: 4px;
+  }
+}
+
+/* Multi toolbar: shares the remote's column and takes exactly its width. */
+.official-remote-stack {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+  width: max-content;
+  max-width: 100%;
+  margin: 0 auto;
+}
+.multi-toolbar {
+  /* width 0 + min-width 100% so the tray never widens the remote column */
+  width: 0;
+  min-width: 100%;
+  box-sizing: border-box;
+  padding: 0 8px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.multi-toolbar > .q-item__label--overline {
+  margin: -0.7em auto 0;
+  padding: 0 8px;
+}
+.multi-toolbar__bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.multi-toolbar__summary {
+  flex: 1 1 12em;
+  min-width: 0;
+  font-size: 0.75rem;
+  line-height: 1.35;
+  color: var(--ps-text-soft);
+}
+.multi-toolbar .multi-tray {
+  max-height: 360px;
 }
 
 /* ---- Admin panel ---- */

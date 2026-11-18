@@ -758,12 +758,7 @@ export function DemoApp() {
             personName={(id) =>
               DEMO_PARTICIPANTS.find((p) => p.id === id)?.displayName ?? 'Someone'
             }
-            friendsPanel={({
-              multiShock,
-              onToggleMultiShock,
-              individualIntensity,
-              onToggleIndividualIntensity,
-            }) => (
+            friendsPanel={({ multiShock, individualIntensity }) => (
               <FriendsParticipantList
                 participants={DEMO_PARTICIPANTS}
                 statuses={DEMO_STATUS}
@@ -771,9 +766,7 @@ export function DemoApp() {
                 selectedTargetId={selectedTargetId}
                 selectedTargetIds={selectedTargetIds}
                 multiSelect={multiShock}
-                onToggleMultiSelect={onToggleMultiShock}
                 individualIntensity={individualIntensity}
-                onToggleIndividualIntensity={onToggleIndividualIntensity}
                 onSelect={(id) => {
                   if (!id) {
                     setSelectedTargetIds([]);
