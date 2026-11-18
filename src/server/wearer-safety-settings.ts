@@ -34,6 +34,8 @@ export type WearerSafetySettings = {
   checkInIntervalMs: number;
   checkInGraceMs: number;
   perPersonLimitsEnabled: boolean;
+  /** Others may spin the roulette wheel on you (results still pass every gate). */
+  rouletteAllowed: boolean;
 };
 
 export const DEFAULT_WEARER_SAFETY: WearerSafetySettings = {
@@ -51,6 +53,7 @@ export const DEFAULT_WEARER_SAFETY: WearerSafetySettings = {
   checkInIntervalMs: 15 * 60_000,
   checkInGraceMs: 60_000,
   perPersonLimitsEnabled: false,
+  rouletteAllowed: false,
 };
 
 /** Settings fields are stored under the same column names on DiscordUser. */
@@ -69,6 +72,7 @@ export const WEARER_SAFETY_SELECT = {
   checkInIntervalMs: true,
   checkInGraceMs: true,
   perPersonLimitsEnabled: true,
+  rouletteAllowed: true,
 } as const satisfies Record<keyof WearerSafetySettings, true>;
 
 export type WearerSafetyColumns = {
@@ -122,6 +126,7 @@ export function wearerSafetyPatchToColumns(patch: unknown): Partial<WearerSafety
     'budgetEnabled',
     'checkInEnabled',
     'perPersonLimitsEnabled',
+    'rouletteAllowed',
   ] as const) {
     if (typeof p[key] === 'boolean') data[key] = p[key] as boolean;
   }

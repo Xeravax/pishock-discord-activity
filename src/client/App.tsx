@@ -75,9 +75,17 @@ import {
   ApproveEachStrip,
   CheckInMissedBanner,
   CheckInPrompt,
+  playAppBeep,
 } from './components/SafetyPrompts';
 import { PersonLimitsDialog } from './components/PersonLimitsDialog';
 import { MyDataPanel } from './components/MyDataPanel';
+import {
+  RouletteSpinOverlay,
+  RouletteStartDialog,
+  RouletteVotePrompts,
+  type RouletteSpinView,
+  type RouletteVoteView,
+} from './components/Roulette';
 import {
   ackCheckIn,
   adminConsentStep,
@@ -283,6 +291,11 @@ export function App() {
   const [personLimitTarget, setPersonLimitTarget] = useState<{ id: string; name: string } | null>(
     null,
   );
+  /** Roulette: start dialog target, open votes, and the spin being shown. */
+  const [rouletteTarget, setRouletteTarget] = useState<{ id: string; name: string } | null>(null);
+  const [rouletteBusy, setRouletteBusy] = useState(false);
+  const [rouletteVotes, setRouletteVotes] = useState<RouletteVoteView[]>([]);
+  const [rouletteSpin, setRouletteSpin] = useState<RouletteSpinView | null>(null);
   /** Admin only: next fire skips soft gates (and limits where the wearer consented). */
   const [adminBypassArmed, setAdminBypassArmed] = useState(false);
   /** Groups one multishock fire (several shockers, same tick) into one cooldown / approval. */
@@ -965,6 +978,62 @@ export function App() {
       }
       if (event.type === 'approval_resolved') {
         setApprovalQueue((prev) => prev.filter((r) => r.approvalId !== event.approvalId));
+        return;
+      }
+      if (event.type === 'roulette_vote_open') {
+        const nameOf = (id: string) =>
+          participantsRef.current.find((p) => p.id === id)?.displayName ?? 'Someone';
+        const isTarget = event.targetDiscordUserId === selfIdRef.current;
+        const isStarter = event.starterDiscordUserId === selfIdRef.current;
+        if (isStarter) return; // the starter's vote already counts as yes
+        setRouletteVotes((prev) => [
+          ...prev.filter((v) => v.voteId !== event.voteId),
+          {
+            voteId: event.voteId,
+            targetDiscordUserId: event.targetDiscordUserId,
+            targetName: nameOf(event.targetDiscordUserId),
+            starterName: nameOf(event.starterDiscordUserId),
+            actions: event.actions,
+            endsAt: Date.now() + Math.max(0, event.endsAt - event.at),
+            isTarget,
+          },
+        ]);
+        if (isTarget) playAppBeep(true);
+        return;
+      }
+      if (event.type === 'roulette_vote_closed') {
+        setRouletteVotes((prev) => prev.filter((v) => v.voteId !== event.voteId));
+        if (event.outcome !== 'passed' && event.targetDiscordUserId !== selfIdRef.current) {
+          setActionNotice(
+            event.outcome === 'vetoed'
+              ? 'The wheel was vetoed.'
+              : event.outcome === 'canceled'
+                ? 'The wheel vote was canceled.'
+                : `The wheel vote didn't pass (${event.yes} yes, ${event.no} no).`,
+          );
+        }
+        return;
+      }
+      if (event.type === 'roulette_spin') {
+        const targetName =
+          participantsRef.current.find((p) => p.id === event.targetDiscordUserId)?.displayName ?? 'them';
+        // Map the server start time onto our clock using the event's own timestamp.
+        setRouletteSpin({
+          spinId: event.spinId,
+          targetName,
+          segments: event.segments,
+          resultIndex: event.resultIndex,
+          startsAtLocal: Date.now() + Math.max(0, event.startAt - event.at),
+          spinMs: event.spinMs,
+        });
+        return;
+      }
+      if (event.type === 'roulette_result') {
+        setRouletteSpin((prev) =>
+          prev && prev.spinId === event.spinId
+            ? { ...prev, result: { outcome: event.outcome, message: event.message } }
+            : prev,
+        );
         return;
       }
       if (event.type === 'admin_bypass') {
@@ -2589,8 +2658,63 @@ export function App() {
     [token],
   );
 
+  const startRoulette = async (opts: { actions: string[]; mode: 'solo' | 'vote' }) => {
+    if (!token || !rouletteTarget) return;
+    setRouletteBusy(true);
+    try {
+      const shockerId = participantStatus[rouletteTarget.id]?.shockers?.[0]?.shockerId;
+      const locationHint = await resolveActivityLocationHint(token).catch(() => null);
+      const res = await apiFetch<{ mode: 'solo' | 'vote' }>('/roulette', token, {
+        method: 'POST',
+        body: JSON.stringify({
+          targetDiscordUserId: rouletteTarget.id,
+          shockerId,
+          actions: opts.actions,
+          mode: opts.mode,
+          instanceId: getActivityInstanceId(),
+          locationHint,
+        }),
+      });
+      if (res.mode === 'vote') setActionNotice('Vote started — everyone here has 20 seconds.');
+      setRouletteTarget(null);
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setRouletteBusy(false);
+    }
+  };
+
+  const voteRoulette = (voteId: string, yes: boolean) => {
+    if (!token) return;
+    setRouletteVotes((prev) => prev.map((v) => (v.voteId === voteId ? { ...v, myVote: yes } : v)));
+    void apiFetch(`/roulette/${encodeURIComponent(voteId)}/vote`, token, {
+      method: 'POST',
+      body: JSON.stringify({ yes }),
+    }).catch((err) => setActionError(err instanceof Error ? err.message : String(err)));
+  };
+
+  const vetoRoulette = (voteId: string) => {
+    if (!token) return;
+    setRouletteVotes((prev) => prev.filter((v) => v.voteId !== voteId));
+    void apiFetch(`/roulette/${encodeURIComponent(voteId)}/veto`, token, {
+      method: 'POST',
+      body: '{}',
+    }).catch((err) => setActionError(err instanceof Error ? err.message : String(err)));
+  };
+
   const safetyOverlays = (
     <>
+      <RouletteVotePrompts votes={rouletteVotes} onVote={voteRoulette} onVeto={vetoRoulette} />
+      {rouletteSpin ? (
+        <RouletteSpinOverlay spin={rouletteSpin} onClose={() => setRouletteSpin(null)} />
+      ) : null}
+      <RouletteStartDialog
+        open={Boolean(rouletteTarget)}
+        targetName={rouletteTarget?.name ?? ''}
+        busy={rouletteBusy}
+        onClose={() => setRouletteTarget(null)}
+        onStart={(opts) => void startRoulette(opts)}
+      />
       <ApprovalPrompts
         requests={approvalQueue}
         busyId={approvalBusyId}
@@ -3199,6 +3323,7 @@ export function App() {
                   : undefined
               }
               personLimitedIds={new Set(Object.keys(personLimits))}
+              onSpinRoulette={(id, name) => setRouletteTarget({ id, name })}
               adminBypass={
                 me.isAdmin
                   ? { armed: adminBypassArmed, onToggle: () => setAdminBypassArmed((v) => !v) }

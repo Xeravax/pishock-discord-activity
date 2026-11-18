@@ -72,6 +72,8 @@ model DiscordUser {
   adminLimitOverrideConsentVersion Int?
   /// Keep command logs (your copies) for this many days; null = keep until you delete them.
   logRetentionDays Int? @default(365)
+  /// Roulette: others may spin a wheel (solo or by room vote) whose result is sent to you.
+  rouletteAllowed Boolean @default(false)
   /// Log sharing: where other people can see hits on you (everywhere|server|channel|private).
   logVisibility      String  @default("everywhere")
   /// Log sharing: what other people can see about hits on you.

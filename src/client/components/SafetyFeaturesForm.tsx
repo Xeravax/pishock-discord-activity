@@ -2,7 +2,7 @@ import { useState, type ReactNode } from 'react';
 import { LimitSlider, formatDurationMs } from './LimitSlider';
 import type { BudgetPeriod, WearerSafety } from '../safety';
 
-type FeatureId = 'favorites' | 'approve' | 'cooldown' | 'budget' | 'checkin' | 'person';
+type FeatureId = 'favorites' | 'approve' | 'cooldown' | 'budget' | 'checkin' | 'person' | 'roulette';
 
 type Props = {
   value: WearerSafety;
@@ -358,6 +358,28 @@ export function SafetyFeaturesForm({ value, onChange, disabled, queueEnabled, le
           title="Set lower limits for specific people"
           hint="Adds a settings cog next to people in the list. Their caps can only be lower than your normal limits."
           onChange={(perPersonLimitsEnabled) => set({ perPersonLimitsEnabled })}
+        />
+      </Feature>
+
+      <Feature
+        id="roulette"
+        open={open === 'roulette'}
+        onToggle={toggle}
+        icon="mdi-ship-wheel"
+        title="Roulette"
+        on={value.rouletteAllowed}
+        summary={
+          value.rouletteAllowed
+            ? 'On — people can spin a wheel (alone or by room vote) on you'
+            : 'Off — nobody can spin the wheel on you'
+        }
+      >
+        <Switch
+          checked={value.rouletteAllowed}
+          disabled={disabled}
+          title="Let people spin the wheel on me"
+          hint="The wheel mixes shock / vibrate / beep / safe, always within your limits. Room votes need at least 2 yes and you can veto. Results still go through approve-each, budget, cooldowns and your queue."
+          onChange={(rouletteAllowed) => set({ rouletteAllowed })}
         />
       </Feature>
     </div>

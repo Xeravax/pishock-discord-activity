@@ -18,6 +18,7 @@ export type WearerSafety = {
   checkInIntervalMs: number;
   checkInGraceMs: number;
   perPersonLimitsEnabled: boolean;
+  rouletteAllowed: boolean;
 };
 
 export const DEFAULT_WEARER_SAFETY: WearerSafety = {
@@ -35,6 +36,7 @@ export const DEFAULT_WEARER_SAFETY: WearerSafety = {
   checkInIntervalMs: 15 * 60_000,
   checkInGraceMs: 60_000,
   perPersonLimitsEnabled: false,
+  rouletteAllowed: false,
 };
 
 export type BudgetState = {
@@ -100,6 +102,7 @@ export type ParticipantSafety = {
   cooldownRemainingMs: number;
   budget: { exhausted: boolean; remainingShocks: number | null; remainingShockMs: number | null } | null;
   personLimited: boolean;
+  rouletteAllowed?: boolean;
 };
 
 export function normalizeWearerSafety(raw: Partial<WearerSafety> | null | undefined): WearerSafety {

@@ -30,6 +30,8 @@ type Props = {
   personLimitedIds?: ReadonlySet<string>;
   /** Admins only: arm a bypass for the next fire (logged red, wearer notified). */
   adminBypass?: { armed: boolean; onToggle: () => void };
+  /** Open the roulette start dialog for someone who allows it. */
+  onSpinRoulette?: (discordUserId: string, displayName: string) => void;
 };
 
 /** Discord Shockers roster styled like the official PISHOCKS FAB list */
@@ -52,6 +54,7 @@ export function FriendsParticipantList({
   onOpenPersonLimits,
   personLimitedIds,
   adminBypass,
+  onSpinRoulette,
 }: Props) {
   const others = participants.filter((p) => p.id !== currentUserId);
   const selectedIds = selectedTargetIds ?? (selectedTargetId ? [selectedTargetId] : []);
@@ -279,6 +282,21 @@ export function FriendsParticipantList({
                       style={{ fontSize: 16 }}
                       aria-hidden
                     />
+                  </button>
+                ) : null}
+                {onSpinRoulette && status?.safety?.rouletteAllowed && status.available && !banned ? (
+                  <button
+                    type="button"
+                    className="official-friend-wheel"
+                    title={`Spin the roulette wheel for ${p.displayName}`}
+                    aria-label={`Roulette for ${p.displayName}`}
+                    onClick={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      onSpinRoulette(p.id, p.displayName);
+                    }}
+                  >
+                    <i className="q-icon mdi mdi-ship-wheel" style={{ fontSize: 16 }} aria-hidden />
                   </button>
                 ) : null}
                 {onOpenPersonLimits ? (

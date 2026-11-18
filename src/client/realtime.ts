@@ -139,6 +139,45 @@ export type RealtimeEvent =
       at: number;
     }
   | {
+      /** Room vote: someone wants to spin the roulette wheel on a participant. */
+      type: 'roulette_vote_open';
+      voteId: string;
+      targetDiscordUserId: string;
+      starterDiscordUserId: string;
+      actions: string[];
+      endsAt: number;
+      at: number;
+    }
+  | {
+      type: 'roulette_vote_closed';
+      voteId: string;
+      targetDiscordUserId: string;
+      outcome: 'passed' | 'failed' | 'vetoed' | 'canceled';
+      yes: number;
+      no: number;
+      at: number;
+    }
+  | {
+      /** Identical for every viewer: same segments, result and start time. */
+      type: 'roulette_spin';
+      spinId: string;
+      targetDiscordUserId: string;
+      starterDiscordUserId: string;
+      segments: Array<{ action: 'shock' | 'vibrate' | 'beep' | 'safe'; intensity: number; durationMs: number }>;
+      resultIndex: number;
+      startAt: number;
+      spinMs: number;
+      at: number;
+    }
+  | {
+      type: 'roulette_result';
+      spinId: string;
+      targetDiscordUserId: string;
+      outcome: 'sent' | 'queued' | 'safe' | 'refused';
+      message: string | null;
+      at: number;
+    }
+  | {
       type: 'hello_ok';
       discordUserId: string;
       at: number;

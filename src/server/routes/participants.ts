@@ -447,6 +447,8 @@ export const participantRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app
             : null,
           /** True when the wearer set lower limits for the caller specifically. */
           personLimited: Boolean(personLimit),
+          /** Others may spin the roulette wheel on them. */
+          rouletteAllowed: safety.rouletteAllowed,
         },
         shockers: visibleShockers,
       };

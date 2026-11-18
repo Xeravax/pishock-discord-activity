@@ -202,7 +202,7 @@ function opFor(operation: QueuedOperation) {
   return ShockerOp.Beep;
 }
 
-async function validateQueuedItem(item: QueueItemInternal): Promise<boolean> {
+export async function validateQueuedItem(item: QueueItemInternal): Promise<boolean> {
   const settings = await getCommandQueueSettings(item.ownerDiscordUserId);
   if (!settings.enabled) {
     return false;
@@ -301,7 +301,7 @@ async function endQueuedItem(item: QueueItemInternal): Promise<boolean> {
   return published;
 }
 
-async function executeQueuedItem(
+export async function executeQueuedItem(
   item: QueueItemInternal,
   isCanceled?: () => boolean,
 ): Promise<void> {

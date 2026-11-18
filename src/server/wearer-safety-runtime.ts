@@ -200,9 +200,23 @@ export async function recordWearerHit(input: {
   }
 }
 
-/** E-STOP engaged: close all open approval prompts for this wearer. */
+const emergencyStopHooks = new Set<(ownerDiscordUserId: string) => void>();
+
+/** Other features (roulette) cancel their pending work on E-STOP. */
+export function registerEmergencyStopHook(fn: (ownerDiscordUserId: string) => void): void {
+  emergencyStopHooks.add(fn);
+}
+
+/** E-STOP engaged: close all open approval prompts (and anything else pending) for this wearer. */
 export function onWearerEmergencyStop(ownerDiscordUserId: string): void {
   approvals.cancelAllFor(ownerDiscordUserId);
+  for (const hook of emergencyStopHooks) {
+    try {
+      hook(ownerDiscordUserId);
+    } catch (err) {
+      console.warn('[safety] E-STOP hook failed', err instanceof Error ? err.message : err);
+    }
+  }
 }
 
 const LAST_SEEN_INTERVAL_MS = 60_000;

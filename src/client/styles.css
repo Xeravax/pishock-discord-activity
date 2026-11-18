@@ -6124,3 +6124,42 @@ button.auth-boot__api-key:not(.secret-value--shown) {
     margin-bottom: 6px;
   }
 }
+
+/* Roulette */
+.roulette-wheel {
+  width: min(320px, 80vw);
+  aspect-ratio: 220 / 228;
+  margin: 0 auto;
+}
+.roulette-overlay__result {
+  text-align: center;
+  min-height: 1.5em;
+}
+.roulette-votes {
+  position: fixed;
+  bottom: calc(env(safe-area-inset-bottom, 0px) + 12px);
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(420px, calc(100vw - 32px));
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  z-index: 7400;
+}
+.roulette-vote--target {
+  border-color: var(--ps-danger-border);
+}
+.official-friend-wheel {
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: var(--ps-cyan);
+  cursor: pointer;
+  padding: 2px;
+  min-width: 22px;
+  min-height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
