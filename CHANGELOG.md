@@ -1,5 +1,40 @@
 # Changelog
 
+## v2.6.0 — 2026-11-18
+
+## What's changed
+
+- #minor Merge develop into release: admin panel, global bans, safety features, multishock rework, new Terms and Privacy (04e6c7e)
+- Merge pull request #30 from Xeravax/feature/join-discord (c0c812b)
+- Menu: Join our Discord, available to everyone at any time (2a39a24)
+- Merge pull request #29 from Xeravax/feature/admin-panel (efddfdf)
+- Rewrite Terms of Service and Privacy Policy for the current app (6d3b684)
+- Ignore local .tmp/ scratch folder (5f41b06)
+- Multi: toggles and card buttons as square remote tiles (68af85b)
+- Lint: no new warnings from the admin panel and demo screens (f220024)
+- Dialog sizing: roulette grid, tabs and remote fit narrow screens (66efe37)
+- Multi: per-shocker settings in a toolbar flush with the remote (db0a87f)
+- Admin panel: global bans with reason, profile view, audit log, app notice (281423c)
+- Merge pull request #28 from Xeravax/feature/theme-polish (d49dc43)
+- Merge feature/extra-features (phase 4: multishock rework) into feature/theme-polish (dc9af5c)
+- Merge develop into feature/theme-polish (e375aea)
+- Merge pull request #26 from Xeravax/feature/extra-features (0e7adf4)
+- Extra features phase 4: multishock / per-target rework (ba20223)
+- Extra features phase 6: session recaps, DMs and history (f54a7aa)
+- Extra features phase 5: roulette wheel + room vote (0d23ad5)
+- Extra features phase 3: data rights (GDPR / AVG) (5bf0ea8)
+- Extra features phase 2: admin bypass (feddda7)
+- Extra features phase 1: wearer safety gates (17aa1ae)
+- Refactor queue panel styles and improve coverage report (0a07651)
+- Share cards: cinematic looping animations (73caee7)
+- PIP quick actions: emergency stop, queue pause/skip, favorite/block (6f0f848)
+- Log sharing preferences, split activity limits, extra-features setup step, centred share cards (f52b869)
+- Setup: compact card for device/queue steps; only limits step uses full viewport (4bf7e4e)
+- Confirm-account screen: full banner/avatar, scroll body, Deny/Accept footer (8a4c1b2)
+- Unify theme across settings dialogs and boot screens (f4ef5b7)
+
+**Full changelog**: https://github.com/Xeravax/pishock-discord-activity/compare/v2.5.0...v2.6.0
+
 ## v2.5.0 — 2026-11-18
 
 ## What's changed
