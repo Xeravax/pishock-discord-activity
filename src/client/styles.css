@@ -7014,3 +7014,32 @@ button.auth-boot__api-key:not(.secret-value--shown) {
   letter-spacing: 0.1em;
   font-size: 0.74rem;
 }
+
+/* Operator / contact card on the Terms and Privacy pages */
+.legal-contact {
+  margin-top: 10px;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 8px;
+  font-size: 0.88rem;
+}
+.legal-contact > div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 10px;
+  border: 1px solid var(--ps-border);
+  border-radius: var(--ps-r-md);
+  background: var(--ps-surface-inset);
+  min-width: 0;
+  word-break: break-word;
+}
+.legal-contact__label {
+  font: 600 0.68rem var(--ps-font-label);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ps-muted);
+}
+.legal-page a {
+  color: var(--ps-cyan);
+}

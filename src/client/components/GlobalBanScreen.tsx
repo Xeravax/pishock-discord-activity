@@ -3,6 +3,7 @@ import type { GlobalBanInfo } from '../hooks/useGlobalBan';
 import { openExternal } from '../discord';
 import { PsDialog } from './PsDialog';
 import { MyDataPanel } from './MyDataPanel';
+import { ExternalLink, LEGAL, LEGAL_MAILTO } from '../legal/legal';
 
 function remaining(expiresAt: string, now: number): string {
   const ms = Date.parse(expiresAt) - now;
@@ -84,7 +85,10 @@ export function GlobalBanScreen({
           <li>Your shared shockers were paused and anything waiting in your queue was removed.</li>
           <li>Commands you had queued for other people will not run.</li>
           <li>You can still view, download or delete your data.</li>
-          {ban.appealUrl ? <li>Think this is a mistake? Appeal in our Discord server and mention the reference above.</li> : null}
+          <li>
+            Think this is a mistake? Appeal {ban.appealUrl ? 'in our Discord server or ' : ''}by email to{' '}
+            <ExternalLink href={LEGAL_MAILTO}>{LEGAL.email}</ExternalLink>, and mention the reference above.
+          </li>
         </ul>
 
         <div className="global-ban__actions">
