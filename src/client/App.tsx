@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ApiError, apiBase, apiFetch, isEmbedded } from './api';
+import { ApiError, apiFetch, isEmbedded } from './api';
 import {
   bootstrapDiscord,
   buildPresenceSnapshot,
@@ -62,7 +62,6 @@ import {
 import {
   QueueFab,
   QueuePanel,
-  type QueuePanelItem,
   type QueuePanelSettings,
 } from './components/QueuePanel';
 import { PsDialog } from './components/PsDialog';
@@ -127,42 +126,26 @@ import {
 import type { ActivityShareConfig } from './components/AvailabilitySettings';
 import type { DiscordParticipant, ParticipantStatus } from './participants';
 import { connectRealtime, type RealtimeEvent } from './realtime';
-
-type MeResponse = {
-  user: AuthState['user'];
-  consent: boolean;
-  pishockLinked: boolean;
-  pishockUserId: number | null;
-  pishockUsername?: string | null;
-  pishockAvatarUrl?: string | null;
-  pishockBannerUrl?: string | null;
-  personal?: PersonalLimits;
-  emergencyStopShockerIds?: number[];
-  commandQueueEnabled?: boolean;
-  /** Shows the admin bypass toggle; the server re-checks on every command. */
-  isAdmin?: boolean;
-};
-
-type QueueState = QueuePanelSettings & {
-  paused: boolean;
-  halted: boolean;
-  active: QueuePanelItem | null;
-  waiting: QueuePanelItem[];
-  next: QueuePanelItem | null;
-  nextStartsInMs: number | null;
-  nextEstimatedStartAt: number | null;
-};
-
-type SenderQueueTicket = {
-  ownerDiscordUserId: string;
-  itemId: string;
-  status: string;
-  position: number | null;
-  paused: boolean;
-  estimatedWaitMs: number | null;
-  estimatedStartAt: number | null;
-  at: number;
-};
+import type {
+  DevicesResponse,
+  LegalView,
+  MeResponse,
+  Overlay,
+  PendingApiKeyReveal,
+  PendingLinkConfirm,
+  QueueState,
+  SenderQueueTicket,
+} from './app/types';
+import { formatQueueEta } from './app/queueFormat';
+import { buildFriendShockers } from './app/friendShockers';
+import { derivePersonalLimits } from './app/limits';
+import { buildHubOptions } from './app/hubs';
+import {
+  collectClientIds,
+  normalizeClientKey,
+  normalizeShockers,
+  pauseRowsFromDevices,
+} from './app/devices';
 
 /** Logs query; the instance id lets the server apply "same server / channel" log scopes. */
 function logsQuery(): string {
@@ -171,53 +154,6 @@ function logsQuery(): string {
     ? `/logs?limit=200&instanceId=${encodeURIComponent(instanceId)}`
     : '/logs?limit=200';
 }
-
-function formatQueueEta(waitMs: number | null | undefined): string | null {
-  if (waitMs == null || !Number.isFinite(waitMs)) return null;
-  if (waitMs <= 0) return 'now';
-  const sec = Math.max(1, Math.round(waitMs / 1000));
-  if (sec < 60) return `${sec}s`;
-  const min = Math.floor(sec / 60);
-  const rem = sec % 60;
-  return rem ? `${min}m ${rem}s` : `${min}m`;
-}
-
-type DevicesResponse = {
-  hubs: Array<Record<string, unknown>>;
-  shockers: Array<Record<string, unknown>>;
-  shared: Array<Record<string, unknown>>;
-  online: Record<string, boolean>;
-};
-
-type Overlay =
-  | null
-  | 'menu'
-  | 'availability'
-  | 'settings'
-  | 'shares'
-  | 'logs'
-  | 'link'
-  | 'logPrivacy'
-  | 'safety'
-  | 'myData'
-  | 'history';
-
-type LegalView = null | 'terms' | 'privacy';
-
-type PendingLinkConfirm = {
-  pishockUserId: number;
-  pishockUsername?: string | null;
-  avatarUrl?: string | null;
-  bannerUrl?: string | null;
-  hubNames: string[];
-};
-
-type PendingApiKeyReveal = {
-  apiKey: string;
-  apiKeyName: string;
-  expiresAt?: string | null;
-  pishockUsername?: string | null;
-};
 
 const PARTICIPANT_STATUS_TTL_MS = 3 * 60 * 1000;
 
@@ -613,7 +549,7 @@ export function App() {
       setBootLabel(label);
     };
 
-    (async () => {
+    void (async () => {
       try {
         report(4, 'Starting…');
         const authState = await bootstrapDiscord(setPip, ({ progress, label }) => {
@@ -1211,39 +1147,10 @@ export function App() {
     return () => window.clearInterval(id);
   }, [token, refreshParticipantStatus]);
 
-  const personalLimits = useMemo<PersonalLimits>(() => {
-    const p = me?.personal;
-    const maxI = Math.max(1, Math.min(100, p?.activityMaxIntensity ?? 100));
-    const maxD = Math.max(16, Math.min(15_000, p?.activityMaxDurationMs ?? 15_000));
-    const vibMaxI = Math.max(1, Math.min(100, p?.activityVibMaxIntensity ?? maxI));
-    const vibMaxD = Math.max(16, Math.min(15_000, p?.activityVibMaxDurationMs ?? maxD));
-    const beepMaxI = Math.max(1, Math.min(100, p?.activityBeepMaxIntensity ?? maxI));
-    const beepMaxD = Math.max(16, Math.min(15_000, p?.activityBeepMaxDurationMs ?? maxD));
-    return {
-      activityMinIntensity: Math.max(1, Math.min(maxI, p?.activityMinIntensity ?? 1)),
-      activityMaxIntensity: maxI,
-      activityMinDurationMs: Math.max(16, Math.min(maxD, p?.activityMinDurationMs ?? 16)),
-      activityMaxDurationMs: maxD,
-      activityVibMinIntensity: Math.max(1, Math.min(vibMaxI, p?.activityVibMinIntensity ?? 1)),
-      activityVibMaxIntensity: vibMaxI,
-      activityVibMinDurationMs: Math.max(16, Math.min(vibMaxD, p?.activityVibMinDurationMs ?? 16)),
-      activityVibMaxDurationMs: vibMaxD,
-      activityBeepMinIntensity: Math.max(1, Math.min(beepMaxI, p?.activityBeepMinIntensity ?? 1)),
-      activityBeepMaxIntensity: beepMaxI,
-      activityBeepMinDurationMs: Math.max(16, Math.min(beepMaxD, p?.activityBeepMinDurationMs ?? 16)),
-      activityBeepMaxDurationMs: beepMaxD,
-      activityCanShock: true,
-      activityCanVibrate: true,
-      activityCanBeep: true,
-      activityCanHold: true,
-      activityRequiredWarningLevel:
-        p?.activityRequiredWarningLevel === 'small' ||
-        p?.activityRequiredWarningLevel === 'mid' ||
-        p?.activityRequiredWarningLevel === 'long'
-          ? p.activityRequiredWarningLevel
-          : 'none',
-    };
-  }, [me?.personal]);
+  const personalLimits = useMemo<PersonalLimits>(
+    () => derivePersonalLimits(me?.personal),
+    [me?.personal],
+  );
 
   const emergencyStopIds = useMemo(
     () => new Set(me?.emergencyStopShockerIds ?? []),
@@ -1267,42 +1174,10 @@ export function App() {
     });
   }, [devices, online, personalLimits, emergencyStopIds, discordShareLimits, livePausedIds]);
 
-  const hubOptions = useMemo(() => {
-    const hubs = devices?.hubs ?? [];
-    if (!hubs.length) {
-      const fallbackOnline = ownedAndShared.some((s) => s.online);
-      return [
-        {
-          id: ownedAndShared[0]?.clientId
-            ? normalizeClientKey(String(ownedAndShared[0].clientId)) || '0'
-            : '0',
-          name: 'PiShock',
-          online: fallbackOnline,
-          lastSeen: fallbackOnline ? 'Seen a few seconds ago' : 'Checking…',
-        },
-      ];
-    }
-    return hubs.map((h) => {
-      const id = normalizeClientKey(hubClientId(h) ?? '') || '0';
-      const name = String(h.Name ?? h.name ?? 'Hub');
-      const known = id in online ? online[id] : undefined;
-      const fromShockers = ownedAndShared.some(
-        (s) => normalizeClientKey(String(s.clientId ?? '')) === id && s.online,
-      );
-      const isOnline = known === true || fromShockers;
-      return {
-        id,
-        name,
-        online: isOnline,
-        lastSeen:
-          known === true || fromShockers
-            ? 'Seen a few seconds ago'
-            : known === false
-              ? 'Offline'
-              : 'Checking…',
-      };
-    });
-  }, [devices?.hubs, ownedAndShared, online]);
+  const hubOptions = useMemo(
+    () => buildHubOptions(devices?.hubs, ownedAndShared, online),
+    [devices?.hubs, ownedAndShared, online],
+  );
 
   useEffect(() => {
     if (!hubOptions.length) return;
@@ -1311,113 +1186,10 @@ export function App() {
     }
   }, [hubOptions, selectedHubId]);
 
-  const friendShockers = useMemo(() => {
-    if (!selectedTargetIds.length) return [] as ShockerView[];
-    const rows: ShockerView[] = [];
-    for (const targetId of selectedTargetIds) {
-      const status = participantStatus[targetId];
-      const participant = participants.find((p) => p.id === targetId);
-      // Blocked: no visibility into their shockers
-      if (!status || status.bannedYou) continue;
-      // E-stop / paused / etc: still show shockers (buttons disabled via flags)
-      if (!status.shockers?.length) continue;
-      for (const s of status.shockers) {
-        const deviceMaxIntensity = Math.min(100, s.deviceMaxIntensity ?? s.maxIntensity);
-        const deviceMaxDuration = Math.min(15_000, s.deviceMaxDurationMs ?? s.maxDurationMs);
-        const activityMaxIntensity = Math.min(deviceMaxIntensity, s.maxIntensity);
-        const activityMaxDuration = Math.min(deviceMaxDuration, s.maxDurationMs);
-        const activityMinIntensity = Math.max(
-          1,
-          Math.min(activityMaxIntensity, s.minIntensity ?? 1),
-        );
-        const activityMinDuration = Math.max(
-          16,
-          Math.min(activityMaxDuration, s.minDurationMs ?? 16),
-        );
-        const vibMaxIntensity = Math.min(
-          deviceMaxIntensity,
-          s.vibMaxIntensity ?? activityMaxIntensity,
-        );
-        const vibMinIntensity = Math.max(
-          1,
-          Math.min(vibMaxIntensity, s.vibMinIntensity ?? activityMinIntensity),
-        );
-        const vibMaxDuration = Math.min(
-          deviceMaxDuration,
-          s.vibMaxDurationMs ?? activityMaxDuration,
-        );
-        const vibMinDuration = Math.max(
-          16,
-          Math.min(vibMaxDuration, s.vibMinDurationMs ?? activityMinDuration),
-        );
-        const beepMaxIntensity = Math.min(
-          deviceMaxIntensity,
-          s.beepMaxIntensity ?? activityMaxIntensity,
-        );
-        const beepMinIntensity = Math.max(
-          1,
-          Math.min(beepMaxIntensity, s.beepMinIntensity ?? activityMinIntensity),
-        );
-        const beepMaxDuration = Math.min(
-          deviceMaxDuration,
-          s.beepMaxDurationMs ?? activityMaxDuration,
-        );
-        const beepMinDuration = Math.max(
-          16,
-          Math.min(beepMaxDuration, s.beepMinDurationMs ?? activityMinDuration),
-        );
-        const stopped = Boolean(s.emergencyStop);
-        const devicePaused = Boolean(s.paused) || livePausedIds.has(s.shockerId);
-        rows.push({
-          id: s.shockerId,
-          name: s.shockerName,
-          hubName:
-            s.hubName?.trim() ||
-            participant?.displayName ||
-            status.globalName ||
-            status.username ||
-            'Friend',
-          clientId: s.hubClientId ?? undefined,
-          owned: false,
-          targetDiscordUserId: targetId,
-          paused: devicePaused,
-          canShock: !stopped && !devicePaused && s.canShock,
-          canVibrate: !stopped && !devicePaused && s.canVibrate,
-          canBeep: !stopped && !devicePaused && s.canBeep,
-          canHold: !stopped && !devicePaused && s.canHold,
-          canPause: false,
-          deviceMaxIntensity,
-          deviceMaxDuration,
-          activityMinIntensity,
-          activityMaxIntensity,
-          activityMinDuration,
-          activityMaxDuration,
-          minIntensity: activityMinIntensity,
-          maxIntensity: activityMaxIntensity,
-          minDuration: activityMinDuration,
-          maxDuration: activityMaxDuration,
-          vibMinIntensity,
-          vibMaxIntensity,
-          vibMinDuration,
-          vibMaxDuration,
-          beepMinIntensity,
-          beepMaxIntensity,
-          beepMinDuration,
-          beepMaxDuration,
-          requiredWarningLevel:
-            s.requiredWarningLevel === 'small' ||
-            s.requiredWarningLevel === 'mid' ||
-            s.requiredWarningLevel === 'long'
-              ? s.requiredWarningLevel
-              : 'none',
-          emergencyStop: stopped,
-          isV3: true,
-          online: true,
-        });
-      }
-    }
-    return rows;
-  }, [selectedTargetIds, participantStatus, participants, livePausedIds]);
+  const friendShockers = useMemo(
+    () => buildFriendShockers(selectedTargetIds, participantStatus, participants, livePausedIds),
+    [selectedTargetIds, participantStatus, participants, livePausedIds],
+  );
 
   const ownShockers = useMemo(() => {
     if (!selectedHubId) return ownedAndShared;
@@ -3365,7 +3137,7 @@ export function App() {
               const adminSkipsFavorites = adminBypassArmed && Boolean(me.isAdmin);
               if ((starBlocked && !adminSkipsFavorites) || queueHalted) return;
             }
-            operate({
+            void operate({
               ...input,
               targetDiscordUserId: targetId,
             });
@@ -3970,227 +3742,4 @@ export function App() {
       />
     </div>
   );
-}
-
-function normalizeClientKey(raw: string | number | null | undefined): string | null {
-  if (raw == null) return null;
-  let id = String(raw).trim();
-  if (!id) return null;
-  if (/^c\d+$/i.test(id)) id = id.slice(1);
-  return id;
-}
-
-function hubClientId(row: Record<string, unknown>): string | null {
-  const id = row.ClientId ?? row.clientId ?? row.HubId ?? row.hubId ?? row.Id ?? row.id;
-  return normalizeClientKey(id != null ? String(id) : null);
-}
-
-function shockerClientId(row: Record<string, unknown>): string | null {
-  const id = row.ClientId ?? row.clientId ?? row.HubId ?? row.hubId;
-  return normalizeClientKey(id != null ? String(id) : null);
-}
-
-/** Official API MaxDuration is seconds; operate path expects ms */
-function maxDurationMs(row: Record<string, unknown>): number {
-  const raw = Number(row.MaxDuration ?? row.maxDuration ?? 15);
-  if (!Number.isFinite(raw) || raw <= 0) return 15_000;
-  return raw <= 60 ? Math.round(raw * 1000) : Math.round(raw);
-}
-
-function collectClientIds(devices: DevicesResponse): string[] {
-  const ids = new Set<string>();
-  for (const hub of devices.hubs ?? []) {
-    const id = hubClientId(hub);
-    if (id) ids.add(id);
-  }
-  for (const s of devices.shockers ?? []) {
-    const id = shockerClientId(s);
-    if (id) ids.add(id);
-  }
-  const sharedList = Array.isArray(devices.shared)
-    ? devices.shared
-    : devices.shared && typeof devices.shared === 'object'
-      ? Object.values(devices.shared as Record<string, unknown>).flatMap((v) =>
-          Array.isArray(v) ? v : [v],
-        )
-      : [];
-  for (const s of sharedList as Array<Record<string, unknown>>) {
-    const id = shockerClientId(s);
-    if (id) ids.add(id);
-  }
-  return [...ids];
-}
-
-function pauseRowsFromDevices(devices: DevicesResponse): Array<Record<string, unknown>> {
-  const shared = Array.isArray(devices.shared)
-    ? devices.shared
-    : devices.shared && typeof devices.shared === 'object'
-      ? Object.values(devices.shared as Record<string, unknown>).flatMap((v) =>
-          Array.isArray(v) ? v : [v],
-        )
-      : [];
-  return [...(devices.shockers ?? []), ...(shared as Array<Record<string, unknown>>)];
-}
-
-function dropResolvedPause(
-  live: Set<number>,
-  rows: Array<Record<string, unknown>>,
-): Set<number> {
-  if (live.size === 0) return live;
-  const next = new Set(live);
-  for (const row of rows) {
-    const id = Number(row.ShockerId ?? row.shockerId ?? row.Id ?? row.id);
-    if (!Number.isFinite(id)) continue;
-    if (isPiShockRowPaused(row) || isPiShockRowExplicitlyUnpaused(row)) next.delete(id);
-  }
-  return next.size === live.size ? live : next;
-}
-
-function rowIsPaused(
-  row: Record<string, unknown>,
-  id: number,
-  livePausedIds: Set<number>,
-): boolean {
-  if (livePausedIds.has(id)) return true;
-  return isPiShockRowPaused(row);
-}
-
-function normalizeShockers(
-  devices: DevicesResponse | null,
-  online: Record<string, boolean>,
-  personal: PersonalLimits,
-  emergencyStopIds: Set<number>,
-  livePausedIds: Set<number>,
-): ShockerView[] {
-  if (!devices) return [];
-  const hubNameByClient = new Map<string, string>();
-  for (const hub of devices.hubs ?? []) {
-    const id = hubClientId(hub);
-    const name = String(hub.Name ?? hub.name ?? 'Hub');
-    if (id) hubNameByClient.set(id, name);
-  }
-
-  const fallbackHubId = [...hubNameByClient.keys()][0] ?? null;
-
-  const owned: ShockerView[] = (devices.shockers ?? []).map((s) => {
-    const id = Number(s.ShockerId ?? s.shockerId ?? s.Id ?? s.id);
-    const clientKey = shockerClientId(s) ?? fallbackHubId ?? '';
-    const deviceMaxIntensity = Math.max(
-      1,
-      Math.min(100, Number(s.MaxIntensity ?? s.maxIntensity ?? 100)),
-    );
-    const deviceMaxDuration = maxDurationMs(s);
-    const activityMaxIntensity = Math.min(deviceMaxIntensity, personal.activityMaxIntensity);
-    const activityMaxDuration = Math.min(deviceMaxDuration, personal.activityMaxDurationMs);
-    const activityMinIntensity = Math.max(
-      1,
-      Math.min(activityMaxIntensity, personal.activityMinIntensity),
-    );
-    const activityMinDuration = Math.max(
-      16,
-      Math.min(activityMaxDuration, personal.activityMinDurationMs),
-    );
-    const vibMaxIntensity = Math.min(deviceMaxIntensity, personal.activityVibMaxIntensity);
-    const vibMinIntensity = Math.max(
-      1,
-      Math.min(vibMaxIntensity, personal.activityVibMinIntensity),
-    );
-    const vibMaxDuration = Math.min(deviceMaxDuration, personal.activityVibMaxDurationMs);
-    const vibMinDuration = Math.max(
-      16,
-      Math.min(vibMaxDuration, personal.activityVibMinDurationMs),
-    );
-    const beepMaxIntensity = Math.min(deviceMaxIntensity, personal.activityBeepMaxIntensity);
-    const beepMinIntensity = Math.max(
-      1,
-      Math.min(beepMaxIntensity, personal.activityBeepMinIntensity),
-    );
-    const beepMaxDuration = Math.min(deviceMaxDuration, personal.activityBeepMaxDurationMs);
-    const beepMinDuration = Math.max(
-      16,
-      Math.min(beepMaxDuration, personal.activityBeepMinDurationMs),
-    );
-    return {
-      id,
-      name: String(s.Name ?? s.name ?? `Shocker ${id}`),
-      hubName: clientKey ? hubNameByClient.get(clientKey) : undefined,
-      clientId: clientKey || undefined,
-      owned: true,
-      paused: rowIsPaused(s, id, livePausedIds),
-      canShock: true,
-      canVibrate: true,
-      canBeep: true,
-      canHold: true,
-      canPause: Boolean(s.CanPause ?? s.canPause ?? false),
-      deviceMaxIntensity,
-      deviceMaxDuration,
-      activityMinIntensity,
-      activityMaxIntensity,
-      activityMinDuration,
-      activityMaxDuration,
-      minIntensity: activityMinIntensity,
-      maxIntensity: activityMaxIntensity,
-      minDuration: activityMinDuration,
-      maxDuration: activityMaxDuration,
-      vibMinIntensity,
-      vibMaxIntensity,
-      vibMinDuration,
-      vibMaxDuration,
-      beepMinIntensity,
-      beepMaxIntensity,
-      beepMinDuration,
-      beepMaxDuration,
-      requiredWarningLevel: personal.activityRequiredWarningLevel,
-      emergencyStop: emergencyStopIds.has(id),
-      isV3: Boolean(s.IsV3 ?? s.isV3 ?? true),
-      online: clientKey ? online[clientKey] === true : undefined,
-    };
-  });
-
-  const sharedList = Array.isArray(devices.shared)
-    ? devices.shared
-    : devices.shared && typeof devices.shared === 'object'
-      ? Object.values(devices.shared as Record<string, unknown>).flatMap((v) =>
-          Array.isArray(v) ? v : [v],
-        )
-      : [];
-
-  const shared: ShockerView[] = (sharedList as Array<Record<string, unknown>>).map((s) => {
-    const id = Number(s.Id ?? s.id ?? s.ShockerId ?? s.shockerId);
-    const clientKey = shockerClientId(s) ?? '';
-    const deviceMaxIntensity = Math.max(
-      1,
-      Math.min(100, Number(s.MaxIntensity ?? s.maxIntensity ?? 100)),
-    );
-    const deviceMaxDuration = maxDurationMs(s);
-    return {
-      id,
-      name: String(s.Name ?? s.name ?? `Shared ${id}`),
-      hubName: String(s.OwnedBy ?? s.ownedBy ?? ''),
-      clientId: clientKey || undefined,
-      owned: false,
-      paused: rowIsPaused(s, id, livePausedIds),
-      shareCode: s.ShareCode != null ? String(s.ShareCode) : s.shareCode != null ? String(s.shareCode) : undefined,
-      shareId: s.ShareId != null ? Number(s.ShareId) : s.shareId != null ? Number(s.shareId) : undefined,
-      canShock: Boolean(s.CanShock ?? s.canShock ?? true),
-      canVibrate: Boolean(s.CanVibrate ?? s.canVibrate ?? true),
-      canBeep: Boolean(s.CanBeep ?? s.canBeep ?? true),
-      canHold: Boolean(s.CanHold ?? s.canHold ?? true),
-      canPause: Boolean(s.CanPause ?? s.canPause ?? false),
-      deviceMaxIntensity,
-      deviceMaxDuration,
-      activityMinIntensity: 1,
-      activityMaxIntensity: deviceMaxIntensity,
-      activityMinDuration: 16,
-      activityMaxDuration: deviceMaxDuration,
-      minIntensity: 1,
-      maxIntensity: deviceMaxIntensity,
-      minDuration: 16,
-      maxDuration: deviceMaxDuration,
-      isV3: Boolean(s.IsV3 ?? s.isV3 ?? true),
-      online: clientKey ? online[clientKey] === true : undefined,
-    };
-  });
-
-  return [...owned, ...shared];
 }

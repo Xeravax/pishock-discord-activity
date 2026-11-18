@@ -121,7 +121,7 @@ pishock-activity/
 1. **Discord Developer Account** — [Discord Developer Portal](https://discord.com/developers/applications)
 2. **PiShock Account** — [PiShock Website](https://pishock.com) (each end user links their own account)
 3. **Docker** — Docker Engine + Compose (for production-style hosting)
-4. **Node.js 22+** — optional, for local development without Docker
+4. **Node.js 22.22.2+, 24.15.0+ or 26+** — optional, for local development without Docker
 5. **HTTPS reverse proxy** — Discord Activities require a public HTTPS URL
 
 #### Required Knowledge
@@ -270,7 +270,11 @@ npm run dev:client   # Vite UI (separate terminal)
 | `npm run dev:client` | Vite frontend |
 | `npm run build` | Prisma generate + Vite build + server compile |
 | `npm start` | Run compiled `dist/server.js` |
+| `npm test` | Safety-gate, validation and invariant tests (`node --test`) |
+| `npm run lint` | Type-aware lint (oxlint + tsgolint; works with TypeScript 7) |
 | `npm run typecheck` | TypeScript checks (server + client) |
+| `npm run format` / `format:check` | Prettier (not enforced yet — the codebase predates it) |
+| `npm run hooks:install` | Opt-in pre-commit hook (typecheck + lint) |
 | `npm run prisma:generate` | Generate Prisma client |
 | `npm run prisma:migrate` | Apply migrations (`prisma migrate deploy`) |
 
@@ -290,6 +294,9 @@ npm run dev:client   # Vite UI (separate terminal)
 | `ADMIN_DISCORD_USER_IDS` | Runtime | No | Admin bypass ids; exceeding limits needs the wearer's consent |
 | `DISCORD_COMMUNITY_GUILD_ID` | Runtime | No | Community guild for recap DMs (`off` disables) |
 | `DISCORD_COMMUNITY_INVITE_URL` | Runtime | No | Fallback invite link |
+| `TRUST_PROXY` | Runtime | Optional | `1` behind a reverse proxy so rate limits see real client IPs |
+| `RATE_LIMIT_MAX` | Runtime | Optional | API requests/minute per caller (default 600) |
+| `CSP_ENFORCE` | Runtime | Optional | `1` to enforce the Content-Security-Policy (default: report-only) |
 | `VITE_DISCORD_CLIENT_ID` | Build | Yes* | Usually set from `DISCORD_CLIENT_ID` during Docker/CI build |
 
 \*Required for a working Discord embed; without it the client falls back to a dummy id and Discord rejects the origin.
@@ -366,6 +373,18 @@ Compose defaults create a local volume for Postgres (`pishock_pgdata`). Producti
 - Ban list for Discord users
 - Command logging
 - TAP continuous hold only when the share/device allows hold
+
+### Restarts & safety (single instance only)
+The server keeps short-lived control state in memory, so **run exactly one instance**
+(a second replica would not see the first one's rate limits, holds, or queue timers).
+
+| State | Where it lives | On restart |
+| --- | --- | --- |
+| E-STOP latches | Postgres (`emergencyStopShockerIds`) | **Preserved** — commands stay blocked |
+| Activity limits, bans, shares, queue settings | Postgres | Preserved |
+| Pending hold waiting out its warning | memory | Dropped — the hold never starts (fails safe) |
+| Hold auto-end timers | memory | On graceful shutdown (SIGTERM, e.g. `docker stop`/deploys) every active hold is **ended before exit**. A hard crash (SIGKILL/OOM) cannot do this, so the device's own PiShock duration limit is the last line of defense |
+| Operate rate-limit window, pending PiShock login/confirm | memory | Reset — users retry |
 
 ### Data Protection
 - PiShock session tokens encrypted at rest (`TOKEN_KEY` → AES-256-GCM)

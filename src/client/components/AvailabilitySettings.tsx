@@ -65,7 +65,7 @@ export function AvailabilitySettings({
 
   useEffect(() => {
     let cancelled = false;
-    (async () => {
+    void (async () => {
       try {
         const data = await onLoad();
         if (cancelled) return;

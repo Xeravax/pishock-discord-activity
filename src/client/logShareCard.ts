@@ -260,29 +260,6 @@ function drawStar(
   ctx.restore();
 }
 
-function drawSparkleField(ctx: CanvasRenderingContext2D, seedKey: string) {
-  const rand = mulberry32(hashSeed(seedKey || 'pishock'));
-  for (let i = 0; i < 56; i++) {
-    const x = 64 + rand() * (CARD_W - 128);
-    const y = 130 + rand() * (CARD_H - 230);
-    if (y > CARD_H - 96) continue;
-    const big = rand() < 0.18;
-    const r = big ? 2.8 + rand() * 3.2 : 0.8 + rand() * 1.5;
-    const alpha = (big ? 0.7 : 0.35) + rand() * 0.28;
-    const color = rand() > 0.28 ? '#ffe7a0' : '#f5fcff';
-    if (big) drawStar(ctx, x, y, r, color, alpha);
-    else {
-      ctx.save();
-      ctx.globalAlpha = alpha;
-      ctx.fillStyle = color;
-      ctx.beginPath();
-      ctx.arc(x, y, r, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.restore();
-    }
-  }
-}
-
 function drawLetterAvatar(
   ctx: CanvasRenderingContext2D,
   cx: number,

@@ -556,13 +556,22 @@ export function subscribeParticipants(
     onUpdate(list.map((p) => normalizeParticipant(p)));
   };
   try {
-    discordSdk.subscribe(Events.ACTIVITY_INSTANCE_PARTICIPANTS_UPDATE, handler);
+    // subscribe() returns a promise: a sync try/catch alone misses async rejections.
+    discordSdk
+      .subscribe(Events.ACTIVITY_INSTANCE_PARTICIPANTS_UPDATE, handler)
+      .catch(() => {
+        // older SDK / unsupported
+      });
   } catch {
     // older SDK / unsupported
   }
   return () => {
     try {
-      discordSdk.unsubscribe(Events.ACTIVITY_INSTANCE_PARTICIPANTS_UPDATE, handler);
+      discordSdk
+        .unsubscribe(Events.ACTIVITY_INSTANCE_PARTICIPANTS_UPDATE, handler)
+        .catch(() => {
+          // ignore
+        });
     } catch {
       // ignore
     }

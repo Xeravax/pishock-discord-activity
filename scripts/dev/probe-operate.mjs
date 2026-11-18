@@ -45,7 +45,7 @@ async function getBad(url) {
 
 await getBad('https://api.pishock.com/Shockers');
 const shockers = await get('https://api.pishock.com/Shockers');
-const shared = await get('https://api.pishock.com/Share/GetShared');
+await get('https://api.pishock.com/Share/GetShared');
 
 const shockerId = shockers?.[0]?.ShockerId ?? shockers?.[0]?.Id;
 console.log('using shocker', shockerId);

@@ -14,7 +14,7 @@ const FALLBACK: AppVersionInfo = {
   release: null,
 };
 
-function tryReadJson(filePath: string): unknown | null {
+function tryReadJson(filePath: string): unknown {
   try {
     if (!fs.existsSync(filePath)) return null;
     return JSON.parse(fs.readFileSync(filePath, 'utf8'));

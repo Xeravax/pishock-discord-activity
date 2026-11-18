@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import type { AppEnv } from '../env.js';
 import { broadcastRealtime } from '../realtime.js';
 import {
@@ -40,6 +41,7 @@ import { publishOperate } from './broker.js';
 import { ShockerOp } from '../../shared/constants.js';
 import {
   createCommandQueue,
+  type QueueEnqueueInput,
   type QueueItemInternal,
   type QueueStatePublic,
   type QueuedOperation,
@@ -202,7 +204,7 @@ function opFor(operation: QueuedOperation) {
   return ShockerOp.Beep;
 }
 
-export async function validateQueuedItem(item: QueueItemInternal): Promise<boolean> {
+async function validateQueuedItem(item: QueueItemInternal): Promise<boolean> {
   const settings = await getCommandQueueSettings(item.ownerDiscordUserId);
   if (!settings.enabled) {
     return false;
@@ -301,7 +303,7 @@ async function endQueuedItem(item: QueueItemInternal): Promise<boolean> {
   return published;
 }
 
-export async function executeQueuedItem(
+async function executeQueuedItem(
   item: QueueItemInternal,
   isCanceled?: () => boolean,
 ): Promise<void> {
@@ -603,7 +605,12 @@ export const commandQueue = createCommandQueue({
   validateBeforeRun: validateQueuedItem,
   execute: executeQueuedItem,
   endActive: endQueuedItem,
-  onStateChange: emitQueueState,
+  onStateChange: (state) => {
+    // Fire-and-forget: a failed settings read must not become an unhandled rejection.
+    emitQueueState(state).catch((err: unknown) => {
+      console.error('[command-queue] failed to emit queue state', err);
+    });
+  },
   onTicket: (ticket) => {
     broadcastRealtime(ticket, { discordUserId: ticket.executorDiscordUserId });
   },
@@ -613,3 +620,24 @@ export const commandQueue = createCommandQueue({
 setCheckInMissedHandler(async (owner) => {
   await commandQueue.hardClear(owner);
 });
+
+/**
+ * Send a command the server built itself (roulette results). It takes exactly the queued
+ * path: with the wearer's queue on it is enqueued (and re-validated at dispatch);
+ * otherwise it is re-validated now (consent, ban, favorites, budget, E-STOP, pause, share)
+ * and run through executeQueuedItem (bands, per-person limits, escalation, warning,
+ * ceilings, E-STOP re-check). Callers must run admitWearerCommand first.
+ */
+export async function submitServerCommand(
+  input: QueueEnqueueInput,
+  queueEnabled: boolean,
+): Promise<'queued' | 'sent' | 'unavailable'> {
+  if (queueEnabled) {
+    await commandQueue.enqueue(input);
+    return 'queued';
+  }
+  const item: QueueItemInternal = { ...input, id: randomUUID(), enqueuedAt: Date.now(), seq: 0 };
+  if (!(await validateQueuedItem(item))) return 'unavailable';
+  await executeQueuedItem(item);
+  return 'sent';
+}

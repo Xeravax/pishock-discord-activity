@@ -1,4 +1,3 @@
-import { randomUUID } from 'node:crypto';
 import type { FastifyPluginAsync } from 'fastify';
 import type { AppEnv } from '../env.js';
 import { InstanceAuthError, verifyActivityInstance } from '../discord-instance.js';
@@ -18,13 +17,8 @@ import { atLeastWarning } from '../../shared/warning.js';
 import { personalBandsFromUser, shareBandsFromRow } from '../limit-bands.js';
 import { WearerGateError, buildEffectiveModes } from '../wearer-safety.js';
 import { admitWearerCommand, escalation, registerEmergencyStopHook } from '../wearer-safety-runtime.js';
-import {
-  commandQueue,
-  executeQueuedItem,
-  validateQueuedItem,
-  type QueuedOperatePayload,
-} from '../pishock/command-queue-runtime.js';
-import { CommandQueueError, type QueueItemInternal } from '../pishock/command-queue.js';
+import { submitServerCommand, type QueuedOperatePayload } from '../pishock/command-queue-runtime.js';
+import { CommandQueueError } from '../pishock/command-queue.js';
 import {
   ROULETTE_ACTIONS,
   buildSegments,
@@ -123,18 +117,13 @@ async function executeSpin(spin: SpinPayload, segment: RouletteSegment): Promise
     payload,
   };
   try {
-    if (queueEnabled) {
-      await commandQueue.enqueue(input);
-      emitResult(spin, 'queued', null);
-      return;
-    }
-    const item: QueueItemInternal = { ...input, id: randomUUID(), enqueuedAt: Date.now(), seq: 0 };
-    if (!(await validateQueuedItem(item))) {
+    // Firing stays inside the reviewed queue runtime (see test/route-invariants.test.ts).
+    const outcome = await submitServerCommand(input, queueEnabled);
+    if (outcome === 'unavailable') {
       emitResult(spin, 'refused', 'Their shocker is not available right now.');
       return;
     }
-    await executeQueuedItem(item);
-    emitResult(spin, 'sent', null);
+    emitResult(spin, outcome, null);
   } catch (err) {
     const message =
       err instanceof CommandQueueError || err instanceof WearerGateError || err instanceof Error

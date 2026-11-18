@@ -137,7 +137,10 @@ export function createRouletteCenter(deps: RouletteDeps) {
   function tally(v: VoteState): VoteTally {
     let yes = 0;
     let no = 0;
-    for (const choice of v.votes.values()) (choice ? yes++ : no++);
+    for (const choice of v.votes.values()) {
+      if (choice) yes += 1;
+      else no += 1;
+    }
     return { yes, no, vetoed: v.vetoed };
   }
 

@@ -11,3 +11,4 @@ client-dist/
 data/
 prisma/*.db
 prisma/*.db-journal
+coverage/

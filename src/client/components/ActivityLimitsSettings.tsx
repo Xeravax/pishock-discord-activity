@@ -241,7 +241,7 @@ export function ActivityLimitsSettings({
 
   useEffect(() => {
     let cancelled = false;
-    (async () => {
+    void (async () => {
       try {
         const data = await onLoad();
         if (cancelled) return;

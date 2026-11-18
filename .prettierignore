@@ -1,0 +1,9 @@
+node_modules
+dist
+client-dist
+public
+src/client/vendor
+package-lock.json
+CHANGELOG.md
+release-notes.json
+prisma/migrations

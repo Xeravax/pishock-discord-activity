@@ -24,6 +24,11 @@ function optionalSetting(raw: string | undefined, fallback: string): string | nu
   return /^(off|none|false|0)$/i.test(v) ? null : v;
 }
 
+function positiveInt(raw: string | undefined, fallback: number): number {
+  const n = Number(raw);
+  return Number.isInteger(n) && n > 0 ? n : fallback;
+}
+
 export function loadEnv() {
   const port = Number(process.env.PORT ?? '3000');
   return {
@@ -66,6 +71,16 @@ export function loadEnv() {
       process.env.DISCORD_COMMUNITY_INVITE_URL,
       'https://discord.gg/M6XjdQmb3E',
     ),
+    /**
+     * Set TRUST_PROXY=1 when running behind a reverse proxy / the Discord proxy so
+     * `req.ip` reflects the real client (needed for IP-based rate limits). Off by default:
+     * trusting X-Forwarded-For from an untrusted network lets clients spoof their IP.
+     */
+    trustProxy: process.env.TRUST_PROXY === '1',
+    /** Requests per minute per caller (bearer token, else IP) across /api/*. */
+    rateLimitMax: positiveInt(process.env.RATE_LIMIT_MAX, 600),
+    /** Enforce the Content-Security-Policy (default: report-only while rolling out). */
+    cspEnforce: process.env.CSP_ENFORCE === '1',
   };
 }
 

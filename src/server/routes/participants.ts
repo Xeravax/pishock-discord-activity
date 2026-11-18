@@ -1,3 +1,4 @@
+import { parseBody, participantOperateBody, participantsStatusBody } from '../schemas/index.js';
 import type { FastifyPluginAsync } from 'fastify';
 import { ShockerOp } from '../../shared/constants.js';
 import type { AppEnv } from '../env.js';
@@ -45,6 +46,7 @@ import {
   getPersonalActivityLimits,
   getWearerSafety,
   isEmergencyStopped,
+  isEmergencyStopLatched,
   isExecutorBanned,
   listEnabledActivityShares,
   isQueueStarred,
@@ -57,7 +59,6 @@ import { broadcastRealtime } from '../realtime.js';
 import {
   resolveActivityLocation,
   type ActivityLocationContext,
-  type ClientLocationHint,
 } from '../discord-location.js';
 import { commandQueue } from '../pishock/command-queue-runtime.js';
 import { CommandQueueError, type QueuedOperation } from '../pishock/command-queue.js';
@@ -291,7 +292,8 @@ export const participantRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app
       return reply.code(403).send({ error: 'Consent required', code: 'CONSENT_REQUIRED' });
     }
 
-    const body = req.body as { discordUserIds?: string[]; instanceId?: string };
+    const body = parseBody(participantsStatusBody, req, reply);
+    if (!body) return reply;
     const instanceId = body.instanceId ? String(body.instanceId) : '';
     try {
       await verifyActivityInstance(opts.env, instanceId, {
@@ -473,21 +475,8 @@ export const participantRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app
     const targetDiscordUserId = String(
       (req.params as { targetDiscordUserId: string }).targetDiscordUserId,
     );
-    const body = req.body as {
-      instanceId?: string;
-      locationHint?: ClientLocationHint | null;
-      shockerId?: number;
-      operation?: 'shock' | 'vibrate' | 'beep' | 'hold' | 'warning' | 'stop' | 'end';
-      intensity?: number;
-      durationMs?: number;
-      hold?: boolean;
-      warning?: boolean;
-      warningLevel?: WarningLevel | string;
-      clientId?: string | number;
-      batchId?: string;
-      /** Admin only: skip soft gates (and limits, if the wearer consented). */
-      adminBypass?: boolean;
-    };
+    const body = parseBody(participantOperateBody, req, reply);
+    if (!body) return reply;
     const batchId = batchIdFrom(req, body);
     // Non-admins sending the flag are simply treated as normal commands.
     const asAdmin = body.adminBypass === true && isAdmin(opts.env.adminDiscordUserIds, req.discordUser.id);
@@ -970,6 +959,14 @@ export const participantRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app
         return { ok: true, via: 'broker', canceled: true };
       }
       if ((hold || warning) && clientId != null) {
+        // Publish-time guard: a STOP that completed during an earlier await (e.g. the PiShock
+        // pause lookup) must still block this command.
+        if (isEmergencyStopLatched(targetDiscordUserId, shockerId)) {
+          return reply.code(423).send({
+            error: 'Owner has emergency stop engaged',
+            code: 'EMERGENCY_STOP',
+          });
+        }
         const published = await publishOperate(targetCreds, {
           clientId,
           shockerId,
@@ -1051,6 +1048,14 @@ export const participantRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app
         });
       }
 
+      // Publish-time guard: a STOP that completed during an earlier await (e.g. the PiShock
+      // pause lookup) must still block this command.
+      if (isEmergencyStopLatched(targetDiscordUserId, shockerId)) {
+        return reply.code(423).send({
+          error: 'Owner has emergency stop engaged',
+          code: 'EMERGENCY_STOP',
+        });
+      }
       await operateById(
         targetCreds,
         shockerId,

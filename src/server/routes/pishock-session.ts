@@ -1,4 +1,5 @@
 import type { FastifyPluginAsync } from 'fastify';
+import { strictRateLimit } from '../security.js';
 import type { AppEnv } from '../env.js';
 import {
   createApiKey,
@@ -85,7 +86,7 @@ export const pishockSessionRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (
     return reply.send(stored.buffer);
   });
 
-  app.post('/api/pishock/login/start', async (req, reply) => {
+  app.post('/api/pishock/login/start', strictRateLimit(10), async (req, reply) => {
     if (!req.hasConsent) {
       return reply.code(403).send({ error: 'Consent required' });
     }
@@ -162,7 +163,7 @@ export const pishockSessionRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (
     return { status: 'waiting' as const, loginUrl: pending.loginUrl };
   });
 
-  app.post('/api/pishock/login/confirm', async (req, reply) => {
+  app.post('/api/pishock/login/confirm', strictRateLimit(20), async (req, reply) => {
     if (!req.hasConsent) {
       return reply.code(403).send({ error: 'Consent required' });
     }
@@ -302,7 +303,7 @@ export const pishockSessionRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (
   });
 
   /** Manual link with an existing PiShock username + API key (no browser login). */
-  app.post('/api/pishock/session/api-key', async (req, reply) => {
+  app.post('/api/pishock/session/api-key', strictRateLimit(10), async (req, reply) => {
     if (!req.hasConsent) {
       return reply.code(403).send({ error: 'Consent required' });
     }
