@@ -12,3 +12,6 @@ data/
 prisma/*.db
 prisma/*.db-journal
 coverage/
+
+# Local scratch (screenshots, audits)
+.tmp/
