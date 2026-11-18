@@ -37,6 +37,16 @@ type Dialog = 'limits' | 'availability' | 'shares' | 'login' | 'logs';
 
 const NOOP = () => {};
 
+/** Wide mock profile banner (3:1) so the confirm preview shows the full image */
+const DEMO_BANNER = `data:image/svg+xml;utf8,${encodeURIComponent(
+  '<svg xmlns="http://www.w3.org/2000/svg" width="600" height="200" viewBox="0 0 600 200">' +
+    '<defs><linearGradient id="g" x1="0" x2="1" y1="0" y2="1"><stop offset="0" stop-color="#2fa8dc"/><stop offset="1" stop-color="#1a1500"/></linearGradient></defs>' +
+    '<rect width="600" height="200" fill="url(#g)"/>' +
+    '<path d="M380 20 L470 20 L430 120 L470 120 L360 190 L400 100 L360 100 Z" fill="#f4d600" opacity=".85"/>' +
+    '<text x="24" y="176" font-family="sans-serif" font-size="22" fill="#fff" opacity=".8">banner edge → fully visible</text>' +
+    '</svg>',
+)}`;
+
 const PERSONAL: PersonalLimits = {
   activityMinIntensity: 1,
   activityMaxIntensity: 60,
@@ -246,6 +256,8 @@ export function ThemePreview({
         <LinkConfirmPanel
           pishockUserId={12345}
           pishockUsername="LocalDev"
+          avatarUrl="https://cdn.discordapp.com/embed/avatars/1.png"
+          bannerUrl={DEMO_BANNER}
           hubNames={['DevShock', 'Spare hub']}
           discordName="Local Dev"
           onConfirm={() => setBoot(null)}

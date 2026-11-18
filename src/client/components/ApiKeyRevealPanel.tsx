@@ -86,7 +86,17 @@ export function ApiKeyRevealPanel({
         ) : null}
 
         <div className="auth-boot__actions">
-          <button type="button" onClick={onExit}>Finish later</button>
+          <button
+            type="button"
+            className="q-btn q-btn-item non-selectable no-outline text-grey-5 q-btn--flat q-btn--rectangle q-btn--actionable"
+            onClick={onExit}
+          >
+            <span className="q-btn__wrapper col row q-anchor--skip">
+              <span className="q-btn__content text-center col items-center q-anchor--skip justify-center row">
+                <span className="block">Finish later</span>
+              </span>
+            </span>
+          </button>
           <button
             type="button"
             className="q-btn q-btn-item non-selectable no-outline text-secondary bg-dark q-btn--outline q-btn--rectangle q-btn--actionable"

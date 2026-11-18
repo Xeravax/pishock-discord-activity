@@ -3195,6 +3195,52 @@ select.ps-field option {
   }
 }
 
+/* Boot cards never squash their content — they scroll instead */
+.auth-boot__panel:not(.auth-boot__panel--setup):not(.auth-boot__panel--limits):not(.auth-boot__panel--sheet)
+  > *,
+.auth-boot__sheet-body > * {
+  flex-shrink: 0;
+}
+
+/* Sheet variant: scrolling body + pinned action footer */
+.auth-boot__panel--sheet {
+  padding: 0;
+  gap: 0;
+  overflow: hidden;
+  align-items: stretch;
+}
+
+.auth-boot__sheet-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  padding: 24px 22px 18px;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(121, 198, 219, 0.45) transparent;
+}
+
+.auth-boot__sheet-footer {
+  flex-shrink: 0;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  padding: 12px 22px 16px;
+  border-top: 1px solid var(--ps-border);
+  background: rgba(0, 0, 0, 0.22);
+  border-radius: 0 0 var(--ps-r-lg) var(--ps-r-lg);
+}
+
+.auth-boot__sheet-footer .q-btn {
+  width: 100%;
+  min-height: 40px;
+}
+
 /* ---- Brand header (logo tile + wordmark) ---- */
 .ps-brand {
   display: flex;
@@ -3489,31 +3535,44 @@ select.ps-field option {
   overflow: hidden;
 }
 
-.auth-boot__profile-showcase {
-  position: relative;
+/* Banner shows in full at its natural aspect ratio (no crop, nothing overlaps it) */
+.auth-boot__profile-banner {
+  display: block;
+  width: calc(100% + 32px);
+  height: auto;
   margin: 0 -16px 14px;
-  min-height: 88px;
+  background-color: rgba(121, 198, 219, 0.12);
+  border-bottom: 1px solid var(--ps-border);
 }
 
-.auth-boot__profile-banner {
-  height: 88px;
-  background-color: rgba(121, 198, 219, 0.12);
-  background-position: center;
-  background-size: cover;
-  background-repeat: no-repeat;
+.auth-boot__profile-banner--empty {
+  height: 56px;
+  background: linear-gradient(120deg, rgba(47, 168, 220, 0.28), rgba(244, 214, 0, 0.12));
+}
+
+.auth-boot__account-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-width: 0;
+}
+
+.auth-boot__account-details {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .auth-boot__profile-avatar {
-  position: absolute;
-  left: 16px;
-  bottom: -28px;
-  width: 72px;
-  height: 72px;
+  flex: 0 0 auto;
+  width: 80px;
+  height: 80px;
+  box-sizing: border-box;
   border-radius: 50%;
   object-fit: cover;
-  border: 3px solid rgba(18, 28, 32, 0.95);
-  background: rgba(18, 28, 32, 0.95);
-  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+  border: 2px solid var(--ps-border-accent);
+  background: var(--ps-surface);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45);
 }
 
 .auth-boot__profile-avatar--placeholder {
@@ -3522,10 +3581,6 @@ select.ps-field option {
   justify-content: center;
   color: var(--ps-cyan);
   font-size: 1.8rem;
-}
-
-.auth-boot__account--profile .auth-boot__account-label {
-  margin-top: 34px;
 }
 
 .auth-boot__account-label {
