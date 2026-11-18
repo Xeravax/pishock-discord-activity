@@ -53,6 +53,24 @@ export function TermsOfService({ onBack }: Props) {
       </section>
 
       <section className="panel">
+        <h2>Admin access</h2>
+        <ul className="legal-list">
+          <li>
+            Admins of this activity may skip cooldowns, shock budgets, favorites only, approve-each
+            and the queue line. Each use is logged in red and the wearer is notified.
+          </li>
+          <li>
+            Admins may only exceed a wearer&apos;s limits after that wearer explicitly allowed it
+            through three separate confirmations. The wearer can withdraw this at any time.
+          </li>
+          <li>
+            Admins can never override E-STOP, pauses, blocks, required warnings or the PiShock
+            device maximum.
+          </li>
+        </ul>
+      </section>
+
+      <section className="panel">
         <h2>Disclaimer of Liability</h2>
         <p className="muted">
           The Service is provided as-is. Developers and operators assume no responsibility for

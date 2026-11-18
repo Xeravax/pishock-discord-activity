@@ -6094,3 +6094,33 @@ button.auth-boot__api-key:not(.secret-value--shown) {
   font: 600 0.95rem var(--ps-font-mono);
   letter-spacing: 0.08em;
 }
+
+/* My data (GDPR / AVG) */
+.my-data__list {
+  display: grid;
+  grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
+  gap: 6px 12px;
+  margin: 0;
+  font-size: 0.86rem;
+}
+.my-data__list dt {
+  color: var(--ps-muted);
+}
+.my-data__list dd {
+  margin: 0;
+  color: var(--ps-text);
+  word-break: break-word;
+}
+.my-data__retention {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: 6px;
+}
+@media (max-width: 480px) {
+  .my-data__list {
+    grid-template-columns: 1fr;
+  }
+  .my-data__list dd {
+    margin-bottom: 6px;
+  }
+}

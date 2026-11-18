@@ -70,6 +70,8 @@ model DiscordUser {
   adminLimitOverrideConsentAt DateTime?
   /// Version of the consent text that was accepted.
   adminLimitOverrideConsentVersion Int?
+  /// Keep command logs (your copies) for this many days; null = keep until you delete them.
+  logRetentionDays Int? @default(365)
   /// Log sharing: where other people can see hits on you (everywhere|server|channel|private).
   logVisibility      String  @default("everywhere")
   /// Log sharing: what other people can see about hits on you.
@@ -255,4 +257,20 @@ model CommandLog {
   @@index([targetDiscordUserId, createdAt])
   @@index([createdAt])
   @@index([source, createdAt])
+}
+
+/// Self-service delete / anonymise request (GDPR/AVG). Runs after a cancellable grace period.
+/// No foreign key: the record outlives the user row; discordUserId is cleared once done.
+model DataDeletionRequest {
+  id            String    @id @default(cuid())
+  discordUserId String?
+  /// delete | anonymise
+  mode          String
+  requestedAt   DateTime  @default(now())
+  executeAfter  DateTime
+  cancelledAt   DateTime?
+  completedAt   DateTime?
+
+  @@index([discordUserId])
+  @@index([executeAfter])
 }

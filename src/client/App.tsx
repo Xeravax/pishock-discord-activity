@@ -77,6 +77,7 @@ import {
   CheckInPrompt,
 } from './components/SafetyPrompts';
 import { PersonLimitsDialog } from './components/PersonLimitsDialog';
+import { MyDataPanel } from './components/MyDataPanel';
 import {
   ackCheckIn,
   adminConsentStep,
@@ -188,7 +189,8 @@ type Overlay =
   | 'logs'
   | 'link'
   | 'logPrivacy'
-  | 'safety';
+  | 'safety'
+  | 'myData';
 
 type LegalView = null | 'terms' | 'privacy';
 
@@ -3356,9 +3358,12 @@ export function App() {
                 ['logs', 'Logs', 'mdi-message-text-clock'],
                 ['logPrivacy', 'Log sharing', 'mdi-eye-settings-outline'],
                 ['safety', 'Extra features', 'mdi-shield-account-outline'],
+                ['myData', 'My data', 'mdi-database-lock-outline'],
               ] as const
             )
-              .filter(([id]) => me.pishockLinked || id === 'logs' || id === 'logPrivacy')
+              .filter(
+                ([id]) => me.pishockLinked || id === 'logs' || id === 'logPrivacy' || id === 'myData',
+              )
               .map(([id, label, icon]) => (
               <button
                 key={id}
@@ -3377,8 +3382,8 @@ export function App() {
                     setOverlay('logPrivacy');
                     return;
                   }
-                  if (id === 'safety') {
-                    setOverlay('safety');
+                  if (id === 'safety' || id === 'myData') {
+                    setOverlay(id);
                     return;
                   }
                   if (id === 'settings') setSettingsFocusShockerId(null);
@@ -3597,6 +3602,18 @@ export function App() {
             }}
             queueEnabled={queueState.enabled}
           />
+        </PsDialog>
+
+        <PsDialog open={overlay === 'myData'} title="My data" onClose={() => setOverlay(null)} wide>
+          {token ? (
+            <MyDataPanel
+              token={token}
+              onDeletionRequested={() => {
+                setActionNotice('Request received. Your PiShock key was removed and sharing is off.');
+                void refreshMe(token).catch(() => undefined);
+              }}
+            />
+          ) : null}
         </PsDialog>
 
         <PersonLimitsDialog
