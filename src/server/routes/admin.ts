@@ -60,7 +60,8 @@ export const adminRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app, opts
 
   app.get('/api/admin/users', async (req, reply) => {
     if (!guard(req, reply)) return;
-    const q = String((req.query as { q?: unknown }).q ?? '');
+    const rawQ = (req.query as { q?: unknown }).q;
+    const q = typeof rawQ === 'string' ? rawQ : '';
     const users = await searchAdminUsers(q);
     return {
       users: users.map((u) => ({ ...u, online: isUserOnline(u.id), isAdmin: isAdmin(admins, u.id) })),
@@ -154,7 +155,7 @@ export const adminRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app, opts
 
   app.get('/api/admin/bans', async (req, reply) => {
     if (!guard(req, reply)) return;
-    const all = String((req.query as { all?: unknown }).all ?? '') === '1';
+    const all = (req.query as { all?: unknown }).all === '1';
     const rows = await listGlobalBans({ activeOnly: !all });
     const names = await namesFor(rows.flatMap((r) => [r.discordUserId, r.bannedByDiscordUserId, r.liftedByDiscordUserId ?? '']));
     const now = Date.now();

@@ -236,6 +236,9 @@ const DEMO_SHOCKERS: ShockerView[] = [
   },
 ];
 
+/** Fixed clock for mock timestamps (render must stay pure). */
+const DEMO_NOW = Date.now();
+
 const DEMO_LOGS = [
   {
     id: '1',
@@ -545,10 +548,8 @@ const DEMO_SAFETY: SafetySnapshot = {
 function useDemoAdminFetch(enabled: boolean): boolean {
   const [ready, setReady] = useState(false);
   useLayoutEffect(() => {
-    if (!enabled) {
-      setReady(false);
-      return;
-    }
+    // `enabled && ready` below already hides the stale flag; no reset needed here.
+    if (!enabled) return;
     const original = window.fetch.bind(window);
     window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
@@ -793,7 +794,7 @@ export function DemoApp() {
                   { action: 'safe', intensity: 0, durationMs: 0 },
                 ],
                 resultIndex: 1,
-                startsAtLocal: Date.now() - 500,
+                startsAtLocal: DEMO_NOW - 500,
                 spinMs: 2500,
               }}
               onClose={() => setDialogDemo(null)}
@@ -889,7 +890,7 @@ export function DemoApp() {
                 action: 'participant_shock',
                 intensity: 42,
                 durationMs: 1000,
-                at: Date.now() - 4000,
+                at: DEMO_NOW - 4000,
                 success: true,
                 kind: 'activity',
                 targetDiscordUserId: '222',
@@ -1096,7 +1097,7 @@ function DemoPipInteractive() {
         action: 'shock',
         intensity: 100,
         durationMs: 1000,
-        at: Date.now() - 4000,
+        at: DEMO_NOW - 4000,
         success: true,
         kind: 'personal',
       }}
@@ -1107,7 +1108,7 @@ function DemoPipInteractive() {
         operation: 'vibrate',
         intensity: 40,
         durationMs: 2000,
-        estimatedStartAt: Date.now() + 12_000,
+        estimatedStartAt: DEMO_NOW + 12_000,
         startsInMs: 12_000,
       }}
     />
