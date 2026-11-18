@@ -328,7 +328,11 @@ export function SetupDiscordShareScreen({
   return (
     <div className="auth-boot" role="dialog" aria-modal="true" aria-labelledby="setup-share-title">
       <div className="auth-boot__glow" aria-hidden />
-      <div className="auth-boot__panel auth-boot__panel--wide auth-boot__panel--setup">
+      <div
+        className={`auth-boot__panel auth-boot__panel--wide auth-boot__panel--setup${
+          step === 'limits' ? '' : ' is-compact'
+        }`}
+      >
         <BrandHeader
           compact
           badgeIcon={step === 'limits' ? 'mdi-tune-vertical' : 'mdi-account-group'}

@@ -3464,6 +3464,38 @@ select.ps-field option {
   justify-content: stretch;
 }
 
+/* Device / queue / loading steps don't need the full viewport — only the
+   limits step (side-by-side editors) stretches edge to edge. */
+.auth-boot:has(.auth-boot__panel--setup.is-compact) {
+  padding: calc(20px + var(--sait)) calc(16px + var(--sair)) calc(20px + var(--saib))
+    calc(16px + var(--sail));
+  align-items: center;
+  justify-content: center;
+}
+
+.auth-boot__panel--setup.is-compact {
+  width: min(520px, 100%);
+  height: auto;
+  max-height: min(94%, calc(100% - 24px));
+  padding: 20px 22px;
+}
+
+.auth-boot__panel--setup.is-compact .setup-flow-step {
+  flex: 0 1 auto;
+  gap: 10px;
+}
+
+.auth-boot__panel--setup.is-compact .auth-boot__shocker-list {
+  flex: 0 1 auto;
+  max-height: min(46vh, 360px);
+}
+
+.auth-boot__panel--setup.is-compact .auth-boot__actions {
+  margin-top: 12px;
+  padding-top: 14px;
+  border-top: 1px solid var(--ps-border);
+}
+
 .auth-boot__panel--limits .setup-flow-step,
 .auth-boot__panel--setup .setup-flow-step {
   flex: 1 1 auto;
