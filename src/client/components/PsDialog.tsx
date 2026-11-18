@@ -1,4 +1,5 @@
 import { useEffect, useRef, type ReactNode } from 'react';
+import { BrandGlyph } from './BrandHeader';
 
 type Props = {
   open: boolean;
@@ -98,13 +99,14 @@ export function PsDialog({ open, title, onClose, children, wide, fill }: Props) 
         onMouseDown={(e) => e.stopPropagation()}
       >
         <div className={`ps-dialog-card q-card q-card--dark q-dark bg-dark${sizeClass}`}>
-          <div className="ps-dialog-header q-card__section q-card__section--vert row items-center justify-between no-wrap">
-            <div className="text-h6 text-secondary" style={{ fontFamily: 'geo, Oxanium, sans-serif' }}>
-              {title}
+          <div className="ps-dialog-header row items-center justify-between no-wrap">
+            <div className="ps-dialog-title">
+              <BrandGlyph size={22} />
+              <span className="ps-dialog-title__text">{title}</span>
             </div>
             <button
               type="button"
-              className="q-btn q-btn-item non-selectable no-outline q-btn--flat q-btn--round text-secondary q-btn--actionable q-btn--dense"
+              className="ps-dialog-close q-btn q-btn-item non-selectable no-outline q-btn--flat q-btn--round text-grey-5 q-btn--actionable q-btn--dense"
               onClick={onClose}
               aria-label="Close"
             >

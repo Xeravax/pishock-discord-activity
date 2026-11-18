@@ -36,8 +36,61 @@ model DiscordUser {
   commandQueueProgressMs Int @default(0)
   /// How many waiting commands one sender may have lined up.
   commandQueueMaxPerSender Int @default(3)
-  /// When true, only starred participants may operate this wearer's shared shockers.
-  commandQueueStarOnly Boolean @default(false)
+  /// When true, only favorited (starred) participants may operate this wearer's shared shockers.
+  /// Global: applies with or without the command queue (was commandQueueStarOnly).
+  favoritesOnly Boolean @default(false)
+  /// Extra features: every incoming command must be accepted by the wearer first.
+  approveEachCommand Boolean @default(false)
+  /// How long a sender waits for the wearer to accept before the command is dropped.
+  approvalTimeoutMs Int @default(20000)
+  /// Minimum gap between two commands from the same sender (0 = off).
+  cooldownPerSenderMs Int @default(0)
+  /// Minimum gap between any two commands on this wearer (0 = off). Queue uses max(this, progress).
+  cooldownGlobalMs Int @default(0)
+  /// Shock budget: cap shocks / shock-time per period; wearer can reset or raise it any time.
+  budgetEnabled Boolean @default(false)
+  /// session | day | manual
+  budgetPeriod String @default("session")
+  budgetMaxShocks Int?
+  budgetMaxShockMs Int?
+  budgetUsedShocks Int @default(0)
+  budgetUsedShockMs Int @default(0)
+  budgetPeriodStartedAt DateTime?
+  /// IANA timezone used for the "day" budget period.
+  budgetTimezone String?
+  /// Last time the wearer had a live activity connection (session budget / recaps).
+  lastSeenAt DateTime?
+  /// Periodic in-app "Still OK?" check; a missed check pauses all shares.
+  checkInEnabled Boolean @default(false)
+  checkInIntervalMs Int @default(900000)
+  checkInGraceMs Int @default(60000)
+  /// Per-person limits: lower caps for specific controllers (settings cog in the people list).
+  perPersonLimitsEnabled Boolean @default(false)
+  /// Wearer consented (3 separate confirmations) to admins exceeding their limits. Null = no consent.
+  adminLimitOverrideConsentAt DateTime?
+  /// Version of the consent text that was accepted.
+  adminLimitOverrideConsentVersion Int?
+  /// Keep command logs (your copies) for this many days; null = keep until you delete them.
+  logRetentionDays Int? @default(365)
+  /// Roulette: others may spin a wheel (solo or by room vote) whose result is sent to you.
+  rouletteAllowed Boolean @default(false)
+  /// Send a recap of each session as a Discord DM (always also stored in your history).
+  recapDmEnabled Boolean @default(false)
+  /// Log sharing: where other people can see hits on you (everywhere|server|channel|private).
+  logVisibility      String  @default("everywhere")
+  /// Log sharing: what other people can see about hits on you.
+  logShowSender      Boolean @default(true)
+  logShowDevice      Boolean @default(true)
+  logShowIntensity   Boolean @default(true)
+  logShowLocation    Boolean @default(true)
+  /// Log sharing: which actions on you appear in the shared feed.
+  logIncludeShock    Boolean @default(true)
+  logIncludeVibrate  Boolean @default(true)
+  logIncludeBeep     Boolean @default(true)
+  /// Log sharing: whether other people may create share images of hits on you.
+  logAllowShareCards Boolean @default(true)
+  /// Log sharing: appear as "Someone" to third parties when you send commands.
+  logHideMeAsSender  Boolean @default(false)
   createdAt      DateTime        @default(now())
   updatedAt      DateTime        @updatedAt
   pishockSession PiShockSession?
@@ -47,6 +100,9 @@ model DiscordUser {
   bannedBy       ActivityBan[]   @relation("BannedUser")
   queueStarsGiven ActivityQueueStar[] @relation("QueueStarOwner")
   queueStarsReceived ActivityQueueStar[] @relation("QueueStarStarred")
+  activitySessions   ActivitySession[]
+  personLimitsOwned  ActivityPersonLimit[] @relation("PersonLimitOwner")
+  personLimitsReceived ActivityPersonLimit[] @relation("PersonLimitController")
 }
 
 model PiShockSession {
@@ -106,6 +162,8 @@ model ActivityShare {
   canHold       Boolean     @default(true)
   /// Guests must use at least this warning before shock (none|small|mid|long)
   requiredWarningLevel String @default("none")
+  /// Escalation cap: max shock-intensity increase over the previous shock (null = off).
+  maxIntensityStep Int?
   createdAt     DateTime    @default(now())
   updatedAt     DateTime    @updatedAt
 
@@ -135,6 +193,29 @@ model ActivityQueueStar {
   createdAt            DateTime    @default(now())
 
   @@unique([ownerDiscordUserId, starredDiscordUserId])
+  @@index([ownerDiscordUserId])
+}
+
+/// Wearer-set caps for one specific controller (nest under share + personal limits).
+model ActivityPersonLimit {
+  id                      String      @id @default(cuid())
+  ownerDiscordUserId      String
+  owner                   DiscordUser @relation("PersonLimitOwner", fields: [ownerDiscordUserId], references: [id], onDelete: Cascade)
+  controllerDiscordUserId String
+  controller              DiscordUser @relation("PersonLimitController", fields: [controllerDiscordUserId], references: [id], onDelete: Cascade)
+  shockMaxIntensity       Int?
+  shockMaxDurationMs      Int?
+  vibMaxIntensity         Int?
+  vibMaxDurationMs        Int?
+  beepMaxIntensity        Int?
+  beepMaxDurationMs       Int?
+  canShock                Boolean     @default(true)
+  canVibrate              Boolean     @default(true)
+  canBeep                 Boolean     @default(true)
+  createdAt               DateTime    @default(now())
+  updatedAt               DateTime    @updatedAt
+
+  @@unique([ownerDiscordUserId, controllerDiscordUserId], map: "ActivityPersonLimit_owner_controller_key")
   @@index([ownerDiscordUserId])
 }
 
@@ -170,6 +251,10 @@ model CommandLog {
   locationName         String?
   locationIconUrl      String?
   /// Stable key for synced website device logs (dedupe)
+  /// An admin used bypass on this command (shown red: "An admin bypassed this").
+  adminBypass          Boolean     @default(false)
+  /// Which gates were bypassed (favorites | cooldown | budget | approval | queue | limits).
+  bypassedGates        String[]    @default([])
   externalLogKey       String?     @unique
   createdAt            DateTime    @default(now())
 
@@ -177,4 +262,37 @@ model CommandLog {
   @@index([targetDiscordUserId, createdAt])
   @@index([createdAt])
   @@index([source, createdAt])
+}
+
+/// Self-service delete / anonymise request (GDPR/AVG). Runs after a cancellable grace period.
+/// No foreign key: the record outlives the user row; discordUserId is cleared once done.
+model DataDeletionRequest {
+  id            String    @id @default(cuid())
+  discordUserId String?
+  /// delete | anonymise
+  mode          String
+  requestedAt   DateTime  @default(now())
+  executeAfter  DateTime
+  cancelledAt   DateTime?
+  completedAt   DateTime?
+
+  @@index([discordUserId])
+  @@index([executeAfter])
+}
+
+/// One stretch of time a user was in the activity (ends after 10 min away), with a recap.
+model ActivitySession {
+  id            String      @id @default(cuid())
+  discordUserId String
+  discordUser   DiscordUser @relation(fields: [discordUserId], references: [id], onDelete: Cascade)
+  startedAt     DateTime    @default(now())
+  endedAt       DateTime?
+  /// Recap built from command logs when the session ends.
+  summary       Json?
+  /// pending | sent | failed | disabled | empty
+  dmStatus      String      @default("pending")
+  seenAt        DateTime?
+
+  @@index([discordUserId, startedAt])
+  @@index([endedAt])
 }

@@ -10,6 +10,7 @@ import {
 } from '../consent.js';
 import { softApiKeyProfile } from '../pishock/auth-api.js';
 import { localProfileUrls } from '../pishock/profile-images.js';
+import { isAdmin } from '../admin-bypass.js';
 import {
   clearConsent,
   getCommandQueueEnabled,
@@ -110,6 +111,8 @@ export const authRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app, opts)
       personal,
       emergencyStopShockerIds,
       commandQueueEnabled,
+      /** UI only (shows the admin bypass toggle) — the server re-checks on every command. */
+      isAdmin: isAdmin(opts.env.adminDiscordUserIds, req.discordUser.id),
     };
   });
 

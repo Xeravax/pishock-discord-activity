@@ -30,17 +30,21 @@ import {
   OperatePolicyError,
   scheduleHoldAutoEnd,
 } from '../operate-policy.js';
-import { bandForOperation, nestBands, personalBandsFromUser, shareBandsFromRow } from '../limit-bands.js';
+import { bandForOperation, personalBandsFromUser, shareBandsFromRow } from '../limit-bands.js';
 import { atLeastWarning, normalizeWarningLevel, warningRank } from '../../shared/warning.js';
 import type { WarningLevel } from '../../shared/warning.js';
 import { shockWarningBody, ShockWarningError, warnBeforeShock } from '../pishock/shock-warning.js';
 import {
+  getAdminLimitConsent,
   findActivityShareByShocker,
   getCommandQueueEnabled,
   getCommandQueueSettings,
+  getBudgetState,
   getConsent,
+  getEffectivePersonLimit,
   getEmergencyStopShockerIds,
   getPersonalActivityLimits,
+  getWearerSafety,
   isEmergencyStopped,
   isEmergencyStopLatched,
   isExecutorBanned,
@@ -65,6 +69,62 @@ import {
   type PiShockPauseState,
 } from '../pishock/pause.js';
 import { allActiveShockersEStopped } from '../pishock/estop-sync.js';
+import {
+  WearerGateError,
+  applyEscalationCap,
+  assertPersonAllows,
+  buildEffectiveModes,
+  checkBudget,
+} from '../wearer-safety.js';
+import {
+  admitWearerCommand,
+  cooldowns,
+  escalation,
+  recordWearerHit,
+} from '../wearer-safety-runtime.js';
+import type { PersonLimit } from '../wearer-safety-settings.js';
+import {
+  ADMIN_SOFT_GATES,
+  hasLimitConsent,
+  isAdmin,
+  type BypassGate,
+} from '../admin-bypass.js';
+import { deviceOnlyModes } from '../wearer-safety.js';
+
+type AdminAttempt = {
+  targetDiscordUserId: string;
+  operation: string;
+  shockerId: number | null;
+};
+
+type ShareForModes = Parameters<typeof shareBandsFromRow>[0] & {
+  deviceMaxIntensity: number;
+  deviceMaxDurationMs: number;
+};
+
+/** Share ∩ wearer personal ∩ per-person (for this controller) ∩ device. */
+function effectiveModes(
+  share: ShareForModes,
+  personalRow: Parameters<typeof personalBandsFromUser>[0],
+  personLimit: PersonLimit | null,
+) {
+  const shareBands = shareBandsFromRow(share);
+  const personal = personalBandsFromUser(personalRow);
+  return buildEffectiveModes(
+    shareBands,
+    personal,
+    { maxIntensity: share.deviceMaxIntensity, maxDurationMs: share.deviceMaxDurationMs },
+    atLeastWarning(shareBands.requiredWarningLevel, personal.requiredWarningLevel),
+    personLimit,
+  );
+}
+
+/** Multishock fires share one batch id so cooldowns / approval prompts treat them as one. */
+function batchIdFrom(req: { headers: Record<string, unknown> }, body: { batchId?: unknown }): string | null {
+  const raw = body.batchId ?? req.headers['x-batch-id'];
+  const id = typeof raw === 'string' ? raw.trim() : '';
+  return /^[A-Za-z0-9_-]{6,64}$/.test(id) ? id : null;
+}
 
 const PARTICIPANT_STATUS_CONCURRENCY = 4;
 
@@ -114,8 +174,11 @@ async function auditParticipantCommand(input: {
   success: boolean;
   detail: string;
   location?: ActivityLocationContext | null;
+  /** Gates an admin bypassed for this command (empty = normal command). */
+  bypassedGates?: BypassGate[];
 }) {
   const loc = input.location;
+  const bypassedGates = input.bypassedGates ?? [];
   const base = {
     executorDiscordUserId: input.executorDiscordUserId,
     targetDiscordUserId: input.targetDiscordUserId,
@@ -136,6 +199,8 @@ async function auditParticipantCommand(input: {
     locationKind: loc?.locationKind,
     locationName: loc?.locationName,
     locationIconUrl: loc?.locationIconUrl,
+    adminBypass: bypassedGates.length > 0,
+    bypassedGates,
   };
   // Executor log never receives the share code; owner/target row may store it server-side.
   await Promise.all([
@@ -171,6 +236,22 @@ async function auditParticipantCommand(input: {
       },
       { discordUserId: input.targetDiscordUserId },
     );
+    if (bypassedGates.length > 0) {
+      broadcastRealtime(
+        {
+          type: 'admin_bypass',
+          targetDiscordUserId: input.targetDiscordUserId,
+          adminDiscordUserId: input.executorDiscordUserId,
+          adminName: input.executorGlobalName ?? input.executorUsername ?? null,
+          action: input.action,
+          intensity: input.intensity,
+          durationMs: input.durationMs,
+          gates: bypassedGates,
+          at: Date.now(),
+        },
+        { discordUserId: input.targetDiscordUserId },
+      );
+    }
   }
 }
 
@@ -187,6 +268,23 @@ export const participantRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app
       }
       throw err;
     }
+  });
+
+  // Admin bypass attempts that were refused (E-STOP, block, pause…) are still logged.
+  app.addHook('onResponse', async (req, reply) => {
+    const attempt = (req as unknown as { adminBypassAttempt?: AdminAttempt }).adminBypassAttempt;
+    if (!attempt || reply.statusCode < 400) return;
+    await logCommand({
+      discordUserId: attempt.targetDiscordUserId,
+      executorDiscordUserId: req.discordUser.id,
+      targetDiscordUserId: attempt.targetDiscordUserId,
+      action: `participant_${attempt.operation}`,
+      shockerId: attempt.shockerId ?? undefined,
+      success: false,
+      adminBypass: true,
+      bypassedGates: [],
+      detail: JSON.stringify({ adminBypass: 'refused', status: reply.statusCode }),
+    }).catch(() => undefined);
   });
 
   app.post('/api/participants/status', async (req, reply) => {
@@ -212,7 +310,7 @@ export const participantRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app
     const ids = [...new Set((body.discordUserIds ?? []).map(String).filter(Boolean))].slice(0, 50);
     const myStars = new Set(await listQueueStars(req.discordUser.id));
     const participants = await mapWithConcurrency(ids, PARTICIPANT_STATUS_CONCURRENCY, async (id) => {
-      const [user, shares, bannedYou, targetCreds, hasConsent, theirSettings, theyStarredMe] =
+      const [user, shares, bannedYou, targetCreds, hasConsent, theirSettings, theyStarredMe, safety] =
         await Promise.all([
           prisma.discordUser.findUnique({ where: { id } }),
           listEnabledActivityShares(id),
@@ -221,7 +319,11 @@ export const participantRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app
           getConsent(id),
           getCommandQueueSettings(id),
           isQueueStarred(id, req.discordUser.id),
+          getWearerSafety(id),
         ]);
+      const personLimit = await getEffectivePersonLimit(id, req.discordUser.id, safety);
+      const budgetState = safety.budgetEnabled ? await getBudgetState(id, safety) : null;
+      const budget = budgetState ? checkBudget(safety, budgetState, 0) : null;
       const hasSession = Boolean(targetCreds);
       const pause: PiShockPauseState = targetCreds
         ? await getPiShockPauseState(id, targetCreds).catch(
@@ -232,7 +334,7 @@ export const participantRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app
         pause.unknown || pause.shockerIds.includes(shockerId);
       const theirPaused = theirSettings.enabled ? commandQueue.getPaused(id) : false;
       const theirHalted = theirSettings.enabled ? commandQueue.getHalted(id) : false;
-      const ownerPersonal = personalBandsFromUser(await getPersonalActivityLimits(id));
+      const ownerPersonalRow = await getPersonalActivityLimits(id);
       const eStops = new Set(await getEmergencyStopShockerIds(id));
       const active = shares.filter(
         (s: { enabled: boolean; paused: boolean }) => s.enabled && !s.paused,
@@ -260,16 +362,11 @@ export const participantRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app
               canBeep: boolean;
               canHold: boolean;
               paused: boolean;
+              maxIntensityStep?: number | null;
             }) => {
               const stopped = eStops.has(s.shockerId);
               const devicePaused = shockerIsPaused(s.shockerId);
-              const shareBands = shareBandsFromRow(s);
-              const bands = {
-                shock: nestBands([shareBands.shock, ownerPersonal.shock], s.deviceMaxIntensity, s.deviceMaxDurationMs),
-                vibrate: nestBands([shareBands.vibrate, ownerPersonal.vibrate], s.deviceMaxIntensity, s.deviceMaxDurationMs),
-                beep: nestBands([shareBands.beep, ownerPersonal.beep], s.deviceMaxIntensity, s.deviceMaxDurationMs),
-                requiredWarningLevel: atLeastWarning(shareBands.requiredWarningLevel, ownerPersonal.requiredWarningLevel),
-              };
+              const bands = effectiveModes(s, ownerPersonalRow, personLimit);
               return {
                 shockerId: s.shockerId,
                 shockerName: s.shockerName,
@@ -290,9 +387,10 @@ export const participantRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app
                 beepMinDurationMs: bands.beep.minDurationMs,
                 beepMaxDurationMs: bands.beep.maxDurationMs,
                 requiredWarningLevel: bands.requiredWarningLevel,
-                canShock: !stopped && !devicePaused && s.canShock,
-                canVibrate: !stopped && !devicePaused && s.canVibrate,
-                canBeep: !stopped && !devicePaused && s.canBeep,
+                canShock: !stopped && !devicePaused && s.canShock && bands.personAllows.shock,
+                canVibrate: !stopped && !devicePaused && s.canVibrate && bands.personAllows.vibrate,
+                canBeep: !stopped && !devicePaused && s.canBeep && bands.personAllows.beep,
+                maxIntensityStep: s.maxIntensityStep ?? null,
                 canHold: !stopped && !devicePaused && s.canHold,
                 paused: devicePaused || s.paused,
                 emergencyStop: stopped,
@@ -327,6 +425,33 @@ export const participantRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app
           maxPerSender: theirSettings.maxPerSender,
           progressMs: theirSettings.progressMs,
         },
+        /** Their extra-feature gates as they apply to the caller. */
+        safety: {
+          favoritesOnly: safety.favoritesOnly,
+          approveEachCommand: safety.approveEachCommand,
+          cooldownPerSenderMs: safety.cooldownPerSenderMs,
+          cooldownGlobalMs: safety.cooldownGlobalMs,
+          cooldownRemainingMs: theirSettings.enabled
+            ? 0
+            : cooldowns.retryAfter(
+                id,
+                req.discordUser.id,
+                safety.cooldownPerSenderMs,
+                safety.cooldownGlobalMs,
+                null,
+              ),
+          budget: budget
+            ? {
+                exhausted: !budget.ok,
+                remainingShocks: budget.ok ? budget.remainingShocks : 0,
+                remainingShockMs: budget.ok ? budget.remainingShockMs : 0,
+              }
+            : null,
+          /** True when the wearer set lower limits for the caller specifically. */
+          personLimited: Boolean(personLimit),
+          /** Others may spin the roulette wheel on them. */
+          rouletteAllowed: safety.rouletteAllowed,
+        },
         shockers: visibleShockers,
       };
     });
@@ -352,6 +477,16 @@ export const participantRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app
     );
     const body = parseBody(participantOperateBody, req, reply);
     if (!body) return reply;
+    const batchId = batchIdFrom(req, body);
+    // Non-admins sending the flag are simply treated as normal commands.
+    const asAdmin = body.adminBypass === true && isAdmin(opts.env.adminDiscordUserIds, req.discordUser.id);
+    if (asAdmin) {
+      (req as unknown as { adminBypassAttempt?: AdminAttempt }).adminBypassAttempt = {
+        targetDiscordUserId: String((req.params as { targetDiscordUserId: string }).targetDiscordUserId),
+        operation: String(body.operation ?? 'unknown'),
+        shockerId: Number.isFinite(Number(body.shockerId)) ? Number(body.shockerId) : null,
+      };
+    }
 
     const instanceId = body.instanceId ? String(body.instanceId) : '';
     let instanceInfo = null;
@@ -378,14 +513,6 @@ export const participantRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app
       return reply.code(403).send({
         error: 'This user has blocked you from controlling their device',
         code: 'BANNED',
-      });
-    }
-
-    const targetQueue = await getCommandQueueSettings(targetDiscordUserId);
-    if (targetQueue.starOnly && !(await isQueueStarred(targetDiscordUserId, req.discordUser.id))) {
-      return reply.code(403).send({
-        error: 'This person only accepts commands from starred participants',
-        code: 'STAR_ONLY',
       });
     }
 
@@ -558,32 +685,28 @@ export const participantRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app
       throw err;
     }
 
-    const shareBands = shareBandsFromRow(share);
-    const ownerPersonal = personalBandsFromUser(
+    const normalModes = effectiveModes(
+      share,
       await getPersonalActivityLimits(targetDiscordUserId),
+      await getEffectivePersonLimit(targetDiscordUserId, req.discordUser.id),
     );
-    const modes = {
-      shock: nestBands(
-        [shareBands.shock, ownerPersonal.shock],
-        share.deviceMaxIntensity,
-        share.deviceMaxDurationMs,
-      ),
-      vibrate: nestBands(
-        [shareBands.vibrate, ownerPersonal.vibrate],
-        share.deviceMaxIntensity,
-        share.deviceMaxDurationMs,
-      ),
-      beep: nestBands(
-        [shareBands.beep, ownerPersonal.beep],
-        share.deviceMaxIntensity,
-        share.deviceMaxDurationMs,
-      ),
-      requiredWarningLevel: atLeastWarning(
-        shareBands.requiredWarningLevel,
-        ownerPersonal.requiredWarningLevel,
-      ),
-    };
+    // Admin + the wearer's 3-step consent: only the PiShock device max applies.
+    const limitOverride =
+      asAdmin && hasLimitConsent(await getAdminLimitConsent(targetDiscordUserId));
+    const modes = limitOverride
+      ? deviceOnlyModes(
+          { maxIntensity: share.deviceMaxIntensity, maxDurationMs: share.deviceMaxDurationMs },
+          normalModes.requiredWarningLevel,
+        )
+      : normalModes;
+    try {
+      if (!limitOverride) assertPersonAllows(modes, operation);
+    } catch (err) {
+      if (err instanceof WearerGateError) return reply.code(err.status).send(err.toBody());
+      throw err;
+    }
     const band = bandForOperation(modes, operation);
+    const normalBand = bandForOperation(normalModes, operation);
     const intensityCheck = Number(body.intensity ?? band.minIntensity);
     const durationCheck = Number(body.durationMs ?? clampDurationMs(undefined, band.maxDurationMs, band.minDurationMs));
     if (Number.isFinite(intensityCheck) && intensityCheck < band.minIntensity) {
@@ -599,8 +722,26 @@ export const participantRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app
       return reply.code(416).send({ error: 'Duration exceeds allowed maximum' });
     }
 
-    const intensity = clampIntensity(body.intensity, band.maxIntensity, band.minIntensity);
+    let intensity = clampIntensity(body.intensity, band.maxIntensity, band.minIntensity);
     const durationMs = clampDurationMs(body.durationMs, band.maxDurationMs, band.minDurationMs);
+    let clampedReason: 'escalation' | null = null;
+    const exceedsNormalLimits =
+      limitOverride &&
+      (intensity > normalBand.maxIntensity ||
+        intensity < normalBand.minIntensity ||
+        durationMs > normalBand.maxDurationMs ||
+        durationMs < normalBand.minDurationMs ||
+        !normalModes.personAllows[
+          operation === 'vibrate' || operation === 'warning' ? 'vibrate' : operation === 'beep' ? 'beep' : 'shock'
+        ]);
+    if (!limitOverride && (operation === 'shock' || operation === 'hold')) {
+      const capped = applyEscalationCap(
+        intensity,
+        escalation.cap(targetDiscordUserId, shockerId, share.maxIntensityStep, band.minIntensity),
+      );
+      intensity = capped.intensity;
+      if (capped.clamped) clampedReason = 'escalation';
+    }
 
     const devicePaused = await shockerPauseBlocks(targetDiscordUserId, targetCreds, shockerId);
     if (devicePaused) {
@@ -629,7 +770,39 @@ export const participantRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app
       });
     }
 
-    if (await getCommandQueueEnabled(targetDiscordUserId)) {
+    const queueEnabled = await getCommandQueueEnabled(targetDiscordUserId);
+    let bypassedGates: BypassGate[] = [];
+    try {
+      const admission = await admitWearerCommand({
+        ownerDiscordUserId: targetDiscordUserId,
+        sender: {
+          id: req.discordUser.id,
+          username: req.discordUser.username ?? null,
+          globalName: req.discordUser.global_name ?? null,
+          avatar: req.discordUser.avatar ?? null,
+        },
+        operation,
+        durationMs,
+        batchId,
+        queueEnabled,
+        item: { shockerId, shockerName: share.shockerName ?? null, intensity, durationMs },
+        bypass: asAdmin ? ADMIN_SOFT_GATES : undefined,
+      });
+      bypassedGates = [...admission.bypassed];
+      if (exceedsNormalLimits) bypassedGates.push('limits');
+    } catch (err) {
+      if (err instanceof WearerGateError) return reply.code(err.status).send(err.toBody());
+      throw err;
+    }
+    // Approval may have taken a while — the E-STOP latch always wins.
+    if (await isEmergencyStopped(targetDiscordUserId, shockerId)) {
+      return reply.code(423).send({
+        error: 'Owner has emergency stop engaged',
+        code: 'EMERGENCY_STOP',
+      });
+    }
+
+    if (queueEnabled) {
       const queuedOp: QueuedOperation =
         operation === 'shock' || operation === 'hold'
           ? operation === 'hold'
@@ -640,6 +813,8 @@ export const participantRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app
               ? 'warning'
               : 'vibrate'
             : 'beep';
+      const jumpsLine = asAdmin && (await commandQueue.snapshot(targetDiscordUserId)).waiting.length > 0;
+      if (jumpsLine) bypassedGates.push('queue');
       try {
         const queued = await commandQueue.enqueue({
           ownerDiscordUserId: targetDiscordUserId,
@@ -661,7 +836,10 @@ export const participantRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app
             env: opts.env,
             location,
             executorHadSession: Boolean(executorCreds),
+            adminBypass: asAdmin,
+            bypassedGates,
           },
+          front: jumpsLine,
         });
         return {
           ok: true,
@@ -671,6 +849,7 @@ export const participantRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app
           paused: queued.paused,
           estimatedWaitMs: queued.estimatedWaitMs,
           estimatedStartAt: queued.estimatedStartAt,
+          clampedReason,
         };
       } catch (err) {
         if (err instanceof CommandQueueError) {
@@ -731,31 +910,21 @@ export const participantRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app
         }
         throw err;
       }
-      const shareBandsNow = shareBandsFromRow(shareNow);
-      const ownerPersonalNow = personalBandsFromUser(
+      const normalModesNow = effectiveModes(
+        shareNow,
         await getPersonalActivityLimits(targetDiscordUserId),
+        await getEffectivePersonLimit(targetDiscordUserId, req.discordUser.id),
       );
-      const modesNow = {
-        shock: nestBands(
-          [shareBandsNow.shock, ownerPersonalNow.shock],
-          shareNow.deviceMaxIntensity,
-          shareNow.deviceMaxDurationMs,
-        ),
-        vibrate: nestBands(
-          [shareBandsNow.vibrate, ownerPersonalNow.vibrate],
-          shareNow.deviceMaxIntensity,
-          shareNow.deviceMaxDurationMs,
-        ),
-        beep: nestBands(
-          [shareBandsNow.beep, ownerPersonalNow.beep],
-          shareNow.deviceMaxIntensity,
-          shareNow.deviceMaxDurationMs,
-        ),
-        requiredWarningLevel: atLeastWarning(
-          shareBandsNow.requiredWarningLevel,
-          ownerPersonalNow.requiredWarningLevel,
-        ),
-      };
+      // Consent can be revoked at any moment — re-check right before sending.
+      const overrideNow =
+        limitOverride && hasLimitConsent(await getAdminLimitConsent(targetDiscordUserId));
+      const modesNow = overrideNow
+        ? deviceOnlyModes(
+            { maxIntensity: shareNow.deviceMaxIntensity, maxDurationMs: shareNow.deviceMaxDurationMs },
+            normalModesNow.requiredWarningLevel,
+          )
+        : normalModesNow;
+      if (!overrideNow) assertPersonAllows(modesNow, operation);
       if (operation === 'shock' || operation === 'hold') {
         const sentWarning = atLeastWarning(
           normalizeWarningLevel(body.warningLevel),
@@ -840,6 +1009,7 @@ export const participantRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app
             hubClientId: share.hubClientId ?? clientId ?? null,
             hubName: share.hubName ?? null,
             warningLevel: sentWarning,
+            bypassedGates,
             shareCode: null,
             intensity,
             durationMs,
@@ -854,7 +1024,14 @@ export const participantRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app
               instanceId,
             }),
           });
-          return { ok: true, via: 'broker', path: 'target_session' };
+          await recordWearerHit({
+            ownerDiscordUserId: targetDiscordUserId,
+            shockerId,
+            operation,
+            intensity,
+            durationMs,
+          });
+          return { ok: true, via: 'broker', path: 'target_session', clampedReason };
         }
         if (hold || warning) {
           return reply.code(502).send({
@@ -900,6 +1077,7 @@ export const participantRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app
         hubClientId: share.hubClientId ?? clientId ?? null,
         hubName: share.hubName ?? null,
         warningLevel: sentWarning,
+        bypassedGates,
         shareCode: null,
         intensity,
         durationMs,
@@ -914,7 +1092,14 @@ export const participantRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app
           instanceId,
         }),
       });
-      return { ok: true, via: 'operateById', path: 'target_session' };
+      await recordWearerHit({
+        ownerDiscordUserId: targetDiscordUserId,
+        shockerId,
+        operation,
+        intensity,
+        durationMs,
+      });
+      return { ok: true, via: 'operateById', path: 'target_session', clampedReason };
     } catch (err) {
       await auditParticipantCommand({
         executorDiscordUserId: req.discordUser.id,
@@ -928,6 +1113,7 @@ export const participantRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app
         hubClientId: share.hubClientId ?? clientId ?? null,
         hubName: share.hubName ?? null,
         warningLevel: sentWarning,
+        bypassedGates,
         shareCode: null,
         intensity,
         durationMs,
@@ -943,6 +1129,9 @@ export const participantRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app
       });
       if (err instanceof ShockWarningError) {
         return reply.code(err.status).send(shockWarningBody(err));
+      }
+      if (err instanceof WearerGateError) {
+        return reply.code(err.status).send(err.toBody());
       }
       if (err instanceof PiShockApiError) {
         console.warn(

@@ -8,6 +8,22 @@ function required(name: string): string {
   return value;
 }
 
+function parseIdList(raw: string | undefined): ReadonlySet<string> {
+  return new Set(
+    String(raw ?? '')
+      .split(/[\s,]+/)
+      .map((id) => id.trim())
+      .filter((id) => /^\d{5,25}$/.test(id)),
+  );
+}
+
+/** Unset → default; "off" / "none" → disabled (null). */
+function optionalSetting(raw: string | undefined, fallback: string): string | null {
+  const v = raw?.trim();
+  if (v === undefined || v === '') return fallback;
+  return /^(off|none|false|0)$/i.test(v) ? null : v;
+}
+
 function positiveInt(raw: string | undefined, fallback: number): number {
   const n = Number(raw);
   return Number.isInteger(n) && n > 0 ? n : fallback;
@@ -41,6 +57,20 @@ export function loadEnv() {
       process.env.ALLOW_MISSING_BOT_INSTANCE_CHECK === '1' && process.env.NODE_ENV !== 'production',
     /** Root for durable local files (PiShock profile images, etc.). Defaults to ./data */
     dataDir: process.env.DATA_DIR?.trim() || null,
+    /**
+     * Discord user ids allowed to use admin bypass (comma separated). Admins can skip soft
+     * gates; exceeding a wearer's limits additionally needs that wearer's explicit consent.
+     */
+    adminDiscordUserIds: parseIdList(process.env.ADMIN_DISCORD_USER_IDS),
+    /**
+     * Community server people can join (OAuth guilds.join) so the bot can DM session recaps.
+     * Set to "off" to disable. The bot must be in this guild with Create Invite permission.
+     */
+    communityGuildId: optionalSetting(process.env.DISCORD_COMMUNITY_GUILD_ID, '1572537113545805824'),
+    communityInviteUrl: optionalSetting(
+      process.env.DISCORD_COMMUNITY_INVITE_URL,
+      'https://discord.gg/M6XjdQmb3E',
+    ),
     /**
      * Set TRUST_PROXY=1 when running behind a reverse proxy / the Discord proxy so
      * `req.ip` reflects the real client (needed for IP-based rate limits). Off by default:

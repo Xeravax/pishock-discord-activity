@@ -1,3 +1,4 @@
+import type { ParticipantSafety } from './safety';
 export type DiscordParticipant = {
   id: string;
   username?: string;
@@ -65,6 +66,8 @@ export type ParticipantStatus = {
     maxPerSender: number;
     progressMs: number;
   };
+  /** Their extra-feature gates as they apply to you (approve-each, budget, cooldown…). */
+  safety?: ParticipantSafety;
   shockers: ParticipantShockerStatus[];
 };
 

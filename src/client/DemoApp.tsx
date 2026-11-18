@@ -9,12 +9,22 @@ import { OfficialController } from './components/OfficialController';
 import { SharesPanel } from './components/SharesPanel';
 import { CommandLog } from './components/CommandLog';
 import { FriendsParticipantList } from './components/FriendsParticipantList';
-import { PipIncomingShock } from './components/PipIncomingShock';
+import { PipIncomingShock, type PipControls } from './components/PipIncomingShock';
 import { PsDialog } from './components/PsDialog';
+import { ThemePreview } from './components/ThemePreview';
 import type { ShockerView } from './components/ShockerCard';
 import { participantAvatarUrl, type DiscordParticipant, type ParticipantStatus } from './participants';
 
-type Screen = 'consent' | 'login' | 'control' | 'shares' | 'logs' | 'pip' | 'terms' | 'privacy';
+type Screen =
+  | 'consent'
+  | 'login'
+  | 'control'
+  | 'shares'
+  | 'logs'
+  | 'pip'
+  | 'terms'
+  | 'privacy'
+  | 'theme';
 type Overlay = null | 'shares' | 'logs' | 'availability' | 'menu' | 'settings';
 
 const DEMO_PARTICIPANTS: DiscordParticipant[] = [
@@ -167,7 +177,11 @@ const DEMO_LOGS = [
 ];
 
 export function DemoApp() {
-  const [screen, setScreen] = useState<Screen>('control');
+  const [screen, setScreen] = useState<Screen>(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.has('theme')) return 'theme';
+    return (params.get('screen') as Screen | null) || 'control';
+  });
   const [toast, setToast] = useState<string | null>(null);
   const [friendsOpen, setFriendsOpen] = useState(true);
   const [selectedTargetIds, setSelectedTargetIds] = useState<string[]>(['111']);
@@ -218,7 +232,7 @@ export function DemoApp() {
   }
 
   return (
-    <div>
+    <div className={screen === 'theme' ? 'demo-root--scroll' : undefined}>
       <div className="demo-chrome">
         <h2>UI demo — official controller clone</h2>
         <p>Mock data only. Switch screens; Control/PIP use the real PiShock layout.</p>
@@ -233,6 +247,7 @@ export function DemoApp() {
               ['pip', 'PIP layout'],
               ['terms', 'Terms'],
               ['privacy', 'Privacy'],
+              ['theme', 'Theme'],
             ] as const
           ).map(([id, label]) => (
             <button
@@ -248,13 +263,17 @@ export function DemoApp() {
       </div>
 
       {toast ? (
-        <div className="error-banner" style={{ borderColor: 'var(--ps-cyan)', color: 'var(--ps-cyan)' }}>
+        <div className="ps-callout demo-toast" role="status">
           {toast}
         </div>
       ) : null}
 
+      {screen === 'theme' ? (
+        <ThemePreview shockers={DEMO_SHOCKERS} participants={DEMO_PARTICIPANTS} onFlash={flash} />
+      ) : null}
+
       {screen === 'consent' ? (
-        <div className="app-shell">
+        <div className="app-shell consent-shell">
           <SafetyWarning
             onAccept={() => setScreen('login')}
             busy={false}
@@ -287,7 +306,8 @@ export function DemoApp() {
       ) : null}
 
       {screen === 'pip' ? (
-        <div style={{ height: 160, width: 280, margin: 16, border: '1px solid #333' }}>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 16, margin: 16 }}>
+        <div style={{ height: 160, width: 280, border: '1px solid #333' }}>
           <PipIncomingShock
             hit={{
               executorDiscordUserId: '111',
@@ -304,6 +324,15 @@ export function DemoApp() {
               targetAvatarUrl: participantAvatarUrl('222'),
             }}
           />
+        </div>
+        {[
+          { w: 330, h: 400 },
+          { w: 300, h: 180 },
+        ].map(({ w, h }) => (
+          <div key={`${w}x${h}`} style={{ height: h, width: w, border: '1px solid #333' }}>
+            <DemoPipInteractive />
+          </div>
+        ))}
         </div>
       ) : null}
 
@@ -459,5 +488,62 @@ export function DemoApp() {
         </div>
       ) : null}
     </div>
+  );
+}
+
+/** Linked-owner PIP with quick actions, backed by local mock state. */
+function DemoPipInteractive() {
+  const [stopped, setStopped] = useState(false);
+  const [paused, setPaused] = useState(false);
+  const [stars, setStars] = useState<Set<string>>(() => new Set());
+  const [blocked, setBlocked] = useState<Set<string>>(() => new Set());
+  const toggle = (set: Set<string>, id: string, on: boolean) => {
+    const next = new Set(set);
+    if (on) next.add(id);
+    else next.delete(id);
+    return next;
+  };
+  const controls: PipControls = {
+    selfDiscordUserId: '999',
+    stopTargetCount: 2,
+    stoppedCount: stopped ? 2 : 0,
+    onEmergencyStop: setStopped,
+    queueEnabled: true,
+    queuePaused: paused,
+    queueHasActive: true,
+    onToggleQueuePaused: setPaused,
+    onSkipActive: () => undefined,
+    isStarred: (id) => stars.has(id),
+    isBlocked: (id) => blocked.has(id),
+    onToggleStar: (id, on) => setStars((s) => toggle(s, id, on)),
+    onToggleBlock: (id, on) => setBlocked((s) => toggle(s, id, on)),
+    busy: false,
+    message: null,
+  };
+  return (
+    <PipIncomingShock
+      controls={controls}
+      hit={{
+        executorDiscordUserId: '111',
+        displayName: 'Xeravax',
+        avatarUrl: participantAvatarUrl('111'),
+        action: 'shock',
+        intensity: 100,
+        durationMs: 1000,
+        at: Date.now() - 4000,
+        success: true,
+        kind: 'personal',
+      }}
+      queueNext={{
+        executorDiscordUserId: '333',
+        displayName: 'RogerfireFox',
+        avatarUrl: participantAvatarUrl('333'),
+        operation: 'vibrate',
+        intensity: 40,
+        durationMs: 2000,
+        estimatedStartAt: Date.now() + 12_000,
+        startsInMs: 12_000,
+      }}
+    />
   );
 }

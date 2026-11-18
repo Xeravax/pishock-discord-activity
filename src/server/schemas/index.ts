@@ -120,6 +120,10 @@ export const participantOperateBody = z.object({
   warning: z.union([z.boolean(), z.record(z.string(), z.unknown())]).nullish(),
   warningLevel: shortString(16).optional(),
   clientId: idLike.nullish(),
+  /** Multishock: one id per fire so cooldowns / approval prompts treat it as one. */
+  batchId: shortString(64).optional(),
+  /** Admin only (re-checked server-side): skip soft gates for this command. */
+  adminBypass: z.boolean().optional(),
 });
 
 export const pauseBody = z.object({

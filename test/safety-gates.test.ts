@@ -90,6 +90,7 @@ function baseDeps(overrides: Partial<OperatePolicyDeps> = {}): OperatePolicyDeps
     getConsent: async () => true,
     isExecutorBanned: async () => false,
     isEmergencyStopped: async () => false,
+    isFavoritesOnlyBlocked: async () => false,
     ...overrides,
   };
 }
@@ -647,6 +648,44 @@ describe('should refuse — must not proceed', () => {
     assert.throws(
       () => validateDiscordProxyHeaders(badSig.env, badSig.req),
       (err: unknown) => err instanceof ProxyAuthError,
+    );
+  });
+});
+
+describe('favorites only on the share-code path', () => {
+  it('refuses a caller who is not one of the owner favorites', async () => {
+    const { resolveOwnOperatePolicy: resolve, OperatePolicyError: PolicyError } = await import(
+      '../src/server/operate-policy.js'
+    );
+    await assert.rejects(
+      () =>
+        resolve('caller-2', { token: 't' } as never, { shareCode: 'SHARECODE' }, {
+          getPersonalActivityLimits: async () => ({}) as never,
+          fetchControlSnapshot: async () => ({ hubs: [], shockers: [], shared: [] }) as never,
+          findActivityShareByCode: async () =>
+            ({
+              discordUserId: 'owner-1',
+              shockerId: 1,
+              shockerName: 'S',
+              shareCode: 'SHARECODE',
+              hubClientId: null,
+              hubName: null,
+              enabled: true,
+              paused: false,
+              canShock: true,
+              canVibrate: true,
+              canBeep: true,
+              canHold: true,
+              deviceMaxIntensity: 100,
+              deviceMaxDurationMs: 15_000,
+            }) as never,
+          findActivityShareByShocker: async () => null,
+          getConsent: async () => true,
+          isExecutorBanned: async () => false,
+          isEmergencyStopped: async () => false,
+          isFavoritesOnlyBlocked: async () => true,
+        }),
+      (err: unknown) => err instanceof PolicyError && err.code === 'FAVORITES_ONLY',
     );
   });
 });

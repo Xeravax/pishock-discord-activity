@@ -1,11 +1,16 @@
+import { BrandHeader } from './BrandHeader';
+
 type Props = { onBack: () => void };
 
 export function TermsOfService({ onBack }: Props) {
   return (
     <div className="legal-page">
-      <button type="button" className="btn secondary" onClick={onBack}>
-        ← Back to Application
+      <button type="button" className="btn secondary legal-page__back" onClick={onBack}>
+        <i className="q-icon mdi mdi-arrow-left" aria-hidden />
+        Back to Application
       </button>
+
+      <BrandHeader compact className="legal-page__brand" />
 
       <h1>Terms of Service</h1>
       <p className="muted">PiShock Discord Activity · Last updated {new Date().toLocaleDateString()}</p>
@@ -44,6 +49,24 @@ export function TermsOfService({ onBack }: Props) {
           <li>Attempting to bypass safety limits, bans, or share restrictions</li>
           <li>Use by anyone under 18</li>
           <li>Any unlawful purpose in your jurisdiction</li>
+        </ul>
+      </section>
+
+      <section className="panel">
+        <h2>Admin access</h2>
+        <ul className="legal-list">
+          <li>
+            Admins of this activity may skip cooldowns, shock budgets, favorites only, approve-each
+            and the queue line. Each use is logged in red and the wearer is notified.
+          </li>
+          <li>
+            Admins may only exceed a wearer&apos;s limits after that wearer explicitly allowed it
+            through three separate confirmations. The wearer can withdraw this at any time.
+          </li>
+          <li>
+            Admins can never override E-STOP, pauses, blocks, required warnings or the PiShock
+            device maximum.
+          </li>
         </ul>
       </section>
 

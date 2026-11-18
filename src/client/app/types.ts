@@ -13,6 +13,8 @@ export type MeResponse = {
   personal?: PersonalLimits;
   emergencyStopShockerIds?: number[];
   commandQueueEnabled?: boolean;
+  /** Shows the admin bypass toggle; the server re-checks on every command. */
+  isAdmin?: boolean;
 };
 
 export type QueueState = QueuePanelSettings & {
@@ -43,7 +45,18 @@ export type DevicesResponse = {
   online: Record<string, boolean>;
 };
 
-export type Overlay = null | 'menu' | 'availability' | 'settings' | 'shares' | 'logs' | 'link';
+export type Overlay =
+  | null
+  | 'menu'
+  | 'availability'
+  | 'settings'
+  | 'shares'
+  | 'logs'
+  | 'link'
+  | 'logPrivacy'
+  | 'safety'
+  | 'myData'
+  | 'history';
 
 export type LegalView = null | 'terms' | 'privacy';
 

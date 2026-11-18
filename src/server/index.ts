@@ -13,6 +13,39 @@ import { participantRoutes } from './routes/participants.js';
 import { queueRoutes } from './routes/queue.js';
 import { announcementRoutes } from './routes/announcements.js';
 import { attachRealtime, broadcastRealtimeAll } from './realtime.js';
+import { safetyRoutes } from './routes/safety.js';
+import { dataRoutes } from './routes/data.js';
+import { rouletteRoutes } from './routes/roulette.js';
+import { profileRoutes } from './routes/profile.js';
+import { startSessionTracker } from './session-tracker.js';
+import { applyLogRetention, runDueDeletions } from './data-registry.js';
+import { commandQueue } from './pishock/command-queue-runtime.js';
+
+const DATA_JOB_INTERVAL_MS = 60 * 60_000;
+
+/** Hourly: run deletion requests past their grace period, then apply log retention. */
+function startDataJobs(): () => void {
+  const run = async () => {
+    try {
+      const erased = await runDueDeletions(async (id) => {
+        await commandQueue.hardClear(id).catch(() => undefined);
+      });
+      const pruned = await applyLogRetention();
+      if (erased || pruned) console.info(`[data] erased ${erased} account(s), pruned ${pruned} old log row(s)`);
+    } catch (err) {
+      console.warn('[data] scheduled job failed', err instanceof Error ? err.message : err);
+    }
+  };
+  const first = setTimeout(() => void run(), 30_000);
+  const timer = setInterval(() => void run(), DATA_JOB_INTERVAL_MS);
+  first.unref?.();
+  timer.unref?.();
+  return () => {
+    clearTimeout(first);
+    clearInterval(timer);
+  };
+}
+import { startWearerSafetyRuntime } from './wearer-safety-runtime.js';
 import { loadAppVersion } from './app-version.js';
 import { prisma } from './db.js';
 import { closeAllBrokerSessions } from './pishock/broker.js';
@@ -88,6 +121,10 @@ async function main() {
   await app.register(activityShareRoutes, { env });
   await app.register(participantRoutes, { env });
   await app.register(queueRoutes, { env });
+  await app.register(safetyRoutes, { env });
+  await app.register(dataRoutes, { env });
+  await app.register(rouletteRoutes, { env });
+  await app.register(profileRoutes, { env });
   await app.register(announcementRoutes);
 
   const clientDist = resolveClientDist();
@@ -110,6 +147,9 @@ async function main() {
 
   await app.listen({ port: env.port, host: '0.0.0.0' });
   const disposeRealtime = attachRealtime(app.server);
+  const disposeSafety = startWearerSafetyRuntime();
+  const disposeDataJobs = startDataJobs();
+  const disposeSessions = startSessionTracker(env);
   app.log.info(`Listening on ${env.publicUrl} (port ${env.port})`);
   app.log.info('Realtime WebSocket at /api/ws');
 
@@ -136,6 +176,9 @@ async function main() {
       if (endedHolds > 0) {
         app.log.warn({ endedHolds }, 'Ended active holds before shutdown (acknowledged)');
       }
+      disposeSafety();
+      disposeDataJobs();
+      disposeSessions();
       disposeRealtime();
       closeAllBrokerSessions();
       await app.close();

@@ -59,6 +59,7 @@ export type ActivityShareWrite = {
   canBeep?: boolean;
   canHold?: boolean;
   requiredWarningLevel?: string | null;
+  maxIntensityStep?: number | null;
 };
 
 function activityShareCreateData(discordUserId: string, shares: ActivityShareWrite[]) {
@@ -110,6 +111,7 @@ function activityShareCreateData(discordUserId: string, shares: ActivityShareWri
       canBeep: s.canBeep !== false,
       canHold: s.canHold !== false,
       requiredWarningLevel: bands.requiredWarningLevel,
+      maxIntensityStep: s.maxIntensityStep ?? null,
     };
   });
 }

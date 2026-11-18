@@ -164,6 +164,30 @@ describe('device-firing code paths', () => {
     assert.ok(exec.indexOf('assertWithinCeilings') < exec.indexOf('publishOperate('));
   });
 
+  it('server-built commands (roulette) pass the wearer gates and take the queued path', () => {
+    // Reviewed firing path: roulette results are built server-side and sent through
+    // submitServerCommand, which only enqueues or runs validateQueuedItem → executeQueuedItem.
+    const runtime = files.get('pishock/command-queue-runtime.ts')!;
+    const start = runtime.indexOf('export async function submitServerCommand');
+    assert.ok(start >= 0, 'submitServerCommand not found');
+    const body = runtime.slice(start);
+    assert.deepEqual(
+      needs(body, ['commandQueue.enqueue', 'validateQueuedItem', 'executeQueuedItem']),
+      [],
+    );
+    assert.ok(body.indexOf('validateQueuedItem') < body.indexOf('executeQueuedItem'));
+    assert.doesNotMatch(body, /\b(publishOperate|operateById|operateByShare)\s*\(/);
+
+    // Only the roulette route may call it, after the wearer's gates (incl. approve-each).
+    const callers = [...files]
+      .filter(([file, src]) => file !== 'pishock/command-queue-runtime.ts' && /\bsubmitServerCommand\s*\(/.test(src))
+      .map(([file]) => file);
+    assert.deepEqual(callers, ['routes/roulette.ts']);
+    const roulette = files.get('routes/roulette.ts')!;
+    assert.deepEqual(needs(roulette, ['getConsent', 'isExecutorBanned', 'rouletteAllowed']), []);
+    assert.ok(roulette.indexOf('admitWearerCommand(') < roulette.indexOf('submitServerCommand('));
+  });
+
   it('operate-policy only ever publishes an *end* frame (hold auto-end / shutdown flush)', () => {
     const src = files.get('operate-policy.ts')!;
     const start = src.indexOf('const sendEnd');

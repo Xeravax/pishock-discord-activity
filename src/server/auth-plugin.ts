@@ -54,6 +54,8 @@ const authPluginImpl: FastifyPluginAsync<{ env: AppEnv }> = async (app, opts) =>
     if (path === '/api/ws') return;
     // Discord code exchange has no bearer yet
     if (path === '/api/auth/discord' && req.method === 'POST') return;
+    // Data export download opens in the user's browser; the single-use token is the credential
+    if (/^\/api\/me\/export\/[0-9a-f]{64}$/.test(path) && req.method === 'GET') return;
 
     const reported = clientVersion(req);
     // Reject stale clients immediately. Missing header also counts as outdated once a

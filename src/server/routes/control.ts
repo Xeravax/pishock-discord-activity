@@ -57,6 +57,8 @@ import {
   clearPiShockSession,
   listCommandLogs,
   listPublicCommandLogs,
+  getLogPrivacy,
+  setLogPrivacy,
   getEmergencyStopShockerIds,
   loadPiShockCreds,
   logCommand,
@@ -70,6 +72,8 @@ import {
   resolveActivityLocation,
   type ActivityLocationContext,
 } from '../discord-location.js';
+import { resolveLogViewer } from '../log-viewer.js';
+import { onWearerEmergencyStop } from '../wearer-safety-runtime.js';
 
 /** Activity feed row: always attribute to the device owner so the public log can dedupe. */
 async function logOperateEvent(input: {
@@ -233,6 +237,8 @@ export const controlRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app, op
     let result;
     if (body.engaged) {
       gateEmergencyStops(req.discordUser.id, shockerIds, true);
+      // E-STOP wins over everything: close open approval prompts right away.
+      onWearerEmergencyStop(req.discordUser.id);
       for (const id of shockerIds) cancelPendingHold(req.discordUser.id, id);
       commandQueue.holdAdvance(req.discordUser.id);
       commandQueue.invalidateInFlight(req.discordUser.id);
@@ -818,13 +824,15 @@ export const controlRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app, op
     if (!req.hasConsent) {
       return reply.code(403).send({ error: 'Consent required', code: 'CONSENT_REQUIRED' });
     }
-    const query = req.query as { limit?: string };
+    const query = req.query as { limit?: string; instanceId?: string };
     const limit = Number(query.limit ?? 200);
 
     // Website/device history is ephemeral — live broker `-log` ingest fills source=website rows.
 
+    // Each wearer's log-sharing preferences decide what this viewer may see.
+    const viewer = await resolveLogViewer(opts.env, req.discordUser.id, query.instanceId);
     const [publicFeed, activity] = await Promise.all([
-      listPublicCommandLogs(Number.isFinite(limit) ? limit : 200),
+      listPublicCommandLogs(Number.isFinite(limit) ? limit : 200, viewer),
       listCommandLogs(req.discordUser.id, 50),
     ]);
     return {
@@ -832,6 +840,24 @@ export const controlRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app, op
       /** @deprecated prefer `public` — kept for PIP / personal hydration */
       activity,
     };
+  });
+
+  app.get('/api/logs/privacy', async (req, reply) => {
+    if (!req.hasConsent) {
+      return reply.code(403).send({ error: 'Consent required', code: 'CONSENT_REQUIRED' });
+    }
+    return { ok: true, privacy: await getLogPrivacy(req.discordUser.id) };
+  });
+
+  app.put('/api/logs/privacy', async (req, reply) => {
+    if (!req.hasConsent) {
+      return reply.code(403).send({ error: 'Consent required', code: 'CONSENT_REQUIRED' });
+    }
+    if (!req.body || typeof req.body !== 'object') {
+      return reply.code(400).send({ error: 'Expected a JSON object of log privacy settings' });
+    }
+    const privacy = await setLogPrivacy(req.discordUser.id, req.body);
+    return { ok: true, privacy };
   });
 
   /**

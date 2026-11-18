@@ -944,3 +944,20 @@ export function updateRichPresence(snapshot: PresenceSnapshot): void {
     void pushRichPresence(snapshot);
   }, PRESENCE_DEBOUNCE_MS);
 }
+
+/**
+ * Ask the user (Discord's own OAuth sheet) to let the app add them to the community
+ * server, so the bot can DM session recaps. Separate from boot authorize on purpose:
+ * only requested when the user taps "Join". Returns the one-time code for the server.
+ */
+export async function requestCommunityJoinCode(): Promise<string> {
+  if (!isEmbedded) throw new Error('Open the activity in Discord to join the server');
+  const discordSdk = getDiscordSdk();
+  const result = await discordSdk.commands.authorize({
+    client_id: clientId(),
+    response_type: 'code',
+    state: '',
+    scope: ['identify', 'guilds.join'],
+  });
+  return result.code;
+}

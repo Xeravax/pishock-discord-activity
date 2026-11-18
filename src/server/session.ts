@@ -6,3 +6,4 @@ export * from './services/command-log.js';
 export * from './services/emergency-stop.js';
 export * from './services/command-queue-settings.js';
 export * from './services/bans.js';
+export * from './services/extra-features.js';

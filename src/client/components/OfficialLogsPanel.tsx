@@ -1,4 +1,5 @@
-import { useMemo } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
+import { BrandGlyph } from './BrandHeader';
 
 export type OfficialLogPerson = {
   id: string;
@@ -35,7 +36,26 @@ export type OfficialLogEntry = {
   intensity: number | null;
   durationSec: number | null;
   at: number;
+  /** False when the wearer doesn't allow share images of this hit (server-decided). */
+  shareable?: boolean;
+  /** An admin bypassed the wearer's gates / limits — shown red. */
+  adminBypass?: boolean;
+  bypassedGates?: string[];
 };
+
+const GATE_LABELS: Record<string, string> = {
+  favorites: 'favorites only',
+  cooldown: 'cooldown',
+  budget: 'shock budget',
+  approval: 'approval',
+  queue: 'queue line',
+  limits: 'limits',
+};
+
+export function describeBypassedGates(gates: string[] | undefined): string {
+  const names = (gates ?? []).map((g) => GATE_LABELS[g] ?? g);
+  return names.length ? names.join(', ') : 'restrictions';
+}
 
 type Props = {
   open: boolean;
@@ -179,6 +199,20 @@ export function OfficialLogsPanel({
   onShareEntry,
 }: Omit<Props, 'onOpen'>) {
   const now = useMemo(() => Date.now(), [open, entries.length]);
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+
+  useEffect(() => {
+    if (!open) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      event.preventDefault();
+      onCloseRef.current();
+    };
+    document.addEventListener('keydown', onKeyDown);
+    return () => document.removeEventListener('keydown', onKeyDown);
+  }, [open]);
+
   if (!open) return null;
 
   return (
@@ -190,12 +224,18 @@ export function OfficialLogsPanel({
         aria-modal="true"
         aria-label="Logs"
       >
-        <div className="official-logs-card q-card q-card--dark q-dark bg-dark">
-          <div className="official-logs-banner row items-center justify-between no-wrap">
-            <span>Recent activity across all sessions</span>
+        <div className="official-logs-card ps-dialog-card q-card q-card--dark q-dark bg-dark">
+          <div className="ps-dialog-header official-logs-header row items-center justify-between no-wrap">
+            <div className="ps-dialog-title">
+              <BrandGlyph size={22} />
+              <span className="column">
+                <span className="ps-dialog-title__text">Logs</span>
+                <span className="official-logs-header__sub">Recent activity across all sessions</span>
+              </span>
+            </div>
             <button
               type="button"
-              className="q-btn q-btn-item non-selectable no-outline q-btn--flat q-btn--round text-dark q-btn--dense"
+              className="ps-dialog-close q-btn q-btn-item non-selectable no-outline q-btn--flat q-btn--round text-grey-5 q-btn--actionable q-btn--dense"
               onClick={onClose}
               aria-label="Close"
             >
@@ -215,11 +255,21 @@ export function OfficialLogsPanel({
                 const hub = hubLabel(row);
                 const shareable =
                   canShareMoment &&
+                  row.shareable !== false &&
                   Boolean(onShareEntry) &&
                   canShareLogAction(row.action);
                 const sharing = sharingEntryId === row.id;
                 return (
-                <div key={row.id} className="official-log-row">
+                <div
+                  key={row.id}
+                  className={`official-log-row${row.adminBypass ? ' official-log-row--admin' : ''}`}
+                >
+                  {row.adminBypass ? (
+                    <div className="official-log-admin" role="note">
+                      <i className="q-icon mdi mdi-shield-alert" aria-hidden />
+                      An admin bypassed this · {describeBypassedGates(row.bypassedGates)}
+                    </div>
+                  ) : null}
                   <div className="official-log-row__top">
                     <PersonChip person={row.from} tone="from" />
                     <i className="q-icon mdi mdi-arrow-right official-log-arrow" aria-hidden />
@@ -314,9 +364,12 @@ type PublicLogApiRow = {
   durationMs?: number | null;
   createdAt?: string;
   source?: string;
+  shareable?: boolean;
   location?: OfficialLogLocation | null;
   executor?: PublicLogPersonApi;
   target?: PublicLogPersonApi;
+  adminBypass?: boolean;
+  bypassedGates?: string[];
 };
 
 function personFromApi(
@@ -393,6 +446,9 @@ export function normalizePublicLogs(
       intensity,
       durationSec: durationMs != null ? Math.round((durationMs / 1000) * 10) / 10 : null,
       at,
+      shareable: row.shareable !== false,
+      adminBypass: row.adminBypass === true,
+      bypassedGates: Array.isArray(row.bypassedGates) ? row.bypassedGates.map(String) : [],
     });
   });
   return out.sort((a, b) => b.at - a.at);

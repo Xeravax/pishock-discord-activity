@@ -10,6 +10,7 @@ import type { ShockerView } from './ShockerCard';
 import { AnnouncementBanner } from './AnnouncementBanner';
 import { AppVersionBadge } from './AppVersionBadge';
 import { IndividualIntensityToggle, MultiShockToggle } from './MultiShockToggle';
+import { MultiTargetTray } from './MultiTargetTray';
 import {
   atLeastWarning,
   cycleWarningLevel,
@@ -137,6 +138,15 @@ type Props = {
   onPingHub?: () => void;
   pinging?: boolean;
   selectedHubId?: string | null;
+  /** Display name for a Discord user (multishock tray grouping). */
+  personName?: (discordUserId: string) => string;
+  /**
+   * Multishock: called once per fire before the per-target commands go out, so the
+   * caller can show one combined result ("Sent to 3 · skipped 1").
+   */
+  onBatchPlanned?: (info: { count: number; skipped: Array<{ name: string; reason: string }> }) => void;
+  /** Multi toggled — own mode then lists shockers from every hub. */
+  onMultiShockChange?: (on: boolean) => void;
 };
 
 /** Exact Quasar DOM structure + classes from pishock.com/#/control */
@@ -172,6 +182,9 @@ export function OfficialController({
   onPingHub,
   pinging = false,
   selectedHubId = null,
+  personName = () => 'Someone',
+  onBatchPlanned,
+  onMultiShockChange,
 }: Props) {
   const initialPrefs = useMemo(() => loadControlPrefs(), []);
   const [activeId, setActiveId] = useState(
@@ -185,6 +198,10 @@ export function OfficialController({
   const [perShockIntensity, setPerShockIntensity] = useState<Record<string, number>>(
     () => ({ ...initialPrefs.perShockIntensity }),
   );
+  /** Individual mode: per-target duration (ms), keyed like perShockIntensity. */
+  const [perShockDuration, setPerShockDuration] = useState<Record<string, number>>({});
+  /** Why each target was skipped on the last multishock fire (shown in the tray). */
+  const [lastSkipped, setLastSkipped] = useState<Record<number, string>>({});
   const [selectedIds, setSelectedIds] = useState<number[]>(() => {
     const first = initialPrefs.activeId ?? shockers[0]?.id;
     return first != null ? [first] : [];
@@ -203,10 +220,10 @@ export function OfficialController({
 
   const selectedShockers = useMemo(() => {
     if (!multiShock) return active ? [active] : [];
-    const picked = selectedIds
+    // An explicit "None" really means none — no silent fallback to the active shocker.
+    return selectedIds
       .map((id) => shockers.find((s) => s.id === id))
       .filter((s): s is ShockerView => Boolean(s));
-    return picked.length ? picked : active ? [active] : [];
   }, [multiShock, selectedIds, shockers, active]);
 
   useEffect(() => {
@@ -225,12 +242,8 @@ export function OfficialController({
         if (valid.length) return valid.slice(0, 1);
         return shockers[0] ? [shockers[0].id] : [];
       }
-      // Multishock: keep selection and auto-include newly visible shockers
-      const merged = [...valid];
-      for (const id of visible) {
-        if (!merged.includes(id)) merged.push(id);
-      }
-      return merged.length ? merged : shockers[0] ? [shockers[0].id] : [];
+      // Multishock: keep exactly what was picked (new shockers are not auto-added).
+      return valid;
     });
   }, [shockers, multiShock]);
 
@@ -426,11 +439,9 @@ export function OfficialController({
   const vibMinDur = limitPool.length
     ? Math.max(...limitPool.map((s) => shockerUsableMinDur(s, 'vibrate')))
     : minDur;
-  /** While editing per-person, the shock slider is capped to the focused person. */
-  const shockEditCap =
-    individualIntensity && multiShock && active ? shockerUsableInt(active) : maxInt;
-  const shockEditFloor =
-    individualIntensity && multiShock && active ? shockerUsableMinInt(active) : minInt;
+  /** Individual targets have their own sliders in the tray; the main slider is the default. */
+  const shockEditCap = maxInt;
+  const shockEditFloor = minInt;
   const requiredWarningFloor = limitPool.reduce<WarningLevel>(
     (floor, s) => atLeastWarning(floor, normalizeWarningLevel(s.requiredWarningLevel)),
     'none',
@@ -439,7 +450,9 @@ export function OfficialController({
   const selectedAllBlocked =
     selectedShockers.length > 0 &&
     selectedShockers.every((s) => s.emergencyStop || s.paused);
-  const controlsLocked = forceControlsLocked || (multiShock ? selectedAllBlocked : activeBlocked);
+  const controlsLocked =
+    forceControlsLocked ||
+    (multiShock ? selectedShockers.length === 0 || selectedAllBlocked : activeBlocked);
   const modeEligible = (mode: 'shock' | 'vibrate' | 'beep') => {
     const pool = multiShock ? selectedShockers : active ? [active] : [];
     return pool.some((s) => {
@@ -455,12 +468,7 @@ export function OfficialController({
 
   const setActiveShockIntensity = (n: number) => {
     // Thumb moves freely up to the activity ceiling; mins are enforced on fire.
-    const next = clamp(n, 0, shockEditCap);
-    setShockIntensity(next);
-    if (individualIntensity && multiShock && active) {
-      const key = multiColorKey(active);
-      setPerShockIntensity((prev) => ({ ...prev, [key]: next }));
-    }
+    setShockIntensity(clamp(n, 0, shockEditCap));
   };
 
   useEffect(() => {
@@ -478,6 +486,11 @@ export function OfficialController({
     const pool = selectedShockers.length ? selectedShockers : active ? [active] : [];
     seedPerShockIntensities(pool, shockIntensity);
   }, [individualIntensity, multiShock, selectedIds.join(',')]);
+
+  useEffect(() => {
+    onMultiShockChange?.(multiShock);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [multiShock]);
 
   useEffect(() => {
     saveControlPrefs({
@@ -598,7 +611,7 @@ export function OfficialController({
     }
     // Hold stays single-target; multishock uses one-shot fan-out
     if (opts?.hold || !multiShock) return active ? [active] : [];
-    return selectedShockers.length ? selectedShockers : active ? [active] : [];
+    return selectedShockers;
   };
 
   const fire = (
@@ -657,16 +670,47 @@ export function OfficialController({
       });
     };
 
+    const skipped: Array<{ shocker: ShockerView; reason: string }> = [];
+    const ready: ShockerView[] = [];
     for (const shocker of targets) {
-      if (operation !== 'end' && (shocker.emergencyStop || shocker.paused)) continue;
-      if (operation === 'shock' && !shocker.canShock) continue;
-      if (operation === 'vibrate' && !shocker.canVibrate) continue;
-      if (operation === 'beep' && !shocker.canBeep) continue;
+      const reason =
+        operation !== 'end' && shocker.emergencyStop
+          ? 'E-STOP'
+          : operation !== 'end' && shocker.paused
+            ? 'paused'
+            : operation === 'shock' && !shocker.canShock
+              ? 'shock not allowed'
+              : operation === 'vibrate' && !shocker.canVibrate
+                ? 'vibrate not allowed'
+                : operation === 'beep' && !shocker.canBeep
+                  ? 'beep not allowed'
+                  : null;
+      if (reason) skipped.push({ shocker, reason });
+      else ready.push(shocker);
+    }
+    if (multiShock && targets.length > 1 && operation !== 'end') {
+      setLastSkipped(Object.fromEntries(skipped.map((x) => [x.shocker.id, x.reason])));
+      onBatchPlanned?.({
+        count: ready.length,
+        skipped: skipped.map((x) => ({
+          name: x.shocker.targetDiscordUserId
+            ? `${personName(x.shocker.targetDiscordUserId)}: ${x.shocker.name}`
+            : x.shocker.name,
+          reason: x.reason,
+        })),
+      });
+    }
+    const individual = individualIntensity && multiShock && operation !== 'end';
+    for (const shocker of ready) {
+      const key = multiColorKey(shocker);
       const perIntensity =
-        operation === 'shock' && individualIntensity && multiShock
-          ? resolveShockIntensityFor(shocker)
+        individual && (operation === 'shock' || operation === 'vibrate')
+          ? operation === 'shock'
+            ? resolveShockIntensityFor(shocker)
+            : Math.max(1, perShockIntensity[key] ?? intensity)
           : intensity;
-      dispatch(shocker, operation, perIntensity, durationMs, null);
+      const perDuration = individual ? (perShockDuration[key] ?? durationMs) : durationMs;
+      dispatch(shocker, operation, perIntensity, perDuration, null);
     }
   };
 
@@ -985,77 +1029,77 @@ export function OfficialController({
                   </div>
                 ) : null}
 
-                {friendsOpen || shockers.length > 1 ? (
+                {friendsOpen || shockers.length > 1 || (estopShockers?.length ?? 0) > 1 ? (
                   <div className="column q-gutter-xs q-mt-sm">
-                    {!friendsOpen && shockers.length > 1 ? (
-                      <div className="row items-center q-gutter-sm" style={{ flexWrap: 'wrap' }}>
-                        <MultiShockToggle
-                          active={multiShock}
-                          onToggle={toggleMultiShock}
-                          title="Select several shockers and operate them together"
-                        />
-                        {multiShock ? (
-                          <IndividualIntensityToggle
-                            active={individualIntensity}
-                            onToggle={toggleIndividualIntensity}
-                          />
-                        ) : null}
-                        {multiShock ? (
-                          <span className="text-caption text-grey-5">
-                            {selectedShockers.length} selected
-                            {individualIntensity
-                              ? ' · tap a person, then set their own intensity'
-                              : ' · each capped to their own limit'}
-                          </span>
-                        ) : null}
-                      </div>
-                    ) : multiShock ? (
-                      <div className="row items-center q-gutter-sm" style={{ flexWrap: 'wrap' }}>
+                    <div className="row items-center q-gutter-sm" style={{ flexWrap: 'wrap' }}>
+                      <MultiShockToggle
+                        active={multiShock}
+                        onToggle={toggleMultiShock}
+                        title={
+                          friendsOpen
+                            ? 'Pick several people / shockers and operate them together'
+                            : 'Select several shockers (any hub) and operate them together'
+                        }
+                      />
+                      {multiShock ? (
                         <IndividualIntensityToggle
                           active={individualIntensity}
                           onToggle={toggleIndividualIntensity}
                         />
+                      ) : null}
+                      {multiShock ? (
                         <span className="text-caption text-grey-5">
-                          {selectedShockers.length} selected
                           {individualIntensity
-                            ? ' · tap a person, then set their own intensity'
-                            : ' · each capped to their own limit'}
+                            ? 'Each target uses its own sliders below'
+                            : 'Same values for all · each capped to its own limit'}
                         </span>
-                      </div>
+                      ) : null}
+                    </div>
+                    {multiShock ? (
+                      <MultiTargetTray
+                        shockers={shockers}
+                        selectedIds={selectedIds}
+                        individual={individualIntensity}
+                        values={Object.fromEntries(
+                          shockers.map((s) => {
+                            const key = multiColorKey(s);
+                            return [
+                              key,
+                              {
+                                intensity: perShockIntensity[key] ?? shockIntensity,
+                                durationMs: perShockDuration[key] ?? shockDurationMs,
+                              },
+                            ];
+                          }),
+                        )}
+                        defaults={{ intensity: shockIntensity, durationMs: shockDurationMs }}
+                        keyFor={multiColorKey}
+                        colorFor={multiColorForShocker}
+                        personName={personName}
+                        maxIntensityFor={(s) => shockerUsableInt(s)}
+                        minIntensityFor={(s) => shockerUsableMinInt(s)}
+                        maxDurationFor={(s) => shockerUsableDur(s)}
+                        minDurationFor={(s) => shockerUsableMinDur(s)}
+                        skipped={lastSkipped}
+                        onToggle={(id) =>
+                          setSelectedIds((prev) =>
+                            prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id],
+                          )
+                        }
+                        onSetGroup={(ids, on) =>
+                          setSelectedIds((prev) =>
+                            on
+                              ? [...prev, ...ids.filter((id) => !prev.includes(id))]
+                              : prev.filter((id) => !ids.includes(id)),
+                          )
+                        }
+                        onValue={(key, v) => {
+                          setPerShockIntensity((prev) => ({ ...prev, [key]: v.intensity }));
+                          setPerShockDuration((prev) => ({ ...prev, [key]: v.durationMs }));
+                        }}
+                      />
                     ) : null}
-                    {multiShock && multiLimitMarkers.length > 1 ? (
-                      <div className="row q-gutter-xs items-center" style={{ flexWrap: 'wrap' }}>
-                        {multiLimitMarkers.map((m) => (
-                          <span
-                            key={m.key}
-                            className="text-caption"
-                            style={{
-                              display: 'inline-flex',
-                              alignItems: 'center',
-                              gap: 4,
-                              color: m.color,
-                            }}
-                          >
-                            <span
-                              aria-hidden
-                              style={{
-                                width: 8,
-                                height: 8,
-                                borderRadius: 999,
-                                background: m.color,
-                                flexShrink: 0,
-                              }}
-                            />
-                            {m.label} ·{' '}
-                            {individualIntensity && m.value != null
-                              ? `${m.value}/${m.intensity}%`
-                              : `${m.intensity}%`}{' '}
-                            · {formatDurationSec(m.durationMs)}s
-                          </span>
-                        ))}
-                      </div>
-                    ) : null}
-                    {shockers.length > 0 ? (
+                    {shockers.length > 0 && !multiShock ? (
                       <div ref={shockerChipsRef} className="official-shocker-chips">
                         {shockers.map((s) => {
                           const selected = multiShock

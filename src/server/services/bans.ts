@@ -44,3 +44,29 @@ export async function isExecutorBanned(ownerDiscordUserId: string, executorDisco
   });
   return Boolean(row);
 }
+
+/** Add or remove a single ban without touching the rest of the owner's list. */
+export async function setActivityBan(
+  ownerDiscordUserId: string,
+  bannedDiscordUserId: string,
+  banned: boolean,
+) {
+  const key = { ownerDiscordUserId_bannedDiscordUserId: { ownerDiscordUserId, bannedDiscordUserId } };
+  if (banned) {
+    await prisma.$transaction(async (tx) => {
+      await tx.discordUser.upsert({
+        where: { id: bannedDiscordUserId },
+        create: { id: bannedDiscordUserId },
+        update: {},
+      });
+      await tx.activityBan.upsert({
+        where: key,
+        create: { ownerDiscordUserId, bannedDiscordUserId },
+        update: {},
+      });
+    });
+  } else {
+    await prisma.activityBan.deleteMany({ where: { ownerDiscordUserId, bannedDiscordUserId } });
+  }
+  return listActivityBans(ownerDiscordUserId);
+}
