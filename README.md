@@ -121,7 +121,7 @@ pishock-activity/
 1. **Discord Developer Account** — [Discord Developer Portal](https://discord.com/developers/applications)
 2. **PiShock Account** — [PiShock Website](https://pishock.com) (each end user links their own account)
 3. **Docker** — Docker Engine + Compose (for production-style hosting)
-4. **Node.js 22.22.2+** — optional, for local development without Docker
+4. **Node.js 22+** — optional, for local development without Docker
 5. **HTTPS reverse proxy** — Discord Activities require a public HTTPS URL
 
 #### Required Knowledge

@@ -1,14 +1,14 @@
 # syntax=docker/dockerfile:1
 
 # ---- deps (cached unless package*.json change) ----
-FROM node:26-alpine AS deps
+FROM node:22-alpine AS deps
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN --mount=type=cache,target=/root/.npm \
     npm ci
 
 # ---- build (UI + server) ----
-FROM node:26-alpine AS build
+FROM node:22-alpine AS build
 WORKDIR /app
 
 COPY --from=deps /app/node_modules ./node_modules
@@ -50,7 +50,7 @@ RUN DATABASE_URL="$PRISMA_BUILD_DATABASE_URL" \
     npm run build
 
 # ---- production node_modules ----
-FROM node:26-alpine AS prod-deps
+FROM node:22-alpine AS prod-deps
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN --mount=type=cache,target=/root/.npm \
@@ -61,7 +61,7 @@ ARG PRISMA_BUILD_DATABASE_URL="postgresql://build:build@127.0.0.1:5432/build?sch
 RUN DATABASE_URL="$PRISMA_BUILD_DATABASE_URL" npx prisma generate
 
 # ---- runtime ----
-FROM node:26-alpine AS runtime
+FROM node:22-alpine AS runtime
 WORKDIR /app
 ENV NODE_ENV=production \
     PORT=3000
