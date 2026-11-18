@@ -65,7 +65,7 @@ export function FriendsParticipantList({
       <div className="row items-center justify-between official-friends-header">
         <div className="text-secondary official-friends-title">
           DISCORD SHOCKERS
-          {multiSelect ? (individualIntensity ? ' · MULTI · PER PERSON' : ' · MULTI') : ''}
+          {multiSelect ? (individualIntensity ? ' · MULTI · INDIVIDUAL' : ' · MULTI') : ''}
         </div>
         <div className="row items-center no-wrap q-gutter-xs">
           {adminBypass ? (

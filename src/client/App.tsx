@@ -279,6 +279,12 @@ export function App() {
   const [selectedTargetIds, setSelectedTargetIds] = useState<string[]>([]);
   const selectedTargetId = selectedTargetIds[0] ?? null;
   const [selectedHubId, setSelectedHubId] = useState<string | null>(null);
+  /** Controller's Multi toggle (own mode shows every hub while it's on). */
+  const [ownMultiShock, setOwnMultiShock] = useState(false);
+  // Multi off → back to one person (the friend list keeps multi-selections otherwise).
+  useEffect(() => {
+    if (!ownMultiShock) setSelectedTargetIds((prev) => (prev.length > 1 ? prev.slice(0, 1) : prev));
+  }, [ownMultiShock]);
   const [pinging, setPinging] = useState(false);
   const [pairDialog, setPairDialog] = useState<ShockerView | null>(null);
   const [lastIncoming, setLastIncoming] = useState<IncomingShockHit | null>(null);
@@ -327,7 +333,29 @@ export function App() {
   const [ownStarredIds, setOwnStarredIds] = useState<Set<string>>(() => new Set());
   const [ownBannedIds, setOwnBannedIds] = useState<Set<string>>(() => new Set());
   const [queueOpen, setQueueOpen] = useState(false);
-  const [myQueueTicket, setMyQueueTicket] = useState<SenderQueueTicket | null>(null);
+  /** Sender-side queue tickets, one per queued command (multishock can queue several). */
+  const [myQueueTickets, setMyQueueTickets] = useState<Record<string, SenderQueueTicket>>({});
+  const putQueueTicket = useCallback((t: SenderQueueTicket) => {
+    setMyQueueTickets((prev) => ({ ...prev, [t.itemId]: t }));
+  }, []);
+  const liveQueueTickets = Object.values(myQueueTickets).filter(
+    (t) => t.status === 'queued' || t.status === 'started',
+  );
+  /** Banner shows the running one, else the next in line; the rest are counted. */
+  const myQueueTicket =
+    liveQueueTickets.find((t) => t.status === 'started') ??
+    [...liveQueueTickets].sort((a, b) => (a.position ?? 99) - (b.position ?? 99))[0] ??
+    null;
+  /** Multishock: one combined result toast per fire. */
+  const batchAggRef = useRef<{
+    id: string;
+    expected: number;
+    done: number;
+    sent: number;
+    queued: number;
+    failed: string[];
+    skipped: Array<{ name: string; reason: string }>;
+  } | null>(null);
   /** Shocker ids PiShock just rejected with 503, until a device list says otherwise. */
   const [livePausedIds, setLivePausedIds] = useState<Set<number>>(() => new Set());
 
@@ -952,7 +980,7 @@ export function App() {
       }
       if (event.type === 'queue_ticket') {
         if (selfIdRef.current && event.executorDiscordUserId === selfIdRef.current) {
-          setMyQueueTicket({
+          putQueueTicket({
             ownerDiscordUserId: event.ownerDiscordUserId,
             itemId: event.itemId,
             status: event.status,
@@ -968,7 +996,12 @@ export function App() {
             event.status === 'failed'
           ) {
             window.setTimeout(() => {
-              setMyQueueTicket((prev) => (prev?.itemId === event.itemId ? null : prev));
+              setMyQueueTickets((prev) => {
+                if (!prev[event.itemId]) return prev;
+                const next = { ...prev };
+                delete next[event.itemId];
+                return next;
+              });
             }, 2500);
           }
         }
@@ -1420,12 +1453,13 @@ export function App() {
   }, [selectedTargetIds, participantStatus, participants, livePausedIds]);
 
   const ownShockers = useMemo(() => {
-    if (!selectedHubId) return ownedAndShared;
+    // Multishock picks across every hub; the hub picker only narrows single control.
+    if (!selectedHubId || ownMultiShock) return ownedAndShared;
     const filtered = ownedAndShared.filter(
       (s) => !s.clientId || normalizeClientKey(String(s.clientId)) === selectedHubId,
     );
     return filtered.length ? filtered : ownedAndShared;
-  }, [ownedAndShared, selectedHubId]);
+  }, [ownedAndShared, selectedHubId, ownMultiShock]);
 
   const shockers = friendsMode ? friendShockers : ownShockers;
 
@@ -1988,6 +2022,46 @@ export function App() {
     openLinkFlow();
   };
 
+  const finishBatch = (agg: NonNullable<typeof batchAggRef.current>) => {
+    if (batchAggRef.current === agg) batchAggRef.current = null;
+    const parts: string[] = [];
+    if (agg.sent) parts.push(`Sent to ${agg.sent}`);
+    if (agg.queued) parts.push(`queued ${agg.queued}`);
+    if (agg.skipped.length) {
+      const reasons = [...new Set(agg.skipped.map((x) => x.reason))].join(', ');
+      parts.push(`skipped ${agg.skipped.length} (${reasons})`);
+    }
+    if (agg.failed.length) parts.push(`failed ${agg.failed.length}: ${agg.failed.join('; ')}`);
+    const text = parts.join(' · ') || 'Nothing was sent';
+    if (agg.failed.length || (!agg.sent && !agg.queued)) {
+      setActionNotice(null);
+      setActionError(text);
+    } else {
+      setActionError(null);
+      setActionNotice(text);
+    }
+  };
+
+  /** Controller announces a multishock fire before its per-target commands go out. */
+  const planBatch = (info: { count: number; skipped: Array<{ name: string; reason: string }> }) => {
+    const now = Date.now();
+    const id = `b${now.toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+    operateBatchRef.current = { id, at: now };
+    const agg = { id, expected: info.count, done: 0, sent: 0, queued: 0, failed: [], skipped: [...info.skipped] };
+    batchAggRef.current = agg;
+    if (info.count === 0) finishBatch(agg);
+  };
+
+  /** A target the client refuses locally (favorites only / queue closed) counts as skipped. */
+  const skipInBatch = (name: string, reason: string) => {
+    const agg = batchAggRef.current;
+    if (!agg || !operateBatchRef.current || operateBatchRef.current.id !== agg.id) return false;
+    agg.skipped.push({ name, reason });
+    agg.expected -= 1;
+    if (agg.done >= agg.expected) finishBatch(agg);
+    return true;
+  };
+
   const operate = async (input: Record<string, unknown>) => {
     if (!token) return;
     const targetId =
@@ -2005,6 +2079,25 @@ export function App() {
       };
     }
     const batchId = operateBatchRef.current.id;
+    const agg = batchAggRef.current?.id === batchId ? batchAggRef.current : null;
+    const targetLabel = () => {
+      const person = targetId ? participants.find((p) => p.id === targetId)?.displayName : null;
+      const shocker = shockers.find((s) => s.id === Number(input.shockerId))?.name;
+      return [person, shocker].filter(Boolean).join(': ') || 'a shocker';
+    };
+    /** One result per target; the batch toast is shown when every target has answered. */
+    const settle = (outcome: 'sent' | 'queued' | 'failed', message?: string) => {
+      if (!agg) return;
+      agg.done += 1;
+      if (outcome === 'sent') agg.sent += 1;
+      else if (outcome === 'queued') agg.queued += 1;
+      else agg.failed.push(`${targetLabel()} — ${message ?? 'failed'}`);
+      if (agg.done >= agg.expected) finishBatch(agg);
+    };
+    const fail = (message: string) => {
+      if (agg) settle('failed', message);
+      else setActionError(message);
+    };
     // Admin bypass is one fire at a time: disarm right after this (multishock) batch.
     if (adminBypassArmed) window.setTimeout(() => setAdminBypassArmed(false), 300);
     // Approve-each wearers hold the request until they answer — don't lock the controls meanwhile.
@@ -2045,8 +2138,9 @@ export function App() {
         if (result.clampedReason === 'escalation') {
           setActionNotice('Intensity was lowered — they limit how fast shocks can escalate.');
         }
+        settle(result.queued ? 'queued' : 'sent');
         if (result.queued && result.itemId) {
-          setMyQueueTicket({
+          putQueueTicket({
             ownerDiscordUserId: targetId,
             itemId: result.itemId,
             status: 'queued',
@@ -2067,6 +2161,7 @@ export function App() {
           method: 'POST',
           body: JSON.stringify({ ...input, instanceId, locationHint }),
         });
+        settle('sent');
       }
       await refreshLogs(token).catch(() => undefined);
       const sentId = Number(input.shockerId);
@@ -2083,14 +2178,14 @@ export function App() {
         await handleReloginNeeded();
         requirePiShockLink('PiShock API key expired — link again to control your own devices.');
       } else if (err instanceof ApiError && err.code === 'EMERGENCY_STOP') {
-        setActionError('Emergency stop is engaged — owner must release STOP');
+        fail('Emergency stop is engaged — owner must release STOP');
         if (token) void refreshParticipantStatus(token, participants, true).catch(() => undefined);
       } else if (
         err instanceof ApiError &&
         (err.code === 'STAR_ONLY' || err.code === 'FAVORITES_ONLY')
       ) {
         setActionNotice(null);
-        setActionError(safetyErrorMessage(err.code, err.message));
+        fail(safetyErrorMessage(err.code, err.message));
         if (token) void refreshParticipantStatus(token, participants, true).catch(() => undefined);
       } else if (
         err instanceof ApiError &&
@@ -2104,18 +2199,18 @@ export function App() {
         ].includes(err.code ?? '')
       ) {
         setActionNotice(null);
-        setActionError(safetyErrorMessage(err.code, err.message));
+        fail(safetyErrorMessage(err.code, err.message));
         if (err.code === 'BUDGET_EXHAUSTED' && token) {
           void refreshParticipantStatus(token, participants, true).catch(() => undefined);
         }
       } else if (err instanceof ApiError && err.code === 'QUEUE_HALTED') {
-        setActionError('Their queue is closed to new commands');
+        fail('Their queue is closed to new commands');
         if (token) void refreshParticipantStatus(token, participants, true).catch(() => undefined);
       } else if (
         err instanceof ApiError &&
         (err.code === 'QUEUE_SENDER_FULL' || err.code === 'QUEUE_FULL')
       ) {
-        setActionError(err.message);
+        fail(err.message);
       } else if (err instanceof ApiError && err.code === 'PISHOCK_PAUSED') {
         const pausedId = Number(input.shockerId);
         if (Number.isFinite(pausedId) && pausedId > 0) {
@@ -2125,7 +2220,7 @@ export function App() {
             return next;
           });
         }
-        setActionError(
+        fail(
           'This shocker is paused on PiShock. Controls stay off until it is unpaused there.',
         );
         void refreshDevices(token).catch(() => undefined);
@@ -2133,7 +2228,7 @@ export function App() {
           void refreshParticipantStatus(token, participantsRef.current, true).catch(() => undefined);
         }
       } else {
-        setActionError(err instanceof Error ? err.message : String(err));
+        fail(err instanceof Error ? err.message : String(err));
       }
     } finally {
       if (!awaitsApproval) {
@@ -3197,6 +3292,9 @@ export function App() {
         ) : null}
 
         <OfficialController
+          personName={(id) => participants.find((p) => p.id === id)?.displayName ?? 'Someone'}
+          onBatchPlanned={planBatch}
+          onMultiShockChange={setOwnMultiShock}
           hub={primaryHub}
           hubs={hubOptions}
           shockers={shockers}
@@ -3305,9 +3403,7 @@ export function App() {
               selectedTargetId={selectedTargetId}
               selectedTargetIds={selectedTargetIds}
               multiSelect={multiShock}
-              onToggleMultiSelect={onToggleMultiShock}
               individualIntensity={individualIntensity}
-              onToggleIndividualIntensity={onToggleIndividualIntensity}
               onSelect={(id) => {
                 if (!id) {
                   friendsSelectionClearedRef.current = true;
@@ -3363,7 +3459,11 @@ export function App() {
               const queueHalted = Boolean(queue?.enabled && queue.halted);
               // An armed admin bypass skips favorites only server-side (logged red).
               const adminSkipsFavorites = adminBypassArmed && Boolean(me.isAdmin);
-              if ((starBlocked && !adminSkipsFavorites) || queueHalted) return;
+              if ((starBlocked && !adminSkipsFavorites) || queueHalted) {
+                const who = participants.find((p) => p.id === targetId)?.displayName ?? 'Someone';
+                skipInBatch(who, starBlocked ? 'favorites only' : 'queue closed');
+                return;
+              }
             }
             operate({
               ...input,
@@ -3893,6 +3993,7 @@ export function App() {
                   <div className="queue-ticket-banner__title">
                     {myQueueTicket.paused ? 'Queue paused' : 'In queue'}
                     {myQueueTicket.position != null ? ` · #${myQueueTicket.position}` : ''}
+                    {liveQueueTickets.length > 1 ? ` · +${liveQueueTickets.length - 1} more` : ''}
                   </div>
                   <div className="queue-ticket-banner__eta">
                     {(() => {
