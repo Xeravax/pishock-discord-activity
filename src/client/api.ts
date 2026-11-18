@@ -1,4 +1,5 @@
 import { getBootAppVersion, markClientOutdated } from './hooks/useAppHealth';
+import { markGloballyBanned, type GlobalBanInfo } from './hooks/useGlobalBan';
 
 const urlParams = new URLSearchParams(window.location.search);
 export const isEmbedded = urlParams.has('frame_id');
@@ -62,6 +63,15 @@ export async function apiFetch<T>(
         ? String((body as { serverVersion: unknown }).serverVersion)
         : res.headers.get('X-App-Version');
     markClientOutdated(serverVersion);
+  }
+  if (
+    res.status === 403 &&
+    typeof body === 'object' &&
+    body &&
+    (body as { code?: string }).code === 'GLOBALLY_BANNED' &&
+    (body as { ban?: unknown }).ban
+  ) {
+    markGloballyBanned((body as { ban: GlobalBanInfo }).ban);
   }
   if (!res.ok) {
     throw new ApiError(res.status, body);

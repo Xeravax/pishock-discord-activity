@@ -19,6 +19,9 @@ export const USER_DATA_MODELS = {
   CommandLog: 'your log copies (deleted or anonymised); you are replaced by "Deleted user" in others’ logs',
   DataDeletionRequest: 'the request itself; your id is cleared once it has run',
   ActivitySession: 'your sessions and their recaps — deleted (follows your log retention)',
+  GlobalBan: 'app bans on your account and their reasons — kept after deletion so a ban cannot be undone by deleting (legitimate interest); included in your export',
+  AdminAuditLog: 'admin actions concerning you (profile views, bans) — profile views are unlinked on deletion, ban records are kept with the ban',
+  AppSetting: 'app-wide settings; only stores which admin last changed one',
 } as const;
 
 export type UserDataModel = keyof typeof USER_DATA_MODELS;
@@ -70,6 +73,17 @@ export async function buildUserExport(discordUserId: string) {
     where: { discordUserId },
     orderBy: { startedAt: 'desc' },
   });
+  const appBans = await prisma.globalBan.findMany({
+    where: { discordUserId },
+    orderBy: { createdAt: 'desc' },
+    select: { id: true, reason: true, createdAt: true, expiresAt: true, liftedAt: true, liftReason: true },
+  });
+  // Which admin did it is their accountability data; you see what happened and when.
+  const adminActions = await prisma.adminAuditLog.findMany({
+    where: { targetDiscordUserId: discordUserId },
+    orderBy: { createdAt: 'desc' },
+    select: { action: true, createdAt: true },
+  });
   return {
     sessions,
     format: 'pishock-activity-export/1',
@@ -90,6 +104,8 @@ export async function buildUserExport(discordUserId: string) {
     personLimits: { setByYou: limitsByYou, othersLimitingYou: limitsForYou },
     commandLogs: logs,
     deletionRequests: requests,
+    appBans,
+    adminActionsAboutYou: adminActions,
   };
 }
 
@@ -201,6 +217,11 @@ export async function eraseUser(discordUserId: string, mode: 'delete' | 'anonymi
         data: { targetDiscordUserId: null },
       });
     }
+    // Admin profile views are unlinked; ban / unban records stay with the GlobalBan.
+    await tx.adminAuditLog.updateMany({
+      where: { targetDiscordUserId: discordUserId, action: 'view_profile' },
+      data: { targetDiscordUserId: null },
+    });
     // Cascades: PiShockSession, shares, own bans / stars / limits, others' stars of them.
     await tx.discordUser.deleteMany({ where: { id: discordUserId } });
 

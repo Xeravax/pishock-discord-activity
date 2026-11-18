@@ -48,7 +48,8 @@ export default defineConfig(({ mode }) => {
     server: {
       port: 5173,
       proxy: {
-        '/api': 'http://localhost:3000',
+        // Trailing slash: a bare '/api' prefix also swallows the client module /api.ts
+        '/api/': 'http://localhost:3000',
         '/.proxy/api': {
           target: 'http://localhost:3000',
           rewrite: (p) => p.replace(/^\/\.proxy/, ''),

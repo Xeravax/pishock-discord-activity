@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useLayoutEffect, useState } from 'react';
 import { SafetyWarning } from './components/SafetyWarning';
 import { SafetyNotice } from './components/SafetyReminders';
 import { SafetyNoticeBar } from './components/SafetyNoticeBar';
@@ -12,6 +12,9 @@ import { FriendsParticipantList } from './components/FriendsParticipantList';
 import { PipIncomingShock, type PipControls } from './components/PipIncomingShock';
 import { PsDialog } from './components/PsDialog';
 import { ThemePreview } from './components/ThemePreview';
+import { GlobalBanScreen } from './components/GlobalBanScreen';
+import { AdminPanel } from './components/AdminPanel';
+import { RouletteStartDialog, RouletteSpinOverlay } from './components/Roulette';
 import type { ShockerView } from './components/ShockerCard';
 import { participantAvatarUrl, type DiscordParticipant, type ParticipantStatus } from './participants';
 
@@ -24,7 +27,10 @@ type Screen =
   | 'pip'
   | 'terms'
   | 'privacy'
-  | 'theme';
+  | 'theme'
+  | 'ban'
+  | 'admin'
+  | 'dialogs';
 type Overlay = null | 'shares' | 'logs' | 'availability' | 'menu' | 'settings';
 
 const DEMO_PARTICIPANTS: DiscordParticipant[] = [
@@ -41,6 +47,13 @@ const DEMO_PARTICIPANTS: DiscordParticipant[] = [
     global_name: 'RogerfireFox',
     displayName: 'RogerfireFox',
     avatarUrl: participantAvatarUrl('111'),
+  },
+  {
+    id: '333',
+    username: 'mira',
+    global_name: 'Mira',
+    displayName: 'Mira',
+    avatarUrl: participantAvatarUrl('333'),
   },
   {
     id: '222',
@@ -74,6 +87,71 @@ const DEMO_STATUS: Record<string, ParticipantStatus> = {
         maxIntensity: 80,
         minDurationMs: 16,
         maxDurationMs: 10000,
+        canShock: true,
+        canVibrate: true,
+        canBeep: true,
+        canHold: true,
+        paused: false,
+        emergencyStop: false,
+      },
+      {
+        shockerId: 11664,
+        shockerName: 'Collar',
+        hubClientId: '7343',
+        deviceMaxIntensity: 100,
+        deviceMaxDurationMs: 15000,
+        minIntensity: 1,
+        maxIntensity: 40,
+        minDurationMs: 16,
+        maxDurationMs: 5000,
+        canShock: true,
+        canVibrate: true,
+        canBeep: true,
+        canHold: false,
+        paused: false,
+        emergencyStop: false,
+      },
+    ],
+  },
+  '333': {
+    discordUserId: '333',
+    username: 'mira',
+    globalName: 'Mira',
+    avatar: null,
+    linked: true,
+    consent: true,
+    available: true,
+    paused: false,
+    emergencyStop: false,
+    bannedYou: false,
+    shockers: [
+      {
+        shockerId: 22001,
+        shockerName: 'Arm',
+        hubClientId: '9001',
+        deviceMaxIntensity: 100,
+        deviceMaxDurationMs: 15000,
+        minIntensity: 1,
+        maxIntensity: 60,
+        minDurationMs: 16,
+        maxDurationMs: 8000,
+        canShock: true,
+        canVibrate: true,
+        canBeep: false,
+        canHold: true,
+        paused: false,
+        emergencyStop: false,
+      },
+      {
+        shockerId: 22002,
+        shockerName: 'Chest',
+        hubClientId: '9002',
+        deviceMaxIntensity: 100,
+        deviceMaxDurationMs: 15000,
+        minIntensity: 1,
+        maxIntensity: 100,
+        minDurationMs: 16,
+        maxDurationMs: 15000,
         canShock: true,
         canVibrate: true,
         canBeep: true,
@@ -176,6 +254,216 @@ const DEMO_LOGS = [
   },
 ];
 
+const DEMO_BAN = {
+  id: 'ban_demo_abc123',
+  reason:
+    'Repeatedly ignored activity limits and continued after warnings from moderators. Contact the community if you believe this was a mistake.',
+  createdAt: new Date(Date.now() - 2 * 60 * 60_000).toISOString(),
+  expiresAt: new Date(Date.now() + 5 * 24 * 60 * 60_000).toISOString(),
+  appealUrl: 'https://discord.gg/example',
+};
+
+const DEMO_ADMIN_OVERVIEW = {
+  users: 128,
+  consented: 96,
+  pishockLinked: 74,
+  sharing: 31,
+  activeBans: 2,
+  commands24h: { shock: 412, vibrate: 880, beep: 210 },
+  adminBypasses7d: 3,
+  emergencyStopsEngaged: 1,
+  pendingDeletions: 0,
+  live: { sockets: 18, users: 12, instances: 4 },
+  version: 'demo',
+  uptimeMs: 3 * 60 * 60_000 + 12 * 60_000,
+  admins: [{ id: '999', name: 'Local Admin' }],
+  notice: {
+    text: 'Demo notice — maintenance tonight at 22:00 UTC.',
+    level: 'info' as const,
+    expiresAt: null,
+    updatedAt: new Date().toISOString(),
+  },
+};
+
+const DEMO_ADMIN_USERS = [
+  {
+    id: '111',
+    username: 'roger',
+    globalName: 'RogerfireFox',
+    avatar: null,
+    lastSeenAt: new Date().toISOString(),
+    banned: false,
+    online: true,
+    isAdmin: false,
+  },
+  {
+    id: '333',
+    username: 'mira',
+    globalName: 'Mira',
+    avatar: null,
+    lastSeenAt: new Date(Date.now() - 3600_000).toISOString(),
+    banned: true,
+    online: false,
+    isAdmin: false,
+  },
+  {
+    id: '999',
+    username: 'admin',
+    globalName: 'Local Admin',
+    avatar: null,
+    lastSeenAt: new Date().toISOString(),
+    banned: false,
+    online: true,
+    isAdmin: true,
+  },
+];
+
+function demoAdminJson(path: string): unknown {
+  if (path.includes('/admin/overview')) return DEMO_ADMIN_OVERVIEW;
+  if (path.includes('/admin/users?') || path.endsWith('/admin/users')) {
+    return { users: DEMO_ADMIN_USERS };
+  }
+  if (/\/admin\/users\/\d+$/.test(path)) {
+    const id = path.split('/').pop()!;
+    const row = DEMO_ADMIN_USERS.find((u) => u.id === id) ?? DEMO_ADMIN_USERS[0]!;
+    return {
+      profile: {
+        id: row.id,
+        username: row.username,
+        globalName: row.globalName,
+        avatar: row.avatar,
+        firstSeenAt: new Date(Date.now() - 30 * 86_400_000).toISOString(),
+        lastSeenAt: row.lastSeenAt,
+        online: row.online,
+        isAdmin: row.isAdmin,
+        consented: true,
+        pishockLinked: true,
+        shares: { total: 2, enabled: 1, paused: 1 },
+        features: {
+          commandQueue: true,
+          favoritesOnly: false,
+          approveEach: false,
+          budget: false,
+          checkIns: true,
+          perPersonLimits: true,
+          roulette: true,
+          recapDms: false,
+          adminLimitConsent: false,
+        },
+        emergencyStopEngaged: false,
+        stats: {
+          windowDays: 30,
+          sent: { shock: 12, vibrate: 40 },
+          received: { shock: 8, vibrate: 22, beep: 3 },
+          adminBypassesReceived: 0,
+        },
+        blockedByCount: 1,
+        blocksSetCount: 0,
+        deletionPending: false,
+        bans: row.banned
+          ? [
+              {
+                id: 'ban_demo_abc123',
+                reason: DEMO_BAN.reason,
+                createdAt: DEMO_BAN.createdAt,
+                expiresAt: DEMO_BAN.expiresAt,
+                active: true,
+                bannedBy: '999',
+                liftedAt: null,
+                liftedBy: null,
+                liftReason: null,
+              },
+            ]
+          : [],
+      },
+      names: { '999': 'Local Admin' },
+    };
+  }
+  if (path.includes('/admin/bans')) {
+    return {
+      bans: [
+        {
+          id: 'ban_demo_abc123',
+          discordUserId: '333',
+          reason: DEMO_BAN.reason,
+          createdAt: DEMO_BAN.createdAt,
+          expiresAt: DEMO_BAN.expiresAt,
+          active: true,
+          bannedBy: '999',
+          liftedAt: null,
+          liftedBy: null,
+          liftReason: null,
+        },
+      ],
+      names: { '333': 'Mira', '999': 'Local Admin' },
+    };
+  }
+  if (path.includes('/admin/audit')) {
+    return {
+      entries: [
+        {
+          id: 'a1',
+          adminDiscordUserId: '999',
+          action: 'ban',
+          targetDiscordUserId: '333',
+          detail: null,
+          createdAt: DEMO_BAN.createdAt,
+        },
+        {
+          id: 'a2',
+          adminDiscordUserId: '999',
+          action: 'view_profile',
+          targetDiscordUserId: '111',
+          detail: null,
+          createdAt: new Date(Date.now() - 60_000).toISOString(),
+        },
+        {
+          id: 'a3',
+          adminDiscordUserId: '999',
+          action: 'set_notice',
+          targetDiscordUserId: null,
+          detail: null,
+          createdAt: new Date(Date.now() - 120_000).toISOString(),
+        },
+      ],
+      names: { '999': 'Local Admin', '333': 'Mira', '111': 'RogerfireFox' },
+    };
+  }
+  if (path.includes('/admin/notice')) {
+    return { ok: true, notice: DEMO_ADMIN_OVERVIEW.notice };
+  }
+  return { ok: true };
+}
+
+/** Intercept /api/admin/* so the Admin panel works offline in ?demo. */
+function useDemoAdminFetch(enabled: boolean): boolean {
+  const [ready, setReady] = useState(false);
+  useLayoutEffect(() => {
+    if (!enabled) {
+      setReady(false);
+      return;
+    }
+    const original = window.fetch.bind(window);
+    window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+      if (url.includes('/api/admin') || url.includes('/admin/')) {
+        const body = JSON.stringify(demoAdminJson(url));
+        return new Response(body, {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      return original(input, init);
+    };
+    setReady(true);
+    return () => {
+      window.fetch = original;
+      setReady(false);
+    };
+  }, [enabled]);
+  return enabled && ready;
+}
+
 export function DemoApp() {
   const [screen, setScreen] = useState<Screen>(() => {
     const params = new URLSearchParams(window.location.search);
@@ -184,10 +472,14 @@ export function DemoApp() {
   });
   const [toast, setToast] = useState<string | null>(null);
   const [friendsOpen, setFriendsOpen] = useState(true);
-  const [selectedTargetIds, setSelectedTargetIds] = useState<string[]>(['111']);
+  const [selectedTargetIds, setSelectedTargetIds] = useState<string[]>(['111', '333']);
   const selectedTargetId = selectedTargetIds[0] ?? null;
   const [overlay, setOverlay] = useState<Overlay>(null);
+  const [dialogDemo, setDialogDemo] = useState<
+    null | 'roulette' | 'spin' | 'menu' | 'shares' | 'logs'
+  >('roulette');
   const demoLinked = true;
+  const adminFetchReady = useDemoAdminFetch(screen === 'admin');
 
   const flash = (msg: string) => {
     setToast(msg);
@@ -231,6 +523,22 @@ export function DemoApp() {
     return <PrivacyPolicy onBack={() => setScreen('consent')} />;
   }
 
+  if (screen === 'ban') {
+    return (
+      <div>
+        <div className="demo-chrome">
+          <h2>UI demo — global ban screen</h2>
+          <div className="btn-row">
+            <button type="button" className="btn" onClick={() => setScreen('control')}>
+              Back to control
+            </button>
+          </div>
+        </div>
+        <GlobalBanScreen ban={DEMO_BAN} token={null} displayName="Local Dev" />
+      </div>
+    );
+  }
+
   return (
     <div className={screen === 'theme' ? 'demo-root--scroll' : undefined}>
       <div className="demo-chrome">
@@ -245,6 +553,9 @@ export function DemoApp() {
               ['shares', 'Shares'],
               ['logs', 'Logs'],
               ['pip', 'PIP layout'],
+              ['ban', 'Banned'],
+              ['admin', 'Admin'],
+              ['dialogs', 'Dialogs'],
               ['terms', 'Terms'],
               ['privacy', 'Privacy'],
               ['theme', 'Theme'],
@@ -305,34 +616,126 @@ export function DemoApp() {
         </div>
       ) : null}
 
+      {screen === 'admin' ? (
+        <div className="official-activity-root" style={{ padding: 12 }}>
+          <PsDialog open title="Admin panel" onClose={() => setScreen('control')} fill>
+            {adminFetchReady ? <AdminPanel token="demo-token" /> : <div className="admin-muted">Loading…</div>}
+          </PsDialog>
+        </div>
+      ) : null}
+
+      {screen === 'dialogs' ? (
+        <div className="official-activity-root" style={{ minHeight: 600, position: 'relative' }}>
+          <div className="demo-chrome" style={{ marginBottom: 8 }}>
+            <div className="btn-row">
+              {(
+                [
+                  ['roulette', 'Roulette start'],
+                  ['spin', 'Roulette spin'],
+                  ['menu', 'Menu'],
+                  ['shares', 'Shares'],
+                  ['logs', 'Logs'],
+                ] as const
+              ).map(([id, label]) => (
+                <button
+                  key={id}
+                  type="button"
+                  className={`btn ${dialogDemo === id ? 'active' : ''}`}
+                  onClick={() => setDialogDemo(id)}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
+          <RouletteStartDialog
+            open={dialogDemo === 'roulette'}
+            targetName="RogerfireFox"
+            onClose={() => setDialogDemo(null)}
+            onStart={() => flash('Would spin')}
+          />
+          {dialogDemo === 'spin' ? (
+            <RouletteSpinOverlay
+              spin={{
+                spinId: 'spin1',
+                targetName: 'RogerfireFox',
+                segments: [
+                  { action: 'shock', intensity: 20, durationMs: 1000 },
+                  { action: 'vibrate', intensity: 40, durationMs: 2000 },
+                  { action: 'beep', intensity: 1, durationMs: 300 },
+                  { action: 'safe', intensity: 0, durationMs: 0 },
+                ],
+                resultIndex: 1,
+                startsAtLocal: Date.now() - 500,
+                spinMs: 2500,
+              }}
+              onClose={() => setDialogDemo(null)}
+            />
+          ) : null}
+          <PsDialog open={dialogDemo === 'menu'} title="Menu" onClose={() => setDialogDemo(null)}>
+            <div className="q-list q-list--dark menu-action-list">
+              <div className="q-pa-sm text-caption text-grey-5">Demo menu dialog</div>
+              <div className="q-item q-item-type row no-wrap">
+                <div className="q-item__label text-grey-3">Admin panel</div>
+              </div>
+              <div className="q-item q-item-type row no-wrap">
+                <div className="q-item__label text-grey-3">My data</div>
+              </div>
+            </div>
+          </PsDialog>
+          <PsDialog
+            open={dialogDemo === 'shares'}
+            title="Shares"
+            onClose={() => setDialogDemo(null)}
+            wide
+          >
+            <SharesPanel
+              shared={[]}
+              shockers={DEMO_SHOCKERS.filter((s) => s.owned).map((s) => ({ id: s.id, name: s.name }))}
+              busy={false}
+              onCreateShare={() => flash('Would create share code')}
+              onClaimShare={() => flash('Would redeem share code')}
+            />
+          </PsDialog>
+          <PsDialog
+            open={dialogDemo === 'logs'}
+            title="Command log"
+            onClose={() => setDialogDemo(null)}
+            wide
+          >
+            <CommandLog rows={DEMO_LOGS} />
+          </PsDialog>
+        </div>
+      ) : null}
+
       {screen === 'pip' ? (
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 16, margin: 16 }}>
-        <div style={{ height: 160, width: 280, border: '1px solid #333' }}>
-          <PipIncomingShock
-            hit={{
-              executorDiscordUserId: '111',
-              displayName: 'RogerfireFox',
-              avatarUrl: participantAvatarUrl('111'),
-              action: 'participant_shock',
-              intensity: 42,
-              durationMs: 1000,
-              at: Date.now() - 4000,
-              success: true,
-              kind: 'activity',
-              targetDiscordUserId: '222',
-              targetDisplayName: 'NotLinked',
-              targetAvatarUrl: participantAvatarUrl('222'),
-            }}
-          />
-        </div>
-        {[
-          { w: 330, h: 400 },
-          { w: 300, h: 180 },
-        ].map(({ w, h }) => (
-          <div key={`${w}x${h}`} style={{ height: h, width: w, border: '1px solid #333' }}>
-            <DemoPipInteractive />
+          <div style={{ height: 160, width: 280, border: '1px solid #333' }}>
+            <PipIncomingShock
+              hit={{
+                executorDiscordUserId: '111',
+                displayName: 'RogerfireFox',
+                avatarUrl: participantAvatarUrl('111'),
+                action: 'participant_shock',
+                intensity: 42,
+                durationMs: 1000,
+                at: Date.now() - 4000,
+                success: true,
+                kind: 'activity',
+                targetDiscordUserId: '222',
+                targetDisplayName: 'NotLinked',
+                targetAvatarUrl: participantAvatarUrl('222'),
+              }}
+            />
           </div>
-        ))}
+          {[
+            { w: 330, h: 400 },
+            { w: 300, h: 180 },
+          ].map(({ w, h }) => (
+            <div key={`${w}x${h}`} style={{ height: h, width: w, border: '1px solid #333' }}>
+              <DemoPipInteractive />
+            </div>
+          ))}
         </div>
       ) : null}
 
@@ -342,7 +745,8 @@ export function DemoApp() {
             hub={{
               id: friendsOpen ? selectedTargetId || 'friends' : '16583',
               name: friendsOpen
-                ? DEMO_PARTICIPANTS.find((p) => p.id === selectedTargetId)?.displayName || 'Discord Shockers'
+                ? DEMO_PARTICIPANTS.find((p) => p.id === selectedTargetId)?.displayName ||
+                  'Discord Shockers'
                 : 'DevShock',
               online: friendsOpen ? friendShockers.length > 0 : true,
               lastSeen: friendsOpen ? 'Activity share' : 'Seen a few seconds ago',
@@ -351,6 +755,9 @@ export function DemoApp() {
             friendsOpen={friendsOpen}
             showOwnMode={demoLinked}
             safetyBanner={<SafetyNoticeBar />}
+            personName={(id) =>
+              DEMO_PARTICIPANTS.find((p) => p.id === id)?.displayName ?? 'Someone'
+            }
             friendsPanel={({
               multiShock,
               onToggleMultiShock,
@@ -415,11 +822,7 @@ export function DemoApp() {
             onPair={(s) => flash(`Would pair ${s.name}`)}
           />
 
-          <PsDialog
-            open={overlay === 'menu'}
-            title="Menu"
-            onClose={() => setOverlay(null)}
-          >
+          <PsDialog open={overlay === 'menu'} title="Menu" onClose={() => setOverlay(null)}>
             <div className="q-list q-list--dark">
               <button
                 type="button"

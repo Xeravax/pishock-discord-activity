@@ -55,6 +55,7 @@ import {
   type ShareLimitRow,
 } from './components/ActivityLimitsSettings';
 import { FriendsParticipantList } from './components/FriendsParticipantList';
+import { activityMenuItems } from './app/menuItems';
 import {
   isPiShockRowExplicitlyUnpaused,
   isPiShockRowPaused,
@@ -79,6 +80,10 @@ import {
 import { PersonLimitsDialog } from './components/PersonLimitsDialog';
 import { MyDataPanel } from './components/MyDataPanel';
 import { MyHistoryPanel } from './components/MyHistoryPanel';
+import { AdminPanel } from './components/AdminPanel';
+import { GlobalBanScreen } from './components/GlobalBanScreen';
+import { AppNoticeBanner } from './components/AppNoticeBanner';
+import { markGloballyBanned, useGlobalBan } from './hooks/useGlobalBan';
 import {
   RouletteSpinOverlay,
   RouletteStartDialog,
@@ -166,6 +171,8 @@ let participantStatusCache: {
 export function App() {
   const [auth, setAuth] = useState<AuthState | null>(null);
   const [me, setMe] = useState<MeResponse | null>(null);
+  /** Banned from the app by an admin (from /api/me, any 403, or realtime). */
+  const globalBan = useGlobalBan();
   /** Server nick / guild avatar from CURRENT_GUILD_MEMBER_UPDATE (client-only). */
   const [guildNick, setGuildNick] = useState<string | null>(null);
   const [guildAvatarHash, setGuildAvatarHash] = useState<string | null>(null);
@@ -350,6 +357,7 @@ export function App() {
   const refreshMe = useCallback(
     async (accessToken: string) => {
       const data = await apiFetch<MeResponse>('/me', accessToken);
+      if (data.globalBan) markGloballyBanned(data.globalBan);
       const merged: MeResponse = {
         ...data,
         user: applySdkUserOverlay(data.user),
@@ -845,6 +853,14 @@ export function App() {
 
     const handleEvent = (event: RealtimeEvent) => {
       if (event.type === 'ping' || event.type === 'hello_ok') return;
+      if (event.type === 'global_ban') {
+        markGloballyBanned(event.ban);
+        return;
+      }
+      if (event.type === 'app_notice') {
+        setMe((prev) => (prev ? { ...prev, appNotice: event.notice } : prev));
+        return;
+      }
       if (event.type === 'server_shutting_down') {
         markServerShuttingDown();
         return;
@@ -2833,6 +2849,16 @@ export function App() {
     return <PrivacyPolicy onBack={() => setLegalView(null)} />;
   }
 
+  if (globalBan) {
+    return (
+      <GlobalBanScreen
+        ban={globalBan}
+        token={token}
+        displayName={me ? discordDisplayName(me.user, guildNick) : auth?.user.global_name || auth?.user.username || 'Hi'}
+      />
+    );
+  }
+
   if (!bootReady || !auth || !me) {
     return (
       <AuthLoadingScreen
@@ -3160,7 +3186,14 @@ export function App() {
             selectedTargetIds.every((id) => Boolean(participantStatus[id]?.queue?.starOnly))
           }
           forceControlsLocked={friendControlsLocked}
-          safetyBanner={!pip ? <SafetyNoticeBar /> : null}
+          safetyBanner={
+            !pip ? (
+              <>
+                {me.appNotice ? <AppNoticeBanner notice={me.appNotice} /> : null}
+                <SafetyNoticeBar />
+              </>
+            ) : null
+          }
           friendsPanel={({ multiShock, individualIntensity }) => (
             <FriendsParticipantList
               participants={participants}
@@ -3361,27 +3394,10 @@ export function App() {
                 ? 'PiShock linked — manage Discord availability, limits, and shares here. Mode switching is in the bottom-left dock.'
                 : 'No PiShock login needed to control Discord Shockers. Link only to share yourself or use your own devices.'}
             </div>
-            {(
-              [
-                ['availability', 'Available in Discord', 'mdi-account-check'],
-                ['settings', 'Activity Limits', 'mdi-tune'],
-                ['shares', 'Shares', 'mdi-share-variant'],
-                ['logs', 'Logs', 'mdi-message-text-clock'],
-                ['logPrivacy', 'Log sharing', 'mdi-eye-settings-outline'],
-                ['safety', 'Extra features', 'mdi-shield-account-outline'],
-                ['history', 'My history', 'mdi-history'],
-                ['myData', 'My data', 'mdi-database-lock-outline'],
-              ] as const
-            )
-              .filter(
-                ([id]) =>
-                  me.pishockLinked ||
-                  id === 'logs' ||
-                  id === 'logPrivacy' ||
-                  id === 'myData' ||
-                  id === 'history',
-              )
-              .map(([id, label, icon]) => (
+            {activityMenuItems({
+              isAdmin: Boolean(me.isAdmin),
+              pishockLinked: me.pishockLinked,
+            }).map(([id, label, icon]) => (
               <button
                 key={id}
                 type="button"
@@ -3399,7 +3415,7 @@ export function App() {
                     setOverlay('logPrivacy');
                     return;
                   }
-                  if (id === 'safety' || id === 'myData' || id === 'history') {
+                  if (id === 'safety' || id === 'myData' || id === 'history' || id === 'admin') {
                     setOverlay(id);
                     return;
                   }
@@ -3625,6 +3641,12 @@ export function App() {
             queueEnabled={queueState.enabled}
           />
         </PsDialog>
+
+        {me.isAdmin ? (
+          <PsDialog open={overlay === 'admin'} title="Admin panel" onClose={() => setOverlay(null)} fill>
+            {token && overlay === 'admin' ? <AdminPanel token={token} /> : null}
+          </PsDialog>
+        ) : null}
 
         <PsDialog open={overlay === 'history'} title="My history" onClose={() => setOverlay(null)} wide>
           {token && overlay === 'history' ? (

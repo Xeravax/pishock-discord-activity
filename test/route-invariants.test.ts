@@ -188,6 +188,37 @@ describe('device-firing code paths', () => {
     assert.ok(roulette.indexOf('admitWearerCommand(') < roulette.indexOf('submitServerCommand('));
   });
 
+  it('global bans are part of the per-wearer block check every firing path uses', () => {
+    const bans = files.get('services/bans.ts')!;
+    const start = bans.indexOf('export async function isExecutorBanned');
+    assert.ok(start >= 0, 'isExecutorBanned not found');
+    const body = bans.slice(start, bans.indexOf('\nexport ', start + 10));
+    // Both sides: a banned sender may not operate anyone, nobody may operate a banned wearer.
+    assert.match(body, /isGloballyBanned\(executorDiscordUserId\)/);
+    assert.match(body, /isGloballyBanned\(ownerDiscordUserId\)/);
+    assert.ok(body.indexOf('isGloballyBanned') < body.indexOf('activityBan.findUnique'));
+  });
+
+  it('the auth hook refuses globally banned users before any route runs', () => {
+    const auth = files.get('auth-plugin.ts')!;
+    const ban = auth.indexOf('getActiveGlobalBan(');
+    assert.ok(ban >= 0, 'auth hook does not check global bans');
+    assert.ok(auth.indexOf('isAllowedWhileBanned(', ban) > ban);
+    assert.match(auth.slice(ban), /code: 'GLOBALLY_BANNED'/);
+  });
+
+  it('every admin route is guarded by the server-side admin list', () => {
+    const chunks = routeChunks().filter((c) => c.url.startsWith('/api/admin'));
+    assert.ok(chunks.length >= 6, `expected admin routes, found ${chunks.length}`);
+    for (const c of chunks) {
+      assert.equal(c.file, 'routes/admin.ts', `${c.method} ${c.url} lives outside routes/admin.ts`);
+      assert.match(c.text, /if \(!guard\(req, reply\)\) return;/, `${c.method} ${c.url} is not admin-guarded`);
+    }
+    const admin = files.get('routes/admin.ts')!;
+    assert.match(admin, /isAdmin\(admins, req\.discordUser\.id\)/);
+    assert.equal(FIRING.test(admin), false, 'admin routes must not fire devices');
+  });
+
   it('operate-policy only ever publishes an *end* frame (hold auto-end / shutdown flush)', () => {
     const src = files.get('operate-policy.ts')!;
     const start = src.indexOf('const sendEnd');

@@ -2,7 +2,13 @@ import fp from 'fastify-plugin';
 import type { FastifyPluginAsync, FastifyRequest } from 'fastify';
 import { DiscordAuthError, resolveBearerUser, type DiscordUserInfo } from './discord.js';
 import type { AppEnv } from './env.js';
-import { getConsent, loadPiShockCreds } from './session.js';
+import {
+  getActiveGlobalBan,
+  getConsent,
+  isAllowedWhileBanned,
+  loadPiShockCreds,
+  type GlobalBanView,
+} from './session.js';
 import type { PiShockCreds } from './pishock/client.js';
 import { loadAppVersion } from './app-version.js';
 
@@ -11,6 +17,8 @@ declare module 'fastify' {
     discordUser: DiscordUserInfo;
     pishockCreds: PiShockCreds | null;
     hasConsent: boolean;
+    /** Active app-wide ban (admin panel), or null. */
+    globalBan: GlobalBanView | null;
   }
 }
 
@@ -36,6 +44,7 @@ const authPluginImpl: FastifyPluginAsync<{ env: AppEnv }> = async (app, opts) =>
   app.decorateRequest('discordUser', null as unknown as DiscordUserInfo);
   app.decorateRequest('pishockCreds', null);
   app.decorateRequest('hasConsent', false);
+  app.decorateRequest('globalBan', null);
 
   app.addHook('onSend', async (_req, reply, payload) => {
     reply.header('X-App-Version', appVersion.label);
@@ -80,6 +89,15 @@ const authPluginImpl: FastifyPluginAsync<{ env: AppEnv }> = async (app, opts) =>
     try {
       const user = await resolveBearerUser(token);
       req.discordUser = user;
+      req.globalBan = await getActiveGlobalBan(user.id);
+      if (req.globalBan && !isAllowedWhileBanned(req.method, path)) {
+        // Banned from the app: only the ban notice and their data rights stay reachable.
+        return reply.code(403).send({
+          error: 'You have been banned from this activity',
+          code: 'GLOBALLY_BANNED',
+          ban: req.globalBan,
+        });
+      }
       req.hasConsent = await getConsent(user.id);
       req.pishockCreds = await loadPiShockCreds(opts.env, user.id);
     } catch (err) {
