@@ -24,25 +24,7 @@ import {
   type LogPrivacy,
 } from './LogPrivacySettings';
 
-function logPrivacySummary(v: LogPrivacy): string {
-  const where =
-    v.visibility === 'everywhere'
-      ? 'Visible everywhere'
-      : v.visibility === 'server'
-        ? 'Same server only'
-        : v.visibility === 'channel'
-          ? 'Same channel only'
-          : 'Only you and the sender';
-  const hidden = [
-    !v.showSender ? 'sender' : null,
-    !v.showDevice ? 'device' : null,
-    !v.showIntensity ? 'intensity' : null,
-    !v.showLocation ? 'location' : null,
-  ].filter(Boolean);
-  return hidden.length ? `${where} · hides ${hidden.join(', ')}` : `${where} · full details`;
-}
-
-type SetupStep = 'loading' | 'devices' | 'limits' | 'features';
+type SetupStep = 'loading' | 'devices' | 'limits' | 'logs' | 'features';
 
 type Props = {
   shockers: ShockerView[];
@@ -59,7 +41,7 @@ type Props = {
   /** Current log sharing settings (defaults when unknown). */
   initialLogPrivacy?: LogPrivacy;
   /** Demo / review only: open directly on this step once devices are ready. */
-  startStep?: 'devices' | 'limits' | 'features';
+  startStep?: 'devices' | 'limits' | 'logs' | 'features';
   /** True after post-confirm device fetch finishes (even if the list is empty). */
   devicesReady?: boolean;
   busy?: boolean;
@@ -245,7 +227,10 @@ function toShare(
   };
 }
 
-/** Post-link setup: load devices → pick Discord shockers → set activity limits. */
+/**
+ * Post-link setup: load devices → pick Discord shockers → set activity limits →
+ * log sharing → extra features (command queue; only when something is shared).
+ */
 export function SetupDiscordShareScreen({
   shockers,
   initialPersonal,
@@ -275,7 +260,7 @@ export function SetupDiscordShareScreen({
     () => initialLogPrivacy ?? { ...DEFAULT_LOG_PRIVACY },
   );
   const [logTouched, setLogTouched] = useState(false);
-  const [openFeature, setOpenFeature] = useState<'queue' | 'logs' | null>(null);
+  const [openFeature, setOpenFeature] = useState<'queue' | null>(null);
 
   useEffect(() => {
     if (logTouched || !initialLogPrivacy) return;
@@ -360,17 +345,29 @@ export function SetupDiscordShareScreen({
       shares,
       personal,
       queue: includeQueue ? queue : undefined,
+      // Untouched = what's already saved (or the server default), so don't overwrite.
       logPrivacy: logTouched ? logPrivacy : undefined,
     });
   };
 
   const afterLimits = () => {
-    go('features', 'forward');
+    go('logs', 'forward');
   };
 
+  /** The extras step only holds the command queue, which needs a shared shocker. */
+  const hasExtras = selectedOwned.length > 0;
+
   const stepIndex =
-    step === 'features' ? 3 : step === 'limits' ? 2 : step === 'devices' ? 1 : 0;
-  const stepTotal = 3;
+    step === 'features'
+      ? 4
+      : step === 'logs'
+        ? 3
+        : step === 'limits'
+          ? 2
+          : step === 'devices'
+            ? 1
+            : 0;
+  const stepTotal = hasExtras ? 4 : 3;
 
   return (
     <div className="auth-boot" role="dialog" aria-modal="true" aria-labelledby="setup-share-title">
@@ -378,7 +375,7 @@ export function SetupDiscordShareScreen({
       <div
         className={`auth-boot__panel auth-boot__panel--wide auth-boot__panel--setup${
           step === 'limits' ? '' : ' is-compact'
-        }${step === 'features' ? ' is-features' : ''}`}
+        }${step === 'features' || step === 'logs' ? ' is-features' : ''}`}
       >
         <BrandHeader
           compact
@@ -387,7 +384,9 @@ export function SetupDiscordShareScreen({
               ? 'mdi-tune-vertical'
               : step === 'features'
                 ? 'mdi-puzzle-outline'
-                : 'mdi-account-group'
+                : step === 'logs'
+                  ? 'mdi-text-box-search-outline'
+                  : 'mdi-account-group'
           }
           sub={`Setup${step !== 'loading' ? ` · ${stepIndex}/${stepTotal}` : ''}`}
         />
@@ -644,7 +643,70 @@ export function SetupDiscordShareScreen({
                         <i className="q-icon on-left mdi mdi-loading mdi-spin" aria-hidden />
                       ) : null}
                       <span className="block">
-                        {busy ? 'Saving…' : 'Next: extras'}
+                        {busy ? 'Saving…' : 'Next: log sharing'}
+                      </span>
+                    </span>
+                  </span>
+                </button>
+              </div>
+            </>
+          ) : null}
+
+          {step === 'logs' ? (
+            <>
+              <h2 id="setup-share-title" className="auth-boot__heading">
+                Log sharing
+              </h2>
+              <p className="auth-boot__hint">
+                Choose who can see hits on you in the shared log, and how much they see. You can
+                change this later under Log sharing in the menu.
+              </p>
+
+              {error ? (
+                <div className="auth-boot__error">
+                  <div className="auth-boot__error-title">Couldn’t save</div>
+                  <p>{error}</p>
+                </div>
+              ) : null}
+
+              <div className="setup-logs">
+                <LogPrivacyForm
+                  compact
+                  value={logPrivacy}
+                  disabled={busy}
+                  onChange={(v) => {
+                    setLogTouched(true);
+                    setLogPrivacy(v);
+                  }}
+                />
+              </div>
+
+              <div className="auth-boot__actions">
+                <button
+                  type="button"
+                  className="q-btn q-btn-item non-selectable no-outline text-secondary bg-dark q-btn--outline q-btn--rectangle q-btn--actionable"
+                  disabled={busy}
+                  onClick={() => go('limits', 'back')}
+                >
+                  <span className="q-btn__wrapper col row q-anchor--skip">
+                    <span className="q-btn__content text-center col items-center q-anchor--skip justify-center row">
+                      <span className="block">Back</span>
+                    </span>
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  className="q-btn q-btn-item non-selectable no-outline bg-secondary text-dark q-btn--standard q-btn--rectangle q-btn--actionable"
+                  disabled={busy}
+                  onClick={() => (hasExtras ? go('features', 'forward') : submit(false))}
+                >
+                  <span className="q-btn__wrapper col row q-anchor--skip">
+                    <span className="q-btn__content text-center col items-center q-anchor--skip justify-center row no-wrap">
+                      {busy ? (
+                        <i className="q-icon on-left mdi mdi-loading mdi-spin" aria-hidden />
+                      ) : null}
+                      <span className="block">
+                        {busy ? 'Saving…' : hasExtras ? 'Next: extras' : 'Finish setup'}
                       </span>
                     </span>
                   </span>
@@ -670,7 +732,7 @@ export function SetupDiscordShareScreen({
               ) : null}
 
               <div className="setup-features">
-                {selectedOwned.length > 0 ? (
+                {hasExtras ? (
                   <section className={`setup-feature${openFeature === 'queue' ? ' is-open' : ''}`}>
                     <button
                       type="button"
@@ -774,41 +836,6 @@ export function SetupDiscordShareScreen({
                   </section>
                 ) : null}
 
-                <section className={`setup-feature${openFeature === 'logs' ? ' is-open' : ''}`}>
-                  <button
-                    type="button"
-                    className="setup-feature__head"
-                    aria-expanded={openFeature === 'logs'}
-                    onClick={() => setOpenFeature((f) => (f === 'logs' ? null : 'logs'))}
-                  >
-                    <span className="setup-feature__icon">
-                      <i className="q-icon mdi mdi-text-box-search-outline" aria-hidden />
-                    </span>
-                    <span>
-                      <span className="setup-feature__title">Log sharing</span>
-                      <span className="setup-feature__summary">{logPrivacySummary(logPrivacy)}</span>
-                    </span>
-                    <i
-                      className={`q-icon mdi setup-feature__chevron ${
-                        openFeature === 'logs' ? 'mdi-chevron-up' : 'mdi-chevron-down'
-                      }`}
-                      aria-hidden
-                    />
-                  </button>
-                  {openFeature === 'logs' ? (
-                    <div className="setup-feature__body">
-                      <LogPrivacyForm
-                        compact
-                        value={logPrivacy}
-                        disabled={busy}
-                        onChange={(v) => {
-                          setLogTouched(true);
-                          setLogPrivacy(v);
-                        }}
-                      />
-                    </div>
-                  ) : null}
-                </section>
               </div>
 
               <div className="auth-boot__actions">
@@ -816,7 +843,7 @@ export function SetupDiscordShareScreen({
                   type="button"
                   className="q-btn q-btn-item non-selectable no-outline text-secondary bg-dark q-btn--outline q-btn--rectangle q-btn--actionable"
                   disabled={busy}
-                  onClick={() => go('limits', 'back')}
+                  onClick={() => go('logs', 'back')}
                 >
                   <span className="q-btn__wrapper col row q-anchor--skip">
                     <span className="q-btn__content text-center col items-center q-anchor--skip justify-center row">
@@ -828,7 +855,7 @@ export function SetupDiscordShareScreen({
                   type="button"
                   className="q-btn q-btn-item non-selectable no-outline bg-secondary text-dark q-btn--standard q-btn--rectangle q-btn--actionable"
                   disabled={busy}
-                  onClick={() => submit(selectedOwned.length > 0)}
+                  onClick={() => submit(true)}
                 >
                   <span className="q-btn__wrapper col row q-anchor--skip">
                     <span className="q-btn__content text-center col items-center q-anchor--skip justify-center row no-wrap">

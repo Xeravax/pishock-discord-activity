@@ -10,6 +10,7 @@ import { LoginPanel } from './LoginPanel';
 import { OfficialLogsPanel, type OfficialLogEntry } from './OfficialLogsPanel';
 import { PiShockLinkingScreen } from './PiShockLinkingScreen';
 import { PsDialog } from './PsDialog';
+import { QueuePanel, type QueuePanelItem, type QueuePanelSettings } from './QueuePanel';
 import { SetupDiscordShareScreen } from './SetupDiscordShareScreen';
 import { SetupWizard } from './SetupWizard';
 import { SharesPanel } from './SharesPanel';
@@ -34,6 +35,7 @@ type Boot =
   | 'confirm'
   | 'setup'
   | 'setup-limits'
+  | 'setup-logs'
   | 'setup-features'
   | 'default-menu';
 
@@ -324,6 +326,9 @@ export function ThemePreview({
   const [dialog, setDialog] = useState<Dialog | null>(
     () => (new URLSearchParams(window.location.search).get('dialog') as Dialog | null) || null,
   );
+  const [queueOpen, setQueueOpen] = useState(
+    () => new URLSearchParams(window.location.search).has('queue'),
+  );
   const owned = shockers.filter((s) => s.owned);
 
   useEffect(() => {
@@ -345,6 +350,7 @@ export function ThemePreview({
     ['confirm', 'Confirm account'],
     ['setup', 'Discord share setup'],
     ['setup-limits', 'Setup: limits'],
+    ['setup-logs', 'Setup: log sharing'],
     ['setup-features', 'Setup: extra features'],
     ['default-menu', 'Default menu'],
   ];
@@ -417,13 +423,20 @@ export function ThemePreview({
       break;
     case 'setup':
     case 'setup-limits':
+    case 'setup-logs':
     case 'setup-features':
       bootEl = (
         <SetupDiscordShareScreen
           shockers={shockers}
           initialPersonal={PERSONAL}
           startStep={
-            boot === 'setup-limits' ? 'limits' : boot === 'setup-features' ? 'features' : undefined
+            boot === 'setup-limits'
+              ? 'limits'
+              : boot === 'setup-logs'
+                ? 'logs'
+                : boot === 'setup-features'
+                  ? 'features'
+                  : undefined
           }
           devicesReady
           onComplete={() => setBoot(null)}
@@ -468,6 +481,18 @@ export function ThemePreview({
                 {label}
               </button>
             ))}
+          </div>
+        </section>
+
+        <section className="panel">
+          <div className="ps-section-title">Command queue</div>
+          <p className="muted theme-preview__hint">
+            The wearer's queue panel from the bottom rail, with demo people waiting.
+          </p>
+          <div className="theme-preview__grid">
+            <button type="button" className="btn secondary" onClick={() => setQueueOpen((o) => !o)}>
+              {queueOpen ? 'Hide queue panel' : 'Show queue panel'}
+            </button>
           </div>
         </section>
 
@@ -567,6 +592,94 @@ export function ThemePreview({
       </PsDialog>
 
       <OfficialLogsPanel open={dialog === 'logs'} entries={LOGS} onClose={() => setDialog(null)} />
+
+      {queueOpen ? (
+        <div className="official-right-rail">
+          <QueuePreview participants={participants} onClose={() => setQueueOpen(false)} />
+        </div>
+      ) : null}
     </div>
+  );
+}
+
+function demoQueueItem(
+  id: string,
+  who: DiscordParticipant | undefined,
+  operation: string,
+  intensity: number,
+  durationMs: number,
+  priority = false,
+): QueuePanelItem {
+  return {
+    id,
+    executorDiscordUserId: who?.id ?? id,
+    executorUsername: who?.displayName ?? 'someone',
+    executorGlobalName: who?.displayName ?? null,
+    executorAvatar: null,
+    operation,
+    intensity,
+    durationMs,
+    hold: false,
+    warning: false,
+    shockerId: 1,
+    enqueuedAt: Date.now(),
+    priority,
+  };
+}
+
+/** Local-state queue so the panel can be clicked through without a server. */
+function QueuePreview({
+  participants,
+  onClose,
+}: {
+  participants: DiscordParticipant[];
+  onClose: () => void;
+}) {
+  const [settings, setSettings] = useState<QueuePanelSettings>({
+    enabled: true,
+    progressMs: 1500,
+    maxPerSender: 3,
+    starOnly: false,
+  });
+  const [paused, setPaused] = useState(false);
+  const [halted, setHalted] = useState(false);
+  const [active, setActive] = useState<QueuePanelItem | null>(() =>
+    demoQueueItem('q1', participants[0], 'shock', 35, 1000, true),
+  );
+  const [waiting, setWaiting] = useState<QueuePanelItem[]>(() => [
+    demoQueueItem('q2', participants[1], 'vibrate', 60, 2000),
+    demoQueueItem('q3', participants[2] ?? participants[0], 'shock', 20, 500),
+    demoQueueItem('q4', participants[3] ?? participants[1], 'beep', 0, 1000),
+  ]);
+  const byId = new Map(participants.map((p) => [p.id, p]));
+  return (
+    <QueuePanel
+      settings={settings}
+      paused={paused}
+      halted={halted}
+      active={active}
+      waiting={waiting}
+      nextStartsInMs={4000}
+      onClose={onClose}
+      onSettingsChange={(patch) => setSettings((s) => ({ ...s, ...patch }))}
+      onTogglePaused={setPaused}
+      onToggleHalted={setHalted}
+      onSkip={() => {
+        setActive(waiting[0] ?? null);
+        setWaiting((w) => w.slice(1));
+      }}
+      onClear={() => setWaiting([])}
+      onRemove={(id) => setWaiting((w) => w.filter((i) => i.id !== id))}
+      onToggleStar={(userId, starred) => {
+        const mark = (i: QueuePanelItem) =>
+          i.executorDiscordUserId === userId ? { ...i, priority: starred } : i;
+        setActive((a) => (a ? mark(a) : a));
+        setWaiting((w) => w.map(mark));
+      }}
+      displayNameFor={(item) => byId.get(item.executorDiscordUserId)?.displayName ?? 'Someone'}
+      avatarUrlFor={(item) =>
+        byId.get(item.executorDiscordUserId)?.avatarUrl ?? 'https://cdn.discordapp.com/embed/avatars/0.png'
+      }
+    />
   );
 }
