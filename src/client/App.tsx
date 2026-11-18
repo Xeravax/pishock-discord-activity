@@ -81,6 +81,7 @@ import { PersonLimitsDialog } from './components/PersonLimitsDialog';
 import { MyDataPanel } from './components/MyDataPanel';
 import { MyHistoryPanel } from './components/MyHistoryPanel';
 import { AdminPanel } from './components/AdminPanel';
+import { JoinDiscordPanel } from './components/JoinDiscordPanel';
 import { GlobalBanScreen } from './components/GlobalBanScreen';
 import { AppNoticeBanner } from './components/AppNoticeBanner';
 import { markGloballyBanned, useGlobalBan } from './hooks/useGlobalBan';
@@ -3415,7 +3416,7 @@ export function App() {
                     setOverlay('logPrivacy');
                     return;
                   }
-                  if (id === 'safety' || id === 'myData' || id === 'history' || id === 'admin') {
+                  if (id === 'safety' || id === 'myData' || id === 'history' || id === 'admin' || id === 'community') {
                     setOverlay(id);
                     return;
                   }
@@ -3640,6 +3641,10 @@ export function App() {
             }}
             queueEnabled={queueState.enabled}
           />
+        </PsDialog>
+
+        <PsDialog open={overlay === 'community'} title="Join our Discord" onClose={() => setOverlay(null)}>
+          {token && overlay === 'community' ? <JoinDiscordPanel token={token} /> : null}
         </PsDialog>
 
         {me.isAdmin ? (

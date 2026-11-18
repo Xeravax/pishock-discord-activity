@@ -17,6 +17,7 @@ import { AdminPanel } from './components/AdminPanel';
 import { RouletteStartDialog, RouletteSpinOverlay } from './components/Roulette';
 import { SafetyFeaturesSettings } from './components/SafetyFeaturesSettings';
 import { MyHistoryPanel } from './components/MyHistoryPanel';
+import { JoinDiscordPanel } from './components/JoinDiscordPanel';
 import { MyDataPanel } from './components/MyDataPanel';
 import { PersonLimitsDialog } from './components/PersonLimitsDialog';
 import { DEFAULT_WEARER_SAFETY, type SafetySnapshot } from './safety';
@@ -597,6 +598,7 @@ export function DemoApp() {
     | 'safety'
     | 'history'
     | 'myData'
+    | 'community'
     | 'personLimits'
   >(() => {
     const d = new URLSearchParams(window.location.search).get('dialog');
@@ -762,6 +764,7 @@ export function DemoApp() {
                   ['safety', 'Extra features'],
                   ['history', 'My history'],
                   ['myData', 'My data'],
+                  ['community', 'Join Discord'],
                   ['personLimits', 'Person limits'],
                 ] as const
               ).map(([id, label]) => (
@@ -859,6 +862,13 @@ export function DemoApp() {
             wide
           >
             {adminFetchReady ? <MyHistoryPanel token="demo-token" /> : null}
+          </PsDialog>
+          <PsDialog
+            open={dialogDemo === 'community'}
+            title="Join our Discord"
+            onClose={() => setDialogDemo(null)}
+          >
+            {adminFetchReady ? <JoinDiscordPanel token="demo-token" /> : null}
           </PsDialog>
           <PsDialog
             open={dialogDemo === 'myData'}

@@ -7,6 +7,7 @@ export type ActivityMenuItemId =
   | 'safety'
   | 'history'
   | 'myData'
+  | 'community'
   | 'admin';
 
 const ALL_MENU_ITEMS: ReadonlyArray<[ActivityMenuItemId, string, string]> = [
@@ -18,6 +19,7 @@ const ALL_MENU_ITEMS: ReadonlyArray<[ActivityMenuItemId, string, string]> = [
   ['safety', 'Extra features', 'mdi-shield-account-outline'],
   ['history', 'My history', 'mdi-history'],
   ['myData', 'My data', 'mdi-database-lock-outline'],
+  ['community', 'Join our Discord', 'mdi-forum-outline'],
   ['admin', 'Admin panel', 'mdi-shield-crown-outline'],
 ];
 
@@ -33,6 +35,7 @@ export function activityMenuItems(opts: {
       id === 'logs' ||
       id === 'logPrivacy' ||
       id === 'myData' ||
+      id === 'community' ||
       id === 'history',
   );
 }

@@ -63,6 +63,7 @@ export type Overlay =
   | 'safety'
   | 'myData'
   | 'history'
+  | 'community'
   | 'admin';
 
 export type LegalView = null | 'terms' | 'privacy';
