@@ -14,4 +14,11 @@ describe('activityMenuItems', () => {
     expect(ids).toContain('logs');
     expect(ids).not.toContain('shares');
   });
+
+  it('offers Join our Discord to everyone, linked or not', () => {
+    for (const pishockLinked of [true, false]) {
+      const ids = activityMenuItems({ isAdmin: false, pishockLinked }).map(([id]) => id);
+      expect(ids).toContain('community');
+    }
+  });
 });
