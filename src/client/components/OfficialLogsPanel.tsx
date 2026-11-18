@@ -1,4 +1,5 @@
-import { useMemo } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
+import { BrandGlyph } from './BrandHeader';
 
 export type OfficialLogPerson = {
   id: string;
@@ -179,6 +180,20 @@ export function OfficialLogsPanel({
   onShareEntry,
 }: Omit<Props, 'onOpen'>) {
   const now = useMemo(() => Date.now(), [open, entries.length]);
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+
+  useEffect(() => {
+    if (!open) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      event.preventDefault();
+      onCloseRef.current();
+    };
+    document.addEventListener('keydown', onKeyDown);
+    return () => document.removeEventListener('keydown', onKeyDown);
+  }, [open]);
+
   if (!open) return null;
 
   return (
@@ -190,12 +205,18 @@ export function OfficialLogsPanel({
         aria-modal="true"
         aria-label="Logs"
       >
-        <div className="official-logs-card q-card q-card--dark q-dark bg-dark">
-          <div className="official-logs-banner row items-center justify-between no-wrap">
-            <span>Recent activity across all sessions</span>
+        <div className="official-logs-card ps-dialog-card q-card q-card--dark q-dark bg-dark">
+          <div className="ps-dialog-header official-logs-header row items-center justify-between no-wrap">
+            <div className="ps-dialog-title">
+              <BrandGlyph size={22} />
+              <span className="column">
+                <span className="ps-dialog-title__text">Logs</span>
+                <span className="official-logs-header__sub">Recent activity across all sessions</span>
+              </span>
+            </div>
             <button
               type="button"
-              className="q-btn q-btn-item non-selectable no-outline q-btn--flat q-btn--round text-dark q-btn--dense"
+              className="ps-dialog-close q-btn q-btn-item non-selectable no-outline q-btn--flat q-btn--round text-grey-5 q-btn--actionable q-btn--dense"
               onClick={onClose}
               aria-label="Close"
             >

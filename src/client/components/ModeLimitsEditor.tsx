@@ -146,12 +146,11 @@ function ModeColumn({
         {showEnableToggle && onToggleEnabled ? (
           <input
             type="checkbox"
-            className="mode-limits-col__enable"
+            className="mode-limits-col__enable ps-check"
             checked={enabled}
             disabled={disabled}
             title={`Allow ${title.toLowerCase()}`}
             aria-label={`Allow ${title.toLowerCase()}`}
-            style={{ accentColor: '#79c6db' }}
             onChange={(e) => onToggleEnabled(e.target.checked)}
             onClick={(e) => e.stopPropagation()}
           />
@@ -296,7 +295,7 @@ export function ModeLimitsEditor({
                     type="checkbox"
                     checked={value.canBeep}
                     disabled={disabled}
-                    style={{ accentColor: '#79c6db' }}
+                    className="ps-check"
                     onChange={(e) => onChange({ ...value, canBeep: e.target.checked })}
                   />
                   <span>
@@ -310,7 +309,7 @@ export function ModeLimitsEditor({
                     type="checkbox"
                     checked={value.canHold}
                     disabled={disabled}
-                    style={{ accentColor: '#79c6db' }}
+                    className="ps-check"
                     onChange={(e) => onChange({ ...value, canHold: e.target.checked })}
                   />
                   <span>

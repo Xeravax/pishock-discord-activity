@@ -1,8 +1,8 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
-import { AppVersionBadge } from './AppVersionBadge';
+import { useEffect, useMemo, useState } from 'react';
+import { BrandHeader } from './BrandHeader';
 import type { ShockerView } from './ShockerCard';
 import type { ActivityShareConfig } from './AvailabilitySettings';
-import type { PersonalLimits, ShareLimitRow } from './ActivityLimitsSettings';
+import { LimitsPane, type PersonalLimits, type ShareLimitRow } from './ActivityLimitsSettings';
 import { ModeLimitsEditor, type ModeLimitsValue } from './ModeLimitsEditor';
 import {
   LimitSlider,
@@ -10,31 +10,6 @@ import {
 } from './LimitSlider';
 import { normalizeWarningLevel } from '../../shared/warning';
 import type { QueuePanelSettings } from './QueuePanel';
-
-function SetupLimitsPane({
-  title,
-  open,
-  onToggle,
-  children,
-}: {
-  title: string;
-  open: boolean;
-  onToggle: () => void;
-  children: ReactNode;
-}) {
-  return (
-    <section className={`setup-limits-pane${open ? ' is-open' : ' is-collapsed'}`}>
-      <button type="button" className="setup-limits-pane__toggle" onClick={onToggle}>
-        <span className="setup-limits-pane__title">{title}</span>
-        <i
-          className={`q-icon mdi ${open ? 'mdi-chevron-down' : 'mdi-chevron-right'}`}
-          aria-hidden
-        />
-      </button>
-      {open ? <div className="setup-limits-pane__body">{children}</div> : null}
-    </section>
-  );
-}
 
 type SetupStep = 'loading' | 'devices' | 'limits' | 'queue';
 
@@ -354,22 +329,11 @@ export function SetupDiscordShareScreen({
     <div className="auth-boot" role="dialog" aria-modal="true" aria-labelledby="setup-share-title">
       <div className="auth-boot__glow" aria-hidden />
       <div className="auth-boot__panel auth-boot__panel--wide auth-boot__panel--setup">
-        <div className="auth-boot__mark" aria-hidden>
-          <i
-            className={`q-icon mdi auth-boot__bolt ${
-              step === 'limits' ? 'mdi-tune-vertical' : 'mdi-account-group'
-            }`}
-          />
-        </div>
-        <h1 className="auth-boot__brand auth-boot__brand-row">
-          <span className="auth-boot__brand-name">
-            Pi<span>Shock</span>
-          </span>
-          <AppVersionBadge />
-        </h1>
-        <p className="auth-boot__sub">
-          Setup{step !== 'loading' ? ` · ${stepIndex}/${stepTotal}` : ''}
-        </p>
+        <BrandHeader
+          compact
+          badgeIcon={step === 'limits' ? 'mdi-tune-vertical' : 'mdi-account-group'}
+          sub={`Setup${step !== 'loading' ? ` · ${stepIndex}/${stepTotal}` : ''}`}
+        />
 
         <div
           key={step}
@@ -396,7 +360,7 @@ export function SetupDiscordShareScreen({
               <div className="auth-boot__actions">
                 <button
                   type="button"
-                  className="q-btn q-btn-item non-selectable no-outline text-grey-4 bg-dark q-btn--outline q-btn--rectangle q-btn--actionable"
+                  className="q-btn q-btn-item non-selectable no-outline text-secondary bg-dark q-btn--outline q-btn--rectangle q-btn--actionable"
                   disabled={busy}
                   onClick={onSkip}
                 >
@@ -479,7 +443,7 @@ export function SetupDiscordShareScreen({
               <div className="auth-boot__actions">
                 <button
                   type="button"
-                  className="q-btn q-btn-item non-selectable no-outline text-grey-4 bg-dark q-btn--outline q-btn--rectangle q-btn--actionable"
+                  className="q-btn q-btn-item non-selectable no-outline text-secondary bg-dark q-btn--outline q-btn--rectangle q-btn--actionable"
                   disabled={busy}
                   onClick={onSkip}
                 >
@@ -534,7 +498,7 @@ export function SetupDiscordShareScreen({
                   selectedOwned.length > 0 ? '' : ' setup-limits-split--single'
                 }`}
               >
-                <SetupLimitsPane
+                <LimitsPane
                   title="Your defaults"
                   open={defaultsOpen}
                   onToggle={() => setDefaultsOpen((open) => !open)}
@@ -551,10 +515,10 @@ export function SetupDiscordShareScreen({
                     hideActionToggles
                     onChange={(m) => updatePersonalDefaults(modeToPersonal(m, personal))}
                   />
-                </SetupLimitsPane>
+                </LimitsPane>
 
                 {selectedOwned.length > 0 ? (
-                  <SetupLimitsPane
+                  <LimitsPane
                     title="Shared Discord shockers"
                     open={sharesOpen}
                     onToggle={() => setSharesOpen((open) => !open)}
@@ -592,7 +556,7 @@ export function SetupDiscordShareScreen({
                         </div>
                       );
                     })}
-                  </SetupLimitsPane>
+                  </LimitsPane>
                 ) : (
                   <p className="auth-boot__hint setup-limits-split__empty">
                     No shockers selected to share — only your personal activity limits will be saved.
@@ -603,7 +567,7 @@ export function SetupDiscordShareScreen({
               <div className="auth-boot__actions">
                 <button
                   type="button"
-                  className="q-btn q-btn-item non-selectable no-outline text-grey-4 bg-dark q-btn--outline q-btn--rectangle q-btn--actionable"
+                  className="q-btn q-btn-item non-selectable no-outline text-secondary bg-dark q-btn--outline q-btn--rectangle q-btn--actionable"
                   disabled={busy}
                   onClick={() => go('devices', 'back')}
                 >
@@ -725,7 +689,7 @@ export function SetupDiscordShareScreen({
               <div className="auth-boot__actions">
                 <button
                   type="button"
-                  className="q-btn q-btn-item non-selectable no-outline text-grey-4 bg-dark q-btn--outline q-btn--rectangle q-btn--actionable"
+                  className="q-btn q-btn-item non-selectable no-outline text-secondary bg-dark q-btn--outline q-btn--rectangle q-btn--actionable"
                   disabled={busy}
                   onClick={() => go('limits', 'back')}
                 >

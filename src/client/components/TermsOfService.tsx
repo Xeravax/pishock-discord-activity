@@ -1,11 +1,16 @@
+import { BrandHeader } from './BrandHeader';
+
 type Props = { onBack: () => void };
 
 export function TermsOfService({ onBack }: Props) {
   return (
     <div className="legal-page">
-      <button type="button" className="btn secondary" onClick={onBack}>
-        ← Back to Application
+      <button type="button" className="btn secondary legal-page__back" onClick={onBack}>
+        <i className="q-icon mdi mdi-arrow-left" aria-hidden />
+        Back to Application
       </button>
+
+      <BrandHeader compact className="legal-page__brand" />
 
       <h1>Terms of Service</h1>
       <p className="muted">PiShock Discord Activity · Last updated {new Date().toLocaleDateString()}</p>

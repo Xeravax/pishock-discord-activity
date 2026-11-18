@@ -30,7 +30,7 @@ import { PrivacyPolicy } from './components/PrivacyPolicy';
 import { LoginPanel } from './components/LoginPanel';
 import { PiShockLinkingScreen } from './components/PiShockLinkingScreen';
 import { OfficialController } from './components/OfficialController';
-import { AppVersionBadge } from './components/AppVersionBadge';
+import { BrandHeader } from './components/BrandHeader';
 import { markServerShuttingDown } from './hooks/useAppHealth';
 import type { ShockerView } from './components/ShockerCard';
 import { SharesPanel } from './components/SharesPanel';
@@ -2784,7 +2784,7 @@ export function App() {
             </div>
             <button
               type="button"
-              className="q-btn q-btn--standard bg-secondary text-dark q-btn--rectangle"
+              className="q-btn q-btn-item non-selectable no-outline bg-secondary text-dark q-btn--standard q-btn--rectangle q-btn--actionable"
               disabled={busy || !pairDialog}
               onClick={() => {
                 if (!pairDialog) return;
@@ -2803,14 +2803,22 @@ export function App() {
                 });
               }}
             >
-              Send pair vibrate
+              <span className="q-btn__wrapper col row q-anchor--skip">
+                <span className="q-btn__content text-center col items-center q-anchor--skip justify-center row">
+                  <span className="block">Send pair vibrate</span>
+                </span>
+              </span>
             </button>
             <button
               type="button"
-              className="q-btn q-btn--outline text-secondary q-btn--rectangle"
+              className="q-btn q-btn-item non-selectable no-outline text-secondary bg-dark q-btn--outline q-btn--rectangle q-btn--actionable"
               onClick={() => setPairDialog(null)}
             >
-              Done
+              <span className="q-btn__wrapper col row q-anchor--skip">
+                <span className="q-btn__content text-center col items-center q-anchor--skip justify-center row">
+                  <span className="block">Done</span>
+                </span>
+              </span>
             </button>
           </div>
         </PsDialog>
@@ -3179,13 +3187,7 @@ export function App() {
   return (
     <div className={`app-shell official-preflight consent-shell ${pip ? 'pip' : ''}`}>
       <div className="consent-shell__brand">
-        <h1 className="auth-boot__brand auth-boot__brand-row">
-          <span className="auth-boot__brand-name">
-            Pi<span>Shock</span>
-          </span>
-          <AppVersionBadge />
-        </h1>
-        <p className="auth-boot__sub">Discord Activity</p>
+        <BrandHeader sub="Discord Activity" />
         <span className="status-pill consent-shell__user">
           <span className="dot on" />
           {myDiscordName}
@@ -3193,11 +3195,9 @@ export function App() {
       </div>
 
       {!isEmbedded ? (
-        <div className="q-card q-card--dark q-dark q-pa-md" style={{ border: '1px solid rgba(121,198,219,.35)', maxWidth: 480, width: '100%' }}>
-          <div className="text-secondary text-h6" style={{ fontFamily: 'geo, Oxanium, sans-serif' }}>
-            Local preview
-          </div>
-          <p className="text-grey-5 text-body2">
+        <div className="q-card q-card--dark q-dark consent-shell__preview">
+          <div className="consent-shell__preview-title">Local preview</div>
+          <p>
             Open this activity inside Discord for real auth. Use <code>/?demo=1</code> for the
             official UI clone.
           </p>

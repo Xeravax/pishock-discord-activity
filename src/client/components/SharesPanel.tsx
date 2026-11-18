@@ -39,25 +39,25 @@ export function SharesPanel({
   const [claimCode, setClaimCode] = useState('');
 
   return (
-    <div className="column q-gutter-md">
+    <div className="ps-stack ps-stack--lg">
       <div className="text-grey-5 text-body2">
         Redeem a share code from someone else, or create a code for one of your shockers.
       </div>
 
-      <div className="column q-gutter-sm">
-        <div className="text-secondary text-subtitle2">Redeem share code</div>
-        <div className="row q-gutter-sm items-center" style={{ flexWrap: 'wrap' }}>
+      <div className="ps-stack">
+        <div className="ps-section-title">Redeem share code</div>
+        <div className="ps-inline">
           <input
             value={claimCode}
             onChange={(e) => setClaimCode(e.target.value)}
             placeholder="Enter share code"
-            className="bg-dark text-grey-3"
-            style={{ ...fieldStyle, minWidth: 180, flex: 1 }}
+            className="ps-field"
+            style={{ minWidth: 180, flex: 1 }}
             disabled={busy}
           />
           <button
             type="button"
-            className="q-btn q-btn-item non-selectable no-outline bg-secondary text-dark q-btn--standard q-btn--rectangle q-btn--actionable q-btn--dense"
+            className="q-btn q-btn-item non-selectable no-outline bg-secondary text-dark q-btn--standard q-btn--rectangle q-btn--actionable"
             disabled={busy || !claimCode.trim()}
             onClick={() => {
               const code = claimCode.trim();
@@ -74,14 +74,14 @@ export function SharesPanel({
         </div>
       </div>
 
-      <div className="column q-gutter-sm">
-        <div className="text-secondary text-subtitle2">Create for your shocker</div>
-        <div className="row q-gutter-sm items-center" style={{ flexWrap: 'wrap' }}>
+      <div className="ps-stack">
+        <div className="ps-section-title">Create for your shocker</div>
+        <div className="ps-inline">
           <select
             value={shockerId}
             onChange={(e) => setShockerId(Number(e.target.value))}
-            className="bg-dark text-grey-3"
-            style={fieldStyle}
+            className="ps-field"
+            style={{ minWidth: 160, flex: 1 }}
           >
             {shockers.map((s) => (
               <option key={s.id} value={s.id}>
@@ -91,7 +91,7 @@ export function SharesPanel({
           </select>
           <button
             type="button"
-            className="q-btn q-btn-item non-selectable no-outline text-secondary bg-dark q-btn--outline q-btn--rectangle q-btn--actionable q-btn--dense"
+            className="q-btn q-btn-item non-selectable no-outline text-secondary bg-dark q-btn--outline q-btn--rectangle q-btn--actionable"
             disabled={busy || !shockerId}
             onClick={() => onCreateShare(shockerId)}
           >
@@ -104,11 +104,11 @@ export function SharesPanel({
         </div>
       </div>
 
-      <div className="column q-gutter-sm">
-        <div className="text-secondary text-subtitle2">Shared with you</div>
-        <div className="q-list q-list--dark q-list--separator">
+      <div className="ps-stack">
+        <div className="ps-section-title">Shared with you</div>
+        <div className="q-list q-list--dark ps-row-list">
           {shared.length === 0 ? (
-            <div className="text-grey-5 q-pa-sm">No redeemed share codes yet.</div>
+            <div className="ps-empty">No redeemed share codes yet.</div>
           ) : null}
           {shared.map((row, idx) => {
             const id = row.ShareId ?? row.shareId ?? idx;
@@ -125,7 +125,7 @@ export function SharesPanel({
               row.Paused ?? row.paused ?? row.SharePaused ?? row.sharePaused,
             );
             return (
-              <div key={String(id)} className="q-item q-item-type column q-pa-sm">
+              <div key={String(id)} className="q-item q-item-type column ps-row">
                 <div className="q-item__label text-secondary">{title}</div>
                 <div className="q-item__label q-item__label--caption text-grey-5">
                   {owner ? `${owner} · ` : ''}
@@ -145,10 +145,3 @@ export function SharesPanel({
     </div>
   );
 }
-
-const fieldStyle = {
-  background: '#121212',
-  color: '#e8e8e8',
-  border: '1px solid hsla(0,0%,100%,.28)',
-  padding: 8,
-} as const;

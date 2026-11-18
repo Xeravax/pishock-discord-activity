@@ -1,4 +1,4 @@
-import { AppVersionBadge } from './AppVersionBadge';
+import { BrandHeader } from './BrandHeader';
 
 type Props = {
   label?: string;
@@ -22,16 +22,7 @@ export function PiShockLinkingScreen({
     <div className="auth-boot" role="status" aria-live="polite" aria-busy={!error}>
       <div className="auth-boot__glow" aria-hidden />
       <div className="auth-boot__panel">
-        <div className={`auth-boot__mark${error ? '' : ' auth-boot__mark--pulse'}`} aria-hidden>
-          <i className="q-icon mdi mdi-flash auth-boot__bolt" />
-        </div>
-        <h1 className="auth-boot__brand auth-boot__brand-row">
-          <span className="auth-boot__brand-name">
-            Pi<span>Shock</span>
-          </span>
-          <AppVersionBadge />
-        </h1>
-        <p className="auth-boot__sub">Link account</p>
+        <BrandHeader pulse={!error} badgeIcon="mdi-link-variant" sub="Link account" />
 
         {error ? (
           <div className="auth-boot__error">

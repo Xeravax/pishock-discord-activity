@@ -34,7 +34,7 @@ export function SafetyWarning({ onAccept, busy, onOpenTerms, onOpenPrivacy }: Pr
       <div className="safety-gate-card">
         <div className="safety-gate-header">
           <div className="safety-gate-icon" aria-hidden>
-            ⚠
+            <i className="q-icon mdi mdi-alert-outline" />
           </div>
           <h1>Safety Warning</h1>
           <p>
@@ -77,7 +77,7 @@ export function SafetyWarning({ onAccept, busy, onOpenTerms, onOpenPrivacy }: Pr
 
         <button
           type="button"
-          className="btn accent safety-gate-accept"
+          className="btn safety-gate-accept"
           disabled={!allAcknowledged || busy}
           onClick={() =>
             onAccept({

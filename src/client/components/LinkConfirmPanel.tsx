@@ -1,4 +1,4 @@
-import { AppVersionBadge } from './AppVersionBadge';
+import { BrandHeader } from './BrandHeader';
 import { PiShockAuthDisclaimer } from './PiShockAuthDisclaimer';
 
 type Props = {
@@ -32,16 +32,7 @@ export function LinkConfirmPanel({
     <div className="auth-boot" role="dialog" aria-modal="true" aria-labelledby="link-confirm-title">
       <div className="auth-boot__glow" aria-hidden />
       <div className="auth-boot__panel auth-boot__panel--wide">
-        <div className="auth-boot__mark" aria-hidden>
-          <i className="q-icon mdi mdi-account-check auth-boot__bolt" />
-        </div>
-        <h1 className="auth-boot__brand auth-boot__brand-row">
-          <span className="auth-boot__brand-name">
-            Pi<span>Shock</span>
-          </span>
-          <AppVersionBadge />
-        </h1>
-        <p className="auth-boot__sub">Confirm account</p>
+        <BrandHeader badgeIcon="mdi-account-check" sub="Confirm account" />
 
         <h2 id="link-confirm-title" className="auth-boot__heading">
           Is this your PiShock account?
@@ -110,7 +101,7 @@ export function LinkConfirmPanel({
         <div className="auth-boot__actions">
           <button
             type="button"
-            className="q-btn q-btn-item non-selectable no-outline text-grey-4 bg-dark q-btn--outline q-btn--rectangle q-btn--actionable"
+            className="q-btn q-btn-item non-selectable no-outline text-secondary bg-dark q-btn--outline q-btn--rectangle q-btn--actionable"
             disabled={busy}
             onClick={onCancel}
           >

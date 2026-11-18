@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { AppVersionBadge } from './AppVersionBadge';
+import { BrandHeader } from './BrandHeader';
 import { PiShockAuthDisclaimer } from './PiShockAuthDisclaimer';
 
 export type SetupChoices = {
@@ -73,18 +73,7 @@ export function SetupWizard({ discordName, onComplete, onSkipToLogin }: Props) {
     <div className="auth-boot" role="dialog" aria-modal="true" aria-labelledby="setup-wizard-title">
       <div className="auth-boot__glow" aria-hidden />
       <div className="auth-boot__panel auth-boot__panel--wide">
-        <div className="auth-boot__mark" aria-hidden>
-          <i className="q-icon mdi mdi-flash auth-boot__bolt" />
-        </div>
-        <h1 className="auth-boot__brand auth-boot__brand-row">
-          <span className="auth-boot__brand-name">
-            Pi<span>Shock</span>
-          </span>
-          <AppVersionBadge />
-        </h1>
-        <p className="auth-boot__sub">
-          First-time setup · {discordName} · {step + 1}/{STEPS.length}
-        </p>
+        <BrandHeader sub={`First-time setup · ${discordName} · ${step + 1}/${STEPS.length}`} />
 
         <h2 id="setup-wizard-title" className="auth-boot__heading">
           {current.title}

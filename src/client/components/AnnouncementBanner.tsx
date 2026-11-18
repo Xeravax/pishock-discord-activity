@@ -70,8 +70,7 @@ export function AnnouncementBanner() {
           return (
             <div
               key={key}
-              className="q-card q-card--dark q-dark q-card--bordered border-color-secondary relative-position full-width"
-              style={{ background: '#1a1a1a', textAlign: 'center' }}
+              className="q-card q-card--dark q-dark relative-position full-width ps-announcement"
             >
               <button
                 type="button"

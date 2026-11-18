@@ -3,7 +3,7 @@ import type { ShockerView } from './ShockerCard';
 import { ModeLimitsEditor, type ModeLimitsValue } from './ModeLimitsEditor';
 import { normalizeWarningLevel, type WarningLevel } from '../../shared/warning';
 
-function LimitsPane({
+export function LimitsPane({
   title,
   open,
   onToggle,
@@ -348,12 +348,12 @@ export function ActivityLimitsSettings({
       </div>
 
       {error ? (
-        <div className="bg-negative text-white q-pa-sm" style={{ borderRadius: 4 }}>
+        <div className="ps-callout ps-callout--error" role="alert">
           {error}
         </div>
       ) : null}
       {saved && !error ? (
-        <div className="bg-secondary text-dark q-pa-sm" style={{ borderRadius: 4 }} role="status">
+        <div className="ps-callout ps-callout--success" role="status">
           Limits saved. Your control panel caps are updated.
         </div>
       ) : null}
@@ -391,7 +391,7 @@ export function ActivityLimitsSettings({
             open={sharesOpen}
             onToggle={() => setSharesOpen((open) => !open)}
           >
-            <div className="column q-gutter-sm">
+            <div className="ps-row-list">
               {ownedShockers.map((s) => {
                 const row = shares.find((x) => x.shockerId === s.id);
                 const deviceMaxI = Math.min(100, s.deviceMaxIntensity ?? s.maxIntensity ?? 100);
@@ -401,18 +401,15 @@ export function ActivityLimitsSettings({
                   <div
                     key={s.id}
                     id={`activity-limit-shocker-${s.id}`}
-                    className="q-item q-item-type column q-pa-sm"
-                    style={{
-                      border: focused ? '1px solid #79c6db' : '1px solid hsla(0,0%,100%,.12)',
-                      boxShadow: focused ? '0 0 0 1px rgba(121,198,219,.35)' : undefined,
-                    }}
+                    className={`q-item q-item-type column ps-row${row ? ' is-on' : ''}${
+                      focused ? ' is-focused' : ''
+                    }`}
                   >
                     <label className="row items-center no-wrap cursor-pointer">
                       <input
                         type="checkbox"
                         checked={Boolean(row)}
-                        className="q-mr-sm"
-                        style={{ accentColor: '#79c6db' }}
+                        className="q-mr-sm ps-check"
                         onChange={() => {
                           if (row) setShares((prev) => prev.filter((x) => x.shockerId !== s.id));
                           else upsertShareFromOwned(s);
@@ -443,8 +440,7 @@ export function ActivityLimitsSettings({
                           <input
                             type="checkbox"
                             checked={row.paused}
-                            className="q-mr-xs"
-                            style={{ accentColor: '#79c6db' }}
+                            className="q-mr-xs ps-check"
                             onChange={(e) =>
                               setShares((prev) =>
                                 prev.map((x) =>

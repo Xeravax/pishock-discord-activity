@@ -11,10 +11,20 @@ import { CommandLog } from './components/CommandLog';
 import { FriendsParticipantList } from './components/FriendsParticipantList';
 import { PipIncomingShock } from './components/PipIncomingShock';
 import { PsDialog } from './components/PsDialog';
+import { ThemePreview } from './components/ThemePreview';
 import type { ShockerView } from './components/ShockerCard';
 import { participantAvatarUrl, type DiscordParticipant, type ParticipantStatus } from './participants';
 
-type Screen = 'consent' | 'login' | 'control' | 'shares' | 'logs' | 'pip' | 'terms' | 'privacy';
+type Screen =
+  | 'consent'
+  | 'login'
+  | 'control'
+  | 'shares'
+  | 'logs'
+  | 'pip'
+  | 'terms'
+  | 'privacy'
+  | 'theme';
 type Overlay = null | 'shares' | 'logs' | 'availability' | 'menu' | 'settings';
 
 const DEMO_PARTICIPANTS: DiscordParticipant[] = [
@@ -167,7 +177,11 @@ const DEMO_LOGS = [
 ];
 
 export function DemoApp() {
-  const [screen, setScreen] = useState<Screen>('control');
+  const [screen, setScreen] = useState<Screen>(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.has('theme')) return 'theme';
+    return (params.get('screen') as Screen | null) || 'control';
+  });
   const [toast, setToast] = useState<string | null>(null);
   const [friendsOpen, setFriendsOpen] = useState(true);
   const [selectedTargetIds, setSelectedTargetIds] = useState<string[]>(['111']);
@@ -218,7 +232,7 @@ export function DemoApp() {
   }
 
   return (
-    <div>
+    <div className={screen === 'theme' ? 'demo-root--scroll' : undefined}>
       <div className="demo-chrome">
         <h2>UI demo — official controller clone</h2>
         <p>Mock data only. Switch screens; Control/PIP use the real PiShock layout.</p>
@@ -233,6 +247,7 @@ export function DemoApp() {
               ['pip', 'PIP layout'],
               ['terms', 'Terms'],
               ['privacy', 'Privacy'],
+              ['theme', 'Theme'],
             ] as const
           ).map(([id, label]) => (
             <button
@@ -248,13 +263,17 @@ export function DemoApp() {
       </div>
 
       {toast ? (
-        <div className="error-banner" style={{ borderColor: 'var(--ps-cyan)', color: 'var(--ps-cyan)' }}>
+        <div className="ps-callout demo-toast" role="status">
           {toast}
         </div>
       ) : null}
 
+      {screen === 'theme' ? (
+        <ThemePreview shockers={DEMO_SHOCKERS} participants={DEMO_PARTICIPANTS} onFlash={flash} />
+      ) : null}
+
       {screen === 'consent' ? (
-        <div className="app-shell">
+        <div className="app-shell consent-shell">
           <SafetyWarning
             onAccept={() => setScreen('login')}
             busy={false}

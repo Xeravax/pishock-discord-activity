@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { AppVersionBadge } from './AppVersionBadge';
+import { BrandHeader } from './BrandHeader';
 import { SecretValue } from './SecretValue';
 
 type Props = {
@@ -52,16 +52,7 @@ export function ApiKeyRevealPanel({
     <div className="auth-boot" role="dialog" aria-modal="true" aria-labelledby="api-key-reveal-title">
       <div className="auth-boot__glow" aria-hidden />
       <div className="auth-boot__panel auth-boot__panel--wide">
-        <div className="auth-boot__mark" aria-hidden>
-          <i className="q-icon mdi mdi-key-variant auth-boot__bolt" />
-        </div>
-        <h1 className="auth-boot__brand auth-boot__brand-row">
-          <span className="auth-boot__brand-name">
-            Pi<span>Shock</span>
-          </span>
-          <AppVersionBadge />
-        </h1>
-        <p className="auth-boot__sub">API key created</p>
+        <BrandHeader badgeIcon="mdi-key-variant" sub="API key created" />
 
         <h2 id="api-key-reveal-title" className="auth-boot__heading">
           Save this key — shown once

@@ -149,18 +149,26 @@ export function SafetyNoticeBar({ forceOpen = false, onConfirmed }: Props) {
               {!blocking ? (
                 <button
                   type="button"
-                  className="q-btn q-btn--outline text-secondary q-btn--rectangle"
+                  className="q-btn q-btn-item non-selectable no-outline text-secondary bg-dark q-btn--outline q-btn--rectangle q-btn--actionable"
                   onClick={() => setOpen(false)}
                 >
-                  Close
+                  <span className="q-btn__wrapper col row q-anchor--skip">
+                    <span className="q-btn__content text-center col items-center q-anchor--skip justify-center row">
+                      <span className="block">Close</span>
+                    </span>
+                  </span>
                 </button>
               ) : null}
               <button
                 type="button"
-                className="q-btn q-btn--standard bg-secondary text-dark q-btn--rectangle"
+                className="q-btn q-btn-item non-selectable no-outline bg-secondary text-dark q-btn--standard q-btn--rectangle q-btn--actionable"
                 onClick={confirm}
               >
-                {blocking ? 'I understand — continue' : 'Got it'}
+                <span className="q-btn__wrapper col row q-anchor--skip">
+                  <span className="q-btn__content text-center col items-center q-anchor--skip justify-center row">
+                    <span className="block">{blocking ? 'I understand — continue' : 'Got it'}</span>
+                  </span>
+                </span>
               </button>
             </div>
           </div>
