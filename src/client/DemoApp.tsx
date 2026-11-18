@@ -15,6 +15,11 @@ import { ThemePreview } from './components/ThemePreview';
 import { GlobalBanScreen } from './components/GlobalBanScreen';
 import { AdminPanel } from './components/AdminPanel';
 import { RouletteStartDialog, RouletteSpinOverlay } from './components/Roulette';
+import { SafetyFeaturesSettings } from './components/SafetyFeaturesSettings';
+import { MyHistoryPanel } from './components/MyHistoryPanel';
+import { MyDataPanel } from './components/MyDataPanel';
+import { PersonLimitsDialog } from './components/PersonLimitsDialog';
+import { DEFAULT_WEARER_SAFETY, type SafetySnapshot } from './safety';
 import type { ShockerView } from './components/ShockerCard';
 import { participantAvatarUrl, type DiscordParticipant, type ParticipantStatus } from './participants';
 
@@ -432,10 +437,111 @@ function demoAdminJson(path: string): unknown {
   if (path.includes('/admin/notice')) {
     return { ok: true, notice: DEMO_ADMIN_OVERVIEW.notice };
   }
+  if (path.includes('/me/sessions')) return DEMO_SESSIONS;
+  if (path.includes('/community')) return { enabled: true, inviteUrl: 'https://discord.gg/example' };
+  if (path.includes('/me/history')) return DEMO_HISTORY;
+  if (path.includes('/me/data')) return { data: DEMO_DATA };
   return { ok: true };
 }
 
-/** Intercept /api/admin/* so the Admin panel works offline in ?demo. */
+const DEMO_SESSIONS = {
+  dmFailed: false,
+  sessions: [
+    {
+      id: 'sess1',
+      startedAt: new Date(Date.now() - 2 * 60 * 60_000).toISOString(),
+      endedAt: new Date(Date.now() - 75 * 60_000).toISOString(),
+      dmStatus: 'sent' as const,
+      seenAt: null,
+      summary: {
+        durationMs: 45 * 60_000,
+        commands: 24,
+        shocks: 9,
+        vibrates: 12,
+        beeps: 3,
+        totalShockMs: 9_000,
+        maxShockIntensity: 40,
+        refused: 1,
+        adminBypasses: 0,
+        rouletteSafe: 1,
+        topSenders: [
+          { id: '111', count: 14 },
+          { id: '333', count: 10 },
+        ],
+      },
+    },
+  ],
+};
+
+const DEMO_HISTORY = {
+  nextCursor: null,
+  entries: (['participant_shock', 'participant_vibrate', 'participant_beep'] as const).map(
+    (action, i) => ({
+      id: `h${i}`,
+      action,
+      shockerName: 'Collar',
+      hubName: 'DevShock',
+      intensity: action === 'participant_beep' ? null : 20 + i * 10,
+      durationMs: 1_000,
+      warningLevel: i === 0 ? 'small' : null,
+      success: true,
+      source: 'activity',
+      locationName: 'Demo server · #general',
+      createdAt: new Date(Date.now() - (i + 1) * 5 * 60_000).toISOString(),
+      adminBypass: false,
+      bypassedGates: [],
+      refusedReason: null,
+      executor: { id: '111', username: 'roger', globalName: 'RogerfireFox', avatar: null },
+    }),
+  ),
+};
+
+const DEMO_DATA = {
+  profile: {
+    id: 'dev-user',
+    username: 'localdev',
+    globalName: 'Local Dev',
+    consentAt: new Date(Date.now() - 20 * 86_400_000).toISOString(),
+    createdAt: new Date(Date.now() - 30 * 86_400_000).toISOString(),
+    lastSeenAt: new Date().toISOString(),
+    logRetentionDays: 365,
+    adminLimitOverrideConsentAt: null,
+  },
+  pishock: {
+    pishockUsername: 'localdev',
+    pishockUserId: 12345,
+    createdAt: new Date(Date.now() - 20 * 86_400_000).toISOString(),
+    apiKey: 'stored encrypted',
+  },
+  counts: {
+    shares: 2,
+    blocks: 0,
+    favorites: 1,
+    personLimits: 1,
+    logsOwned: 140,
+    logsAboutYou: 96,
+    logsByYou: 51,
+  },
+  oldestLogAt: new Date(Date.now() - 19 * 86_400_000).toISOString(),
+  retentionDays: 365,
+  deletion: null,
+};
+
+const DEMO_SAFETY: SafetySnapshot = {
+  settings: {
+    ...DEFAULT_WEARER_SAFETY,
+    budgetEnabled: true,
+    budgetMaxShocks: 20,
+    checkInEnabled: true,
+    rouletteAllowed: true,
+  },
+  budget: { usedShocks: 6, usedShockMs: 6_000, periodStartedAt: new Date().toISOString() },
+  pendingApprovals: [],
+  checkInDeadline: null,
+  adminConsent: { granted: false, grantedAt: null, version: 1, phrase: 'I CONSENT' },
+};
+
+/** Intercept /api/admin/*, /api/me/* and /api/community so panels work offline in ?demo. */
 function useDemoAdminFetch(enabled: boolean): boolean {
   const [ready, setReady] = useState(false);
   useLayoutEffect(() => {
@@ -446,7 +552,12 @@ function useDemoAdminFetch(enabled: boolean): boolean {
     const original = window.fetch.bind(window);
     window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
-      if (url.includes('/api/admin') || url.includes('/admin/')) {
+      if (
+        url.includes('/api/admin') ||
+        url.includes('/admin/') ||
+        url.includes('/me/') ||
+        url.includes('/community')
+      ) {
         const body = JSON.stringify(demoAdminJson(url));
         return new Response(body, {
           status: 200,
@@ -476,10 +587,22 @@ export function DemoApp() {
   const selectedTargetId = selectedTargetIds[0] ?? null;
   const [overlay, setOverlay] = useState<Overlay>(null);
   const [dialogDemo, setDialogDemo] = useState<
-    null | 'roulette' | 'spin' | 'menu' | 'shares' | 'logs'
-  >('roulette');
+    | null
+    | 'roulette'
+    | 'spin'
+    | 'menu'
+    | 'shares'
+    | 'logs'
+    | 'safety'
+    | 'history'
+    | 'myData'
+    | 'personLimits'
+  >(() => {
+    const d = new URLSearchParams(window.location.search).get('dialog');
+    return (d as 'roulette' | null) ?? 'roulette';
+  });
   const demoLinked = true;
-  const adminFetchReady = useDemoAdminFetch(screen === 'admin');
+  const adminFetchReady = useDemoAdminFetch(screen === 'admin' || screen === 'dialogs');
 
   const flash = (msg: string) => {
     setToast(msg);
@@ -635,6 +758,10 @@ export function DemoApp() {
                   ['menu', 'Menu'],
                   ['shares', 'Shares'],
                   ['logs', 'Logs'],
+                  ['safety', 'Extra features'],
+                  ['history', 'My history'],
+                  ['myData', 'My data'],
+                  ['personLimits', 'Person limits'],
                 ] as const
               ).map(([id, label]) => (
                 <button
@@ -705,6 +832,49 @@ export function DemoApp() {
           >
             <CommandLog rows={DEMO_LOGS} />
           </PsDialog>
+          <PsDialog
+            open={dialogDemo === 'safety'}
+            title="Extra features"
+            onClose={() => setDialogDemo(null)}
+            wide
+          >
+            <SafetyFeaturesSettings
+              onLoad={async () => DEMO_SAFETY}
+              onSave={async (settings) => {
+                flash('Would save extra features');
+                return { ...DEMO_SAFETY, settings };
+              }}
+              onResetBudget={async () => DEMO_SAFETY}
+              onRaiseBudget={async () => DEMO_SAFETY}
+              onAdminConsentStep={() => Promise.reject(new Error('Demo only'))}
+              onRevokeAdminConsent={async () => DEMO_SAFETY.adminConsent}
+              queueEnabled
+            />
+          </PsDialog>
+          <PsDialog
+            open={dialogDemo === 'history'}
+            title="My history"
+            onClose={() => setDialogDemo(null)}
+            wide
+          >
+            {adminFetchReady ? <MyHistoryPanel token="demo-token" /> : null}
+          </PsDialog>
+          <PsDialog
+            open={dialogDemo === 'myData'}
+            title="My data"
+            onClose={() => setDialogDemo(null)}
+            wide
+          >
+            {adminFetchReady ? <MyDataPanel token="demo-token" /> : null}
+          </PsDialog>
+          <PersonLimitsDialog
+            open={dialogDemo === 'personLimits'}
+            personName="RogerfireFox"
+            initial={null}
+            onClose={() => setDialogDemo(null)}
+            onSave={async () => flash('Would save person limits')}
+            onClear={async () => flash('Would clear person limits')}
+          />
         </div>
       ) : null}
 

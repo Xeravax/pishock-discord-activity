@@ -2756,6 +2756,13 @@ html.pip-mode .app-restart-overlay:not(.app-restart-overlay--outdated) {
   }
 }
 
+/* Phone widths: the 1.25 zoom pushes the VIBRATE panel off-screen. */
+@media (max-width: 440px) {
+  .official-remote-card {
+    zoom: 1;
+  }
+}
+
 /* Width-based only: Discord desktop iframes are often <740px tall but still wide */
 @media (max-width: 720px) {
   .official-remote-cluster {
@@ -3228,7 +3235,7 @@ select.ps-field option {
 /* ---- Segmented tabs (activity limits: personal vs shared) ---- */
 .ps-tabs {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 4px;
   padding: 4px;
   border: 1px solid var(--ps-border);
@@ -3239,6 +3246,7 @@ select.ps-field option {
 
 .ps-tabs__tab {
   appearance: none;
+  min-width: 0;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -3286,6 +3294,7 @@ select.ps-field option {
 }
 
 .ps-tabs__count {
+  flex-shrink: 0;
   min-width: 20px;
   padding: 0 6px;
   border-radius: var(--ps-r-pill);
@@ -3293,6 +3302,17 @@ select.ps-field option {
   color: var(--ps-text);
   font-size: 0.72rem;
   line-height: 18px;
+}
+
+@media (max-width: 480px) {
+  .ps-tabs__tab {
+    gap: 6px;
+    padding: 6px 8px;
+  }
+  .ps-tabs__label {
+    white-space: normal;
+    line-height: 1.2;
+  }
 }
 
 .limits-tabpanel {
@@ -3406,6 +3426,8 @@ select.ps-field option {
   column-gap: 10px;
   row-gap: 2px;
   align-items: center;
+  /* keep title + hint together when a grid row stretches the card */
+  align-content: center;
   padding: 10px 12px;
   border: 1px solid var(--ps-border);
   border-radius: var(--ps-r-md);
@@ -3465,6 +3487,10 @@ select.ps-field option {
   grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
+.log-privacy__toggles.log-privacy__toggles--4 {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
 .log-privacy__toggle {
   display: flex;
   align-items: flex-start;
@@ -3519,6 +3545,12 @@ select.ps-field option {
   .log-privacy__toggles,
   .log-privacy__toggles--row {
     grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 480px) {
+  .log-privacy__toggles.log-privacy__toggles--4 {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 
@@ -5838,8 +5870,12 @@ button.auth-boot__api-key:not(.secret-value--shown) {
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 6px;
 }
+.safety-periods--2 {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
 @media (max-width: 480px) {
-  .safety-periods {
+  .safety-periods,
+  .safety-periods--2 {
     grid-template-columns: 1fr;
   }
 }
@@ -6167,7 +6203,7 @@ button.auth-boot__api-key:not(.secret-value--shown) {
 /* My history (session recaps + full history) */
 .my-history__tabs {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 6px;
 }
 .my-history__recap {
