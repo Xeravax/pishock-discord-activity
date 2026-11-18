@@ -56,11 +56,26 @@ export type ApprovalRequest = {
   at: number;
 };
 
+export type AdminConsentState = {
+  granted: boolean;
+  grantedAt: string | null;
+  version: number;
+  phrase: string;
+};
+
 export type SafetySnapshot = {
   settings: WearerSafety;
   budget: BudgetState;
   pendingApprovals: ApprovalRequest[];
   checkInDeadline: number | null;
+  adminConsent: AdminConsentState;
+};
+
+const NO_ADMIN_CONSENT: AdminConsentState = {
+  granted: false,
+  grantedAt: null,
+  version: 1,
+  phrase: 'I CONSENT',
 };
 
 export type PersonLimit = {
@@ -112,6 +127,7 @@ function snapshotFrom(res: Partial<SafetySnapshot>): SafetySnapshot {
     budget: res.budget ?? { usedShocks: 0, usedShockMs: 0, periodStartedAt: null },
     pendingApprovals: res.pendingApprovals ?? [],
     checkInDeadline: res.checkInDeadline ?? null,
+    adminConsent: res.adminConsent ?? NO_ADMIN_CONSENT,
   };
 }
 
@@ -224,4 +240,28 @@ export function formatBudgetUsage(settings: WearerSafety, budget: BudgetState): 
     );
   }
   return parts.length ? parts.join(' · ') : `${budget.usedShocks} shocks (no cap set)`;
+}
+
+export type AdminConsentStepResult =
+  | { complete: false; nonce: string; nextStep: 2 | 3 }
+  | { complete: true; adminConsent: AdminConsentState };
+
+/** One of the three server-enforced consent steps. */
+export async function adminConsentStep(
+  token: string,
+  step: 1 | 2 | 3,
+  nonce?: string,
+  phrase?: string,
+): Promise<AdminConsentStepResult> {
+  return apiFetch<AdminConsentStepResult>('/safety/admin-consent/step', token, {
+    method: 'POST',
+    body: JSON.stringify({ step, nonce, phrase }),
+  });
+}
+
+export async function revokeAdminConsent(token: string): Promise<AdminConsentState> {
+  const res = await apiFetch<{ adminConsent: AdminConsentState }>('/safety/admin-consent', token, {
+    method: 'DELETE',
+  });
+  return res.adminConsent;
 }

@@ -34,6 +34,7 @@ import { atLeastWarning, normalizeWarningLevel, warningRank } from '../../shared
 import type { WarningLevel } from '../../shared/warning.js';
 import { shockWarningBody, ShockWarningError, warnBeforeShock } from '../pishock/shock-warning.js';
 import {
+  getAdminLimitConsent,
   findActivityShareByShocker,
   getCommandQueueEnabled,
   getCommandQueueSettings,
@@ -81,6 +82,19 @@ import {
   recordWearerHit,
 } from '../wearer-safety-runtime.js';
 import type { PersonLimit } from '../wearer-safety-settings.js';
+import {
+  ADMIN_SOFT_GATES,
+  hasLimitConsent,
+  isAdmin,
+  type BypassGate,
+} from '../admin-bypass.js';
+import { deviceOnlyModes } from '../wearer-safety.js';
+
+type AdminAttempt = {
+  targetDiscordUserId: string;
+  operation: string;
+  shockerId: number | null;
+};
 
 type ShareForModes = Parameters<typeof shareBandsFromRow>[0] & {
   deviceMaxIntensity: number;
@@ -159,8 +173,11 @@ async function auditParticipantCommand(input: {
   success: boolean;
   detail: string;
   location?: ActivityLocationContext | null;
+  /** Gates an admin bypassed for this command (empty = normal command). */
+  bypassedGates?: BypassGate[];
 }) {
   const loc = input.location;
+  const bypassedGates = input.bypassedGates ?? [];
   const base = {
     executorDiscordUserId: input.executorDiscordUserId,
     targetDiscordUserId: input.targetDiscordUserId,
@@ -181,6 +198,8 @@ async function auditParticipantCommand(input: {
     locationKind: loc?.locationKind,
     locationName: loc?.locationName,
     locationIconUrl: loc?.locationIconUrl,
+    adminBypass: bypassedGates.length > 0,
+    bypassedGates,
   };
   // Executor log never receives the share code; owner/target row may store it server-side.
   await Promise.all([
@@ -216,6 +235,22 @@ async function auditParticipantCommand(input: {
       },
       { discordUserId: input.targetDiscordUserId },
     );
+    if (bypassedGates.length > 0) {
+      broadcastRealtime(
+        {
+          type: 'admin_bypass',
+          targetDiscordUserId: input.targetDiscordUserId,
+          adminDiscordUserId: input.executorDiscordUserId,
+          adminName: input.executorGlobalName ?? input.executorUsername ?? null,
+          action: input.action,
+          intensity: input.intensity,
+          durationMs: input.durationMs,
+          gates: bypassedGates,
+          at: Date.now(),
+        },
+        { discordUserId: input.targetDiscordUserId },
+      );
+    }
   }
 }
 
@@ -232,6 +267,23 @@ export const participantRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app
       }
       throw err;
     }
+  });
+
+  // Admin bypass attempts that were refused (E-STOP, block, pause…) are still logged.
+  app.addHook('onResponse', async (req, reply) => {
+    const attempt = (req as unknown as { adminBypassAttempt?: AdminAttempt }).adminBypassAttempt;
+    if (!attempt || reply.statusCode < 400) return;
+    await logCommand({
+      discordUserId: attempt.targetDiscordUserId,
+      executorDiscordUserId: req.discordUser.id,
+      targetDiscordUserId: attempt.targetDiscordUserId,
+      action: `participant_${attempt.operation}`,
+      shockerId: attempt.shockerId ?? undefined,
+      success: false,
+      adminBypass: true,
+      bypassedGates: [],
+      detail: JSON.stringify({ adminBypass: 'refused', status: reply.statusCode }),
+    }).catch(() => undefined);
   });
 
   app.post('/api/participants/status', async (req, reply) => {
@@ -431,8 +483,19 @@ export const participantRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app
       warningLevel?: WarningLevel | string;
       clientId?: string | number;
       batchId?: string;
+      /** Admin only: skip soft gates (and limits, if the wearer consented). */
+      adminBypass?: boolean;
     };
     const batchId = batchIdFrom(req, body);
+    // Non-admins sending the flag are simply treated as normal commands.
+    const asAdmin = body.adminBypass === true && isAdmin(opts.env.adminDiscordUserIds, req.discordUser.id);
+    if (asAdmin) {
+      (req as unknown as { adminBypassAttempt?: AdminAttempt }).adminBypassAttempt = {
+        targetDiscordUserId: String((req.params as { targetDiscordUserId: string }).targetDiscordUserId),
+        operation: String(body.operation ?? 'unknown'),
+        shockerId: Number.isFinite(Number(body.shockerId)) ? Number(body.shockerId) : null,
+      };
+    }
 
     const instanceId = body.instanceId ? String(body.instanceId) : '';
     let instanceInfo = null;
@@ -631,18 +694,28 @@ export const participantRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app
       throw err;
     }
 
-    const modes = effectiveModes(
+    const normalModes = effectiveModes(
       share,
       await getPersonalActivityLimits(targetDiscordUserId),
       await getEffectivePersonLimit(targetDiscordUserId, req.discordUser.id),
     );
+    // Admin + the wearer's 3-step consent: only the PiShock device max applies.
+    const limitOverride =
+      asAdmin && hasLimitConsent(await getAdminLimitConsent(targetDiscordUserId));
+    const modes = limitOverride
+      ? deviceOnlyModes(
+          { maxIntensity: share.deviceMaxIntensity, maxDurationMs: share.deviceMaxDurationMs },
+          normalModes.requiredWarningLevel,
+        )
+      : normalModes;
     try {
-      assertPersonAllows(modes, operation);
+      if (!limitOverride) assertPersonAllows(modes, operation);
     } catch (err) {
       if (err instanceof WearerGateError) return reply.code(err.status).send(err.toBody());
       throw err;
     }
     const band = bandForOperation(modes, operation);
+    const normalBand = bandForOperation(normalModes, operation);
     const intensityCheck = Number(body.intensity ?? band.minIntensity);
     const durationCheck = Number(body.durationMs ?? clampDurationMs(undefined, band.maxDurationMs, band.minDurationMs));
     if (Number.isFinite(intensityCheck) && intensityCheck < band.minIntensity) {
@@ -661,7 +734,16 @@ export const participantRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app
     let intensity = clampIntensity(body.intensity, band.maxIntensity, band.minIntensity);
     const durationMs = clampDurationMs(body.durationMs, band.maxDurationMs, band.minDurationMs);
     let clampedReason: 'escalation' | null = null;
-    if (operation === 'shock' || operation === 'hold') {
+    const exceedsNormalLimits =
+      limitOverride &&
+      (intensity > normalBand.maxIntensity ||
+        intensity < normalBand.minIntensity ||
+        durationMs > normalBand.maxDurationMs ||
+        durationMs < normalBand.minDurationMs ||
+        !normalModes.personAllows[
+          operation === 'vibrate' || operation === 'warning' ? 'vibrate' : operation === 'beep' ? 'beep' : 'shock'
+        ]);
+    if (!limitOverride && (operation === 'shock' || operation === 'hold')) {
       const capped = applyEscalationCap(
         intensity,
         escalation.cap(targetDiscordUserId, shockerId, share.maxIntensityStep, band.minIntensity),
@@ -698,8 +780,9 @@ export const participantRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app
     }
 
     const queueEnabled = await getCommandQueueEnabled(targetDiscordUserId);
+    let bypassedGates: BypassGate[] = [];
     try {
-      await admitWearerCommand({
+      const admission = await admitWearerCommand({
         ownerDiscordUserId: targetDiscordUserId,
         sender: {
           id: req.discordUser.id,
@@ -712,7 +795,10 @@ export const participantRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app
         batchId,
         queueEnabled,
         item: { shockerId, shockerName: share.shockerName ?? null, intensity, durationMs },
+        bypass: asAdmin ? ADMIN_SOFT_GATES : undefined,
       });
+      bypassedGates = [...admission.bypassed];
+      if (exceedsNormalLimits) bypassedGates.push('limits');
     } catch (err) {
       if (err instanceof WearerGateError) return reply.code(err.status).send(err.toBody());
       throw err;
@@ -736,6 +822,8 @@ export const participantRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app
               ? 'warning'
               : 'vibrate'
             : 'beep';
+      const jumpsLine = asAdmin && (await commandQueue.snapshot(targetDiscordUserId)).waiting.length > 0;
+      if (jumpsLine) bypassedGates.push('queue');
       try {
         const queued = await commandQueue.enqueue({
           ownerDiscordUserId: targetDiscordUserId,
@@ -757,7 +845,10 @@ export const participantRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app
             env: opts.env,
             location,
             executorHadSession: Boolean(executorCreds),
+            adminBypass: asAdmin,
+            bypassedGates,
           },
+          front: jumpsLine,
         });
         return {
           ok: true,
@@ -828,12 +919,21 @@ export const participantRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app
         }
         throw err;
       }
-      const modesNow = effectiveModes(
+      const normalModesNow = effectiveModes(
         shareNow,
         await getPersonalActivityLimits(targetDiscordUserId),
         await getEffectivePersonLimit(targetDiscordUserId, req.discordUser.id),
       );
-      assertPersonAllows(modesNow, operation);
+      // Consent can be revoked at any moment — re-check right before sending.
+      const overrideNow =
+        limitOverride && hasLimitConsent(await getAdminLimitConsent(targetDiscordUserId));
+      const modesNow = overrideNow
+        ? deviceOnlyModes(
+            { maxIntensity: shareNow.deviceMaxIntensity, maxDurationMs: shareNow.deviceMaxDurationMs },
+            normalModesNow.requiredWarningLevel,
+          )
+        : normalModesNow;
+      if (!overrideNow) assertPersonAllows(modesNow, operation);
       if (operation === 'shock' || operation === 'hold') {
         const sentWarning = atLeastWarning(
           normalizeWarningLevel(body.warningLevel),
@@ -910,6 +1010,7 @@ export const participantRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app
             hubClientId: share.hubClientId ?? clientId ?? null,
             hubName: share.hubName ?? null,
             warningLevel: sentWarning,
+            bypassedGates,
             shareCode: null,
             intensity,
             durationMs,
@@ -969,6 +1070,7 @@ export const participantRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app
         hubClientId: share.hubClientId ?? clientId ?? null,
         hubName: share.hubName ?? null,
         warningLevel: sentWarning,
+        bypassedGates,
         shareCode: null,
         intensity,
         durationMs,
@@ -1004,6 +1106,7 @@ export const participantRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app
         hubClientId: share.hubClientId ?? clientId ?? null,
         hubName: share.hubName ?? null,
         warningLevel: sentWarning,
+        bypassedGates,
         shareCode: null,
         intensity,
         durationMs,

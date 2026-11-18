@@ -38,7 +38,24 @@ export type OfficialLogEntry = {
   at: number;
   /** False when the wearer doesn't allow share images of this hit (server-decided). */
   shareable?: boolean;
+  /** An admin bypassed the wearer's gates / limits — shown red. */
+  adminBypass?: boolean;
+  bypassedGates?: string[];
 };
+
+const GATE_LABELS: Record<string, string> = {
+  favorites: 'favorites only',
+  cooldown: 'cooldown',
+  budget: 'shock budget',
+  approval: 'approval',
+  queue: 'queue line',
+  limits: 'limits',
+};
+
+export function describeBypassedGates(gates: string[] | undefined): string {
+  const names = (gates ?? []).map((g) => GATE_LABELS[g] ?? g);
+  return names.length ? names.join(', ') : 'restrictions';
+}
 
 type Props = {
   open: boolean;
@@ -243,7 +260,16 @@ export function OfficialLogsPanel({
                   canShareLogAction(row.action);
                 const sharing = sharingEntryId === row.id;
                 return (
-                <div key={row.id} className="official-log-row">
+                <div
+                  key={row.id}
+                  className={`official-log-row${row.adminBypass ? ' official-log-row--admin' : ''}`}
+                >
+                  {row.adminBypass ? (
+                    <div className="official-log-admin" role="note">
+                      <i className="q-icon mdi mdi-shield-alert" aria-hidden />
+                      An admin bypassed this · {describeBypassedGates(row.bypassedGates)}
+                    </div>
+                  ) : null}
                   <div className="official-log-row__top">
                     <PersonChip person={row.from} tone="from" />
                     <i className="q-icon mdi mdi-arrow-right official-log-arrow" aria-hidden />
@@ -342,6 +368,8 @@ type PublicLogApiRow = {
   location?: OfficialLogLocation | null;
   executor?: PublicLogPersonApi;
   target?: PublicLogPersonApi;
+  adminBypass?: boolean;
+  bypassedGates?: string[];
 };
 
 function personFromApi(
@@ -419,6 +447,8 @@ export function normalizePublicLogs(
       durationSec: durationMs != null ? Math.round((durationMs / 1000) * 10) / 10 : null,
       at,
       shareable: row.shareable !== false,
+      adminBypass: row.adminBypass === true,
+      bypassedGates: Array.isArray(row.bypassedGates) ? row.bypassedGates.map(String) : [],
     });
   });
   return out.sort((a, b) => b.at - a.at);

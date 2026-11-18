@@ -1,6 +1,9 @@
 import { useEffect, useState } from 'react';
 import { SafetyFeaturesForm } from './SafetyFeaturesForm';
+import { AdminConsentSection } from './AdminConsentSection';
 import {
+  type AdminConsentState,
+  type AdminConsentStepResult,
   formatBudgetUsage,
   normalizeWearerSafety,
   type SafetySnapshot,
@@ -12,6 +15,12 @@ type Props = {
   onSave: (next: WearerSafety) => Promise<SafetySnapshot>;
   onResetBudget: () => Promise<SafetySnapshot>;
   onRaiseBudget: (add: { shocks?: number; shockMs?: number }) => Promise<SafetySnapshot>;
+  onAdminConsentStep: (
+    step: 1 | 2 | 3,
+    nonce?: string,
+    phrase?: string,
+  ) => Promise<AdminConsentStepResult>;
+  onRevokeAdminConsent: () => Promise<AdminConsentState>;
   queueEnabled?: boolean;
 };
 
@@ -21,6 +30,8 @@ export function SafetyFeaturesSettings({
   onSave,
   onResetBudget,
   onRaiseBudget,
+  onAdminConsentStep,
+  onRevokeAdminConsent,
   queueEnabled,
 }: Props) {
   const [snap, setSnap] = useState<SafetySnapshot | null>(null);
@@ -119,6 +130,19 @@ export function SafetyFeaturesSettings({
         onChange={(next) => {
           setSaved(false);
           setValue(next);
+        }}
+      />
+
+      <AdminConsentSection
+        consent={snap.adminConsent}
+        onStep={async (step, nonce, phrase) => {
+          const res = await onAdminConsentStep(step, nonce, phrase);
+          if (res.complete) setSnap((prev) => (prev ? { ...prev, adminConsent: res.adminConsent } : prev));
+          return res;
+        }}
+        onRevoke={async () => {
+          const adminConsent = await onRevokeAdminConsent();
+          setSnap((prev) => (prev ? { ...prev, adminConsent } : prev));
         }}
       />
 

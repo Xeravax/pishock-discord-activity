@@ -16,6 +16,16 @@ import {
   BUDGET_MAX_SHOCKS,
 } from '../wearer-safety-settings.js';
 import { approvals, checkIns, takeCheckInPausedIds } from '../wearer-safety-runtime.js';
+import {
+  ADMIN_CONSENT_PHRASE,
+  ADMIN_CONSENT_VERSION,
+  AdminConsentError,
+  createAdminConsentFlow,
+  hasLimitConsent,
+} from '../admin-bypass.js';
+import { getAdminLimitConsent, setAdminLimitConsent } from '../session.js';
+
+const adminConsentFlow = createAdminConsentFlow();
 
 const SNOWFLAKE = /^\d{1,25}$/;
 
@@ -41,8 +51,51 @@ export const safetyRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app) => 
       budget: await getBudgetState(ownerId, settings),
       pendingApprovals: approvals.listFor(ownerId),
       checkInDeadline: checkIns.pendingDeadline(ownerId),
+      adminConsent: await adminConsentSnapshot(ownerId),
     };
   }
+
+  async function adminConsentSnapshot(ownerId: string) {
+    const row = await getAdminLimitConsent(ownerId);
+    return {
+      granted: hasLimitConsent(row),
+      grantedAt: hasLimitConsent(row) ? (row?.adminLimitOverrideConsentAt ?? null) : null,
+      version: ADMIN_CONSENT_VERSION,
+      phrase: ADMIN_CONSENT_PHRASE,
+    };
+  }
+
+  /**
+   * Admin limit override consent: three separate confirmations, in order, server-enforced.
+   * Body: { step: 1 } → { nonce }, { step: 2, nonce } → { nonce }, { step: 3, nonce, phrase }.
+   */
+  app.post('/api/safety/admin-consent/step', async (req, reply) => {
+    if (!requireConsent(req, reply)) return;
+    const body = (req.body ?? {}) as { step?: unknown; nonce?: unknown; phrase?: unknown };
+    try {
+      const result = adminConsentFlow.step(req.discordUser.id, body);
+      if ('complete' in result) {
+        await setAdminLimitConsent(req.discordUser.id, ADMIN_CONSENT_VERSION);
+        invalidateParticipants('admin_consent');
+        return { ok: true, complete: true, adminConsent: await adminConsentSnapshot(req.discordUser.id) };
+      }
+      return { ok: true, complete: false, nonce: result.nonce, nextStep: result.nextStep };
+    } catch (err) {
+      if (err instanceof AdminConsentError) {
+        return reply.code(err.status).send({ error: err.message, code: err.code });
+      }
+      throw err;
+    }
+  });
+
+  /** Revoking is one tap and takes effect immediately (queued admin commands get clamped). */
+  app.delete('/api/safety/admin-consent', async (req, reply) => {
+    if (!requireConsent(req, reply)) return;
+    adminConsentFlow.cancel(req.discordUser.id);
+    await setAdminLimitConsent(req.discordUser.id, null);
+    invalidateParticipants('admin_consent');
+    return { ok: true, adminConsent: await adminConsentSnapshot(req.discordUser.id) };
+  });
 
   app.get('/api/safety/settings', async (req, reply) => {
     if (!requireConsent(req, reply)) return;

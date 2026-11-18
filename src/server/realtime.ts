@@ -159,6 +159,18 @@ export type RealtimeEvent =
       at: number;
     }
   | {
+      /** Wearer: an admin bypassed your gates / limits for this command (always shown, red). */
+      type: 'admin_bypass';
+      targetDiscordUserId: string;
+      adminDiscordUserId: string;
+      adminName: string | null;
+      action: string;
+      intensity: number;
+      durationMs: number;
+      gates: string[];
+      at: number;
+    }
+  | {
       type: 'hello_ok';
       discordUserId: string;
       at: number;

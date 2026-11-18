@@ -37,6 +37,7 @@ import { SharesPanel } from './components/SharesPanel';
 import {
   OfficialLogsFab,
   OfficialLogsPanel,
+  describeBypassedGates,
   normalizePublicLogs,
   type OfficialLogEntry,
 } from './components/OfficialLogsPanel';
@@ -78,7 +79,9 @@ import {
 import { PersonLimitsDialog } from './components/PersonLimitsDialog';
 import {
   ackCheckIn,
+  adminConsentStep,
   answerApproval,
+  revokeAdminConsent,
   clearPersonLimit,
   loadPersonLimits,
   loadSafety,
@@ -126,6 +129,8 @@ type MeResponse = {
   personal?: PersonalLimits;
   emergencyStopShockerIds?: number[];
   commandQueueEnabled?: boolean;
+  /** Shows the admin bypass toggle; the server re-checks on every command. */
+  isAdmin?: boolean;
 };
 
 type QueueState = QueuePanelSettings & {
@@ -276,6 +281,8 @@ export function App() {
   const [personLimitTarget, setPersonLimitTarget] = useState<{ id: string; name: string } | null>(
     null,
   );
+  /** Admin only: next fire skips soft gates (and limits where the wearer consented). */
+  const [adminBypassArmed, setAdminBypassArmed] = useState(false);
   /** Groups one multishock fire (several shockers, same tick) into one cooldown / approval. */
   const operateBatchRef = useRef<{ id: string; at: number } | null>(null);
   /** Per-shocker Discord share caps (what guests are limited to) */
@@ -956,6 +963,19 @@ export function App() {
       }
       if (event.type === 'approval_resolved') {
         setApprovalQueue((prev) => prev.filter((r) => r.approvalId !== event.approvalId));
+        return;
+      }
+      if (event.type === 'admin_bypass') {
+        if (selfIdRef.current && event.targetDiscordUserId === selfIdRef.current) {
+          const gates = describeBypassedGates(event.gates);
+          setActionNotice(null);
+          setActionError(
+            `An admin (${event.adminName ?? 'admin'}) bypassed your ${gates} — ${event.intensity}% for ${(
+              event.durationMs / 1000
+            ).toFixed(1)}s. This is in your log.`,
+          );
+          void refreshLogs(token).catch(() => undefined);
+        }
         return;
       }
       if (event.type === 'checkin_due') {
@@ -1909,6 +1929,8 @@ export function App() {
       };
     }
     const batchId = operateBatchRef.current.id;
+    // Admin bypass is one fire at a time: disarm right after this (multishock) batch.
+    if (adminBypassArmed) window.setTimeout(() => setAdminBypassArmed(false), 300);
     // Approve-each wearers hold the request until they answer — don't lock the controls meanwhile.
     const awaitsApproval = Boolean(targetId && participantStatus[targetId]?.safety?.approveEachCommand);
     if (!awaitsApproval) {
@@ -1935,7 +1957,13 @@ export function App() {
           clampedReason?: string | null;
         }>(`/participants/${targetId}/operate`, token, {
           method: 'POST',
-          body: JSON.stringify({ ...input, instanceId, locationHint, batchId }),
+          body: JSON.stringify({
+            ...input,
+            instanceId,
+            locationHint,
+            batchId,
+            ...(adminBypassArmed && me?.isAdmin ? { adminBypass: true } : {}),
+          }),
         });
         if (awaitsApproval) setActionNotice(null);
         if (result.clampedReason === 'escalation') {
@@ -3169,6 +3197,11 @@ export function App() {
                   : undefined
               }
               personLimitedIds={new Set(Object.keys(personLimits))}
+              adminBypass={
+                me.isAdmin
+                  ? { armed: adminBypassArmed, onToggle: () => setAdminBypassArmed((v) => !v) }
+                  : undefined
+              }
             />
           )}
           onOperate={(input) => {
@@ -3182,7 +3215,9 @@ export function App() {
               const queue = participantStatus[targetId]?.queue;
               const starBlocked = Boolean(queue?.starOnly && !queue.starredByThem);
               const queueHalted = Boolean(queue?.enabled && queue.halted);
-              if (starBlocked || queueHalted) return;
+              // An armed admin bypass skips favorites only server-side (logged red).
+              const adminSkipsFavorites = adminBypassArmed && Boolean(me.isAdmin);
+              if ((starBlocked && !adminSkipsFavorites) || queueHalted) return;
             }
             operate({
               ...input,
@@ -3552,6 +3587,14 @@ export function App() {
             }}
             onResetBudget={resetBudgetCb}
             onRaiseBudget={raiseBudgetCb}
+            onAdminConsentStep={(step, nonce, phrase) => {
+              if (!token) return Promise.reject(new Error('Not signed in'));
+              return adminConsentStep(token, step, nonce, phrase);
+            }}
+            onRevokeAdminConsent={() => {
+              if (!token) return Promise.reject(new Error('Not signed in'));
+              return revokeAdminConsent(token);
+            }}
             queueEnabled={queueState.enabled}
           />
         </PsDialog>

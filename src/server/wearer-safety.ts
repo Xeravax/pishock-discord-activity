@@ -370,3 +370,21 @@ export function assertPersonAllows(modes: EffectiveModes, operation: string): vo
     );
   }
 }
+
+/**
+ * Admin limit override (wearer consented): only the PiShock device max applies.
+ * Mode permissions and the required warning are kept by the caller.
+ */
+export function deviceOnlyModes(
+  device: { maxIntensity: number; maxDurationMs: number },
+  requiredWarningLevel: WarningLevel,
+): EffectiveModes {
+  const band = nestBands([], device.maxIntensity, device.maxDurationMs);
+  return {
+    shock: band,
+    vibrate: band,
+    beep: band,
+    requiredWarningLevel,
+    personAllows: { shock: true, vibrate: true, beep: true },
+  };
+}

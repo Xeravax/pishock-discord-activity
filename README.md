@@ -198,6 +198,7 @@ Copy [`.env.example`](.env.example) → `.env` and set:
 | `TOKEN_KEY` | ✅ | 32-byte key for AES-256-GCM (64 hex chars, or any string hashed to SHA-256) |
 | `PUBLIC_URL` | ✅ | Public HTTPS URL Discord points at |
 | `PORT` | Optional | Host port mapped to the app (default `3000`) |
+| `ADMIN_DISCORD_USER_IDS` | Optional | Comma-separated admin Discord ids (admin bypass; always logged and notified) |
 | `PISHOCK_IMAGE` | Optional | Override GHCR image when using `docker-compose.ghcr.yml` |
 
 **Security notes**
@@ -284,6 +285,7 @@ npm run dev:client   # Vite UI (separate terminal)
 | `TOKEN_KEY` | Runtime | Yes | AES-256-GCM key material |
 | `PUBLIC_URL` | Runtime | Yes | Public activity origin |
 | `PORT` | Runtime | No | Listen / host port (default 3000) |
+| `ADMIN_DISCORD_USER_IDS` | Runtime | No | Admin bypass ids; exceeding limits needs the wearer's consent |
 | `VITE_DISCORD_CLIENT_ID` | Build | Yes* | Usually set from `DISCORD_CLIENT_ID` during Docker/CI build |
 
 \*Required for a working Discord embed; without it the client falls back to a dummy id and Discord rejects the origin.

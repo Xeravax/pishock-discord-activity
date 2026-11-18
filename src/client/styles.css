@@ -6038,3 +6038,59 @@ button.auth-boot__api-key:not(.secret-value--shown) {
   flex-direction: column;
   padding: 0 8px;
 }
+
+/* Admin bypass — always red, whatever the theme */
+.official-log-row--admin {
+  border: 1px solid var(--ps-danger-border);
+  background: var(--ps-danger-bg);
+  border-left: 3px solid var(--ps-danger);
+}
+.official-log-admin {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--ps-danger-text);
+  font: 600 0.75rem var(--ps-font-label);
+  letter-spacing: 0.02em;
+  margin-bottom: 4px;
+}
+.admin-bypass-pill {
+  appearance: none;
+  border: 1px solid var(--ps-danger-border);
+  background: transparent;
+  color: var(--ps-danger-soft);
+  font: 700 0.68rem/1 var(--ps-font-label);
+  letter-spacing: 0.06em;
+  padding: 4px 8px;
+  border-radius: var(--ps-r-pill);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.admin-bypass-pill.is-armed {
+  background: var(--ps-danger);
+  border-color: var(--ps-danger);
+  color: #fff;
+}
+.safety-admin {
+  border-color: var(--ps-danger-border);
+}
+.safety-admin__status {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.safety-admin__phrase {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 8px 10px;
+  border-radius: var(--ps-r-md);
+  border: 1px solid var(--ps-border-strong);
+  background: var(--ps-surface-inset);
+  color: var(--ps-text);
+  font: 600 0.95rem var(--ps-font-mono);
+  letter-spacing: 0.08em;
+}

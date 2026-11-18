@@ -119,6 +119,8 @@ export type QueueEnqueueInput = {
   instanceId: string;
   /** Opaque payload kept for the executor (location, flags, etc.). */
   payload?: unknown;
+  /** Admin bypass: jump the line (ahead of stars and per-sender cooldowns). */
+  front?: boolean;
 };
 
 export type QueueItemInternal = QueueEnqueueInput & {
@@ -334,14 +336,15 @@ export function createCommandQueue(deps: CommandQueueDeps) {
     return Math.max(0, q.activeAdvanceMs - elapsed);
   }
 
-  /** When this sender may start again (absolute ms; 0 = no cooldown). */
-  function senderReadyAt(
+  /** When this item's sender may start again (absolute ms; 0 = no cooldown). */
+  function itemReadyAt(
     lastStarts: Map<string, number>,
-    sender: string,
+    item: QueueItemInternal,
     limits: QueueOwnerLimits,
   ): number {
+    if (item.front) return 0;
     const gap = Math.max(0, Math.floor(Number(limits.cooldownPerSenderMs) || 0));
-    const last = lastStarts.get(sender);
+    const last = lastStarts.get(item.executorDiscordUserId);
     return gap > 0 && last != null ? last + gap : 0;
   }
 
@@ -360,10 +363,10 @@ export function createCommandQueue(deps: CommandQueueDeps) {
     const lastStarts = new Map(q.lastStartBySender);
     const pending = [...ordered];
     while (pending.length) {
-      let idx = pending.findIndex((i) => senderReadyAt(lastStarts, i.executorDiscordUserId, limits) <= t);
+      let idx = pending.findIndex((i) => itemReadyAt(lastStarts, i, limits) <= t);
       if (idx < 0) {
-        t = Math.min(...pending.map((i) => senderReadyAt(lastStarts, i.executorDiscordUserId, limits)));
-        idx = pending.findIndex((i) => senderReadyAt(lastStarts, i.executorDiscordUserId, limits) <= t);
+        t = Math.min(...pending.map((i) => itemReadyAt(lastStarts, i, limits)));
+        idx = pending.findIndex((i) => itemReadyAt(lastStarts, i, limits) <= t);
         if (idx < 0) idx = 0;
       }
       const [item] = pending.splice(idx, 1);
@@ -421,19 +424,23 @@ export function createCommandQueue(deps: CommandQueueDeps) {
     ownerDiscordUserId: string,
     waiting: QueueItemInternal[],
   ): Promise<QueueItemInternal[]> {
+    const front: QueueItemInternal[] = [];
     const starred: QueueItemInternal[] = [];
     const open: QueueItemInternal[] = [];
     for (const item of waiting) {
-      if (await deps.isStarred(ownerDiscordUserId, item.executorDiscordUserId)) {
+      if (item.front) {
+        front.push(item);
+      } else if (await deps.isStarred(ownerDiscordUserId, item.executorDiscordUserId)) {
         starred.push(item);
       } else {
         open.push(item);
       }
     }
     const bySeq = (a: QueueItemInternal, b: QueueItemInternal) => a.seq - b.seq;
+    front.sort(bySeq);
     starred.sort(bySeq);
     open.sort(bySeq);
-    return [...starred, ...open];
+    return [...front, ...starred, ...open];
   }
 
   /**
@@ -449,11 +456,11 @@ export function createCommandQueue(deps: CommandQueueDeps) {
     const ordered = await orderedWaiting(ownerDiscordUserId, q.waiting);
     const t = now();
     const next = ordered.find(
-      (w) => senderReadyAt(q.lastStartBySender, w.executorDiscordUserId, limits) <= t,
+      (w) => itemReadyAt(q.lastStartBySender, w, limits) <= t,
     );
     if (!next) {
       const readyAt = Math.min(
-        ...ordered.map((w) => senderReadyAt(q.lastStartBySender, w.executorDiscordUserId, limits)),
+        ...ordered.map((w) => itemReadyAt(q.lastStartBySender, w, limits)),
       );
       return { item: null, waitMs: Math.max(1, readyAt - t) };
     }

@@ -8,6 +8,15 @@ function required(name: string): string {
   return value;
 }
 
+function parseIdList(raw: string | undefined): ReadonlySet<string> {
+  return new Set(
+    String(raw ?? '')
+      .split(/[\s,]+/)
+      .map((id) => id.trim())
+      .filter((id) => /^\d{5,25}$/.test(id)),
+  );
+}
+
 export function loadEnv() {
   const port = Number(process.env.PORT ?? '3000');
   return {
@@ -36,6 +45,11 @@ export function loadEnv() {
       process.env.ALLOW_MISSING_BOT_INSTANCE_CHECK === '1' && process.env.NODE_ENV !== 'production',
     /** Root for durable local files (PiShock profile images, etc.). Defaults to ./data */
     dataDir: process.env.DATA_DIR?.trim() || null,
+    /**
+     * Discord user ids allowed to use admin bypass (comma separated). Admins can skip soft
+     * gates; exceeding a wearer's limits additionally needs that wearer's explicit consent.
+     */
+    adminDiscordUserIds: parseIdList(process.env.ADMIN_DISCORD_USER_IDS),
   };
 }
 

@@ -392,6 +392,9 @@ export async function logCommand(input: {
   locationName?: string | null;
   locationIconUrl?: string | null;
   externalLogKey?: string | null;
+  /** Admin used bypass on this command. */
+  adminBypass?: boolean;
+  bypassedGates?: string[];
 }) {
   const ownerId = input.targetDiscordUserId || input.discordUserId;
   const needsShareLookup =
@@ -437,6 +440,8 @@ export async function logCommand(input: {
       locationName: input.locationName ?? undefined,
       locationIconUrl: input.locationIconUrl ?? undefined,
       externalLogKey: input.externalLogKey ?? undefined,
+      adminBypass: Boolean(input.adminBypass),
+      bypassedGates: input.bypassedGates ?? [],
     },
   });
 }
@@ -1118,6 +1123,8 @@ export async function listPublicCommandLogs(limit = 200, viewer?: LogViewer | nu
       guildId: true,
       channelId: true,
       createdAt: true,
+      adminBypass: true,
+      bypassedGates: true,
     },
   });
 
@@ -1203,6 +1210,8 @@ export async function listPublicCommandLogs(limit = 200, viewer?: LogViewer | nu
           : null,
       executor,
       target: publicLogPerson(byId.get(targetId), targetId),
+      adminBypass: row.adminBypass,
+      bypassedGates: row.bypassedGates,
     } satisfies PublicLogRow;
   });
 
@@ -1442,4 +1451,29 @@ export async function hasActiveShares(discordUserId: string): Promise<boolean> {
     where: { discordUserId, enabled: true, paused: false },
   });
   return n > 0;
+}
+
+// ---------------------------------------------------------------------------
+// Admin limit-override consent
+
+const ADMIN_CONSENT_SELECT = {
+  adminLimitOverrideConsentAt: true,
+  adminLimitOverrideConsentVersion: true,
+} as const;
+
+export async function getAdminLimitConsent(discordUserId: string): Promise<{
+  adminLimitOverrideConsentAt: Date | null;
+  adminLimitOverrideConsentVersion: number | null;
+} | null> {
+  return prisma.discordUser.findUnique({ where: { id: discordUserId }, select: ADMIN_CONSENT_SELECT });
+}
+
+export async function setAdminLimitConsent(discordUserId: string, version: number | null): Promise<void> {
+  await prisma.discordUser.update({
+    where: { id: discordUserId },
+    data: {
+      adminLimitOverrideConsentAt: version == null ? null : new Date(),
+      adminLimitOverrideConsentVersion: version,
+    },
+  });
 }

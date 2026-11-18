@@ -66,6 +66,10 @@ model DiscordUser {
   checkInGraceMs Int @default(60000)
   /// Per-person limits: lower caps for specific controllers (settings cog in the people list).
   perPersonLimitsEnabled Boolean @default(false)
+  /// Wearer consented (3 separate confirmations) to admins exceeding their limits. Null = no consent.
+  adminLimitOverrideConsentAt DateTime?
+  /// Version of the consent text that was accepted.
+  adminLimitOverrideConsentVersion Int?
   /// Log sharing: where other people can see hits on you (everywhere|server|channel|private).
   logVisibility      String  @default("everywhere")
   /// Log sharing: what other people can see about hits on you.
@@ -240,6 +244,10 @@ model CommandLog {
   locationName         String?
   locationIconUrl      String?
   /// Stable key for synced website device logs (dedupe)
+  /// An admin used bypass on this command (shown red: "An admin bypassed this").
+  adminBypass          Boolean     @default(false)
+  /// Which gates were bypassed (favorites | cooldown | budget | approval | queue | limits).
+  bypassedGates        String[]    @default([])
   externalLogKey       String?     @unique
   createdAt            DateTime    @default(now())
 

@@ -28,6 +28,8 @@ type Props = {
   onOpenPersonLimits?: (discordUserId: string, displayName: string) => void;
   /** People you already set per-person limits for (cog shows highlighted). */
   personLimitedIds?: ReadonlySet<string>;
+  /** Admins only: arm a bypass for the next fire (logged red, wearer notified). */
+  adminBypass?: { armed: boolean; onToggle: () => void };
 };
 
 /** Discord Shockers roster styled like the official PISHOCKS FAB list */
@@ -49,6 +51,7 @@ export function FriendsParticipantList({
   onTogglePriority,
   onOpenPersonLimits,
   personLimitedIds,
+  adminBypass,
 }: Props) {
   const others = participants.filter((p) => p.id !== currentUserId);
   const selectedIds = selectedTargetIds ?? (selectedTargetId ? [selectedTargetId] : []);
@@ -62,6 +65,22 @@ export function FriendsParticipantList({
           {multiSelect ? (individualIntensity ? ' · MULTI · PER PERSON' : ' · MULTI') : ''}
         </div>
         <div className="row items-center no-wrap q-gutter-xs">
+          {adminBypass ? (
+            <button
+              type="button"
+              className={`admin-bypass-pill${adminBypass.armed ? ' is-armed' : ''}`}
+              aria-pressed={adminBypass.armed}
+              title={
+                adminBypass.armed
+                  ? 'Next command bypasses cooldowns, budget, favorites only and approval (and limits where the wearer consented). Logged in red; the wearer is notified.'
+                  : 'Admin bypass for the next command'
+              }
+              onClick={adminBypass.onToggle}
+            >
+              <i className="q-icon mdi mdi-shield-crown-outline" aria-hidden />
+              {adminBypass.armed ? 'BYPASS ARMED' : 'ADMIN'}
+            </button>
+          ) : null}
           {onToggleMultiSelect ? (
             <MultiShockToggle
               active={multiSelect}
