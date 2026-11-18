@@ -289,6 +289,47 @@ describe('command queue', () => {
     assert.equal(state.waiting.length, 0);
   });
 
+  it('removeByExecutor drops only that sender (block) and keeps others', async () => {
+    const h = makeHarness();
+    const active = await h.queue.enqueue(
+      baseInput({ ownerDiscordUserId: 'owner', executorDiscordUserId: 'a', durationMs: 5_000 }),
+    );
+    await h.queue.enqueue(
+      baseInput({ ownerDiscordUserId: 'owner', executorDiscordUserId: 'b', durationMs: 40 }),
+    );
+    const keep = await h.queue.enqueue(
+      baseInput({ ownerDiscordUserId: 'owner', executorDiscordUserId: 'c', durationMs: 40 }),
+    );
+    await h.queue.enqueue(
+      baseInput({ ownerDiscordUserId: 'owner', executorDiscordUserId: 'b', durationMs: 40 }),
+    );
+    await h.flush();
+    const state = await h.queue.removeByExecutor('owner', 'b');
+    assert.equal(state.active?.id, active.itemId);
+    assert.deepEqual(
+      state.waiting.map((w) => w.id),
+      [keep.itemId],
+    );
+    assert.deepEqual(h.ended, []);
+  });
+
+  it('removeByExecutor cuts the blocked sender when they are active', async () => {
+    const h = makeHarness();
+    const active = await h.queue.enqueue(
+      baseInput({ ownerDiscordUserId: 'owner', executorDiscordUserId: 'a', durationMs: 5_000 }),
+    );
+    const next = await h.queue.enqueue(
+      baseInput({ ownerDiscordUserId: 'owner', executorDiscordUserId: 'b', durationMs: 40 }),
+    );
+    await h.flush();
+    await h.queue.removeByExecutor('owner', 'a');
+    await h.flush();
+    await h.advance(0);
+    await h.flush();
+    assert.deepEqual(h.ended, [active.itemId]);
+    assert.equal(h.executed[1], next.itemId);
+  });
+
   it('enforces per-sender and total waiting caps', async () => {
     const h = makeHarness({ maxPerSender: QUEUE_MAX_WAITING_PER_SENDER });
     await h.queue.setPaused('owner', true);

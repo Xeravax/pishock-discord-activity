@@ -604,6 +604,31 @@ export function createCommandQueue(deps: CommandQueueDeps) {
     return snapshot(ownerDiscordUserId);
   }
 
+  /**
+   * Drop everything one sender has queued for this owner (block / ban). Cuts their active
+   * command short when it is the one running.
+   */
+  async function removeByExecutor(
+    ownerDiscordUserId: string,
+    executorDiscordUserId: string,
+  ): Promise<QueueStatePublic> {
+    const q = ensure(ownerDiscordUserId);
+    const removed = q.waiting.filter((w) => w.executorDiscordUserId === executorDiscordUserId);
+    if (removed.length) {
+      q.waiting = q.waiting.filter((w) => w.executorDiscordUserId !== executorDiscordUserId);
+      for (const item of removed) {
+        emitTicket(item, 'removed', null, q.paused);
+      }
+    }
+    if (q.active?.executorDiscordUserId === executorDiscordUserId) {
+      await skipActive(ownerDiscordUserId);
+    } else if (removed.length) {
+      await emitState(ownerDiscordUserId);
+    }
+    await notifyWaitingPositions(ownerDiscordUserId);
+    return snapshot(ownerDiscordUserId);
+  }
+
   async function skipActive(
     ownerDiscordUserId: string,
   ): Promise<{ ended: boolean; state: QueueStatePublic }> {
@@ -750,6 +775,7 @@ export function createCommandQueue(deps: CommandQueueDeps) {
     setHalted,
     clearWaiting,
     removeItem,
+    removeByExecutor,
     skipActive,
     hardClear,
     holdAdvance,

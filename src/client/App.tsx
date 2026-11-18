@@ -43,6 +43,7 @@ import {
 import {
   PipIncomingShock,
   type IncomingShockHit,
+  type PipControls,
   type PipQueueNext,
 } from './components/PipIncomingShock';
 import { participantAvatarUrl } from './participants';
@@ -248,6 +249,9 @@ export function App() {
     nextEstimatedStartAt: null,
   });
   const [queueBusy, setQueueBusy] = useState(false);
+  /** Owner's own queue stars / block list — drives PIP favorite + block chips. */
+  const [ownStarredIds, setOwnStarredIds] = useState<Set<string>>(() => new Set());
+  const [ownBannedIds, setOwnBannedIds] = useState<Set<string>>(() => new Set());
   const [queueOpen, setQueueOpen] = useState(false);
   const [myQueueTicket, setMyQueueTicket] = useState<SenderQueueTicket | null>(null);
   /** Shocker ids PiShock just rejected with 503, until a device list says otherwise. */
@@ -269,6 +273,7 @@ export function App() {
   const loadSettingsRef = useRef<(() => Promise<unknown>) | null>(null);
   const refreshQueue = useCallback(async (accessToken: string) => {
     const data = await apiFetch<QueueState & { stars?: string[] }>('/queue', accessToken);
+    if (Array.isArray(data.stars)) setOwnStarredIds(new Set(data.stars.map(String)));
     setQueueState({
       enabled: Boolean(data.enabled),
       progressMs: Number(data.progressMs) || 0,
@@ -1336,6 +1341,7 @@ export function App() {
     if (!item) return null;
     const fromRoster = participants.find((p) => p.id === item.executorDiscordUserId);
     return {
+      executorDiscordUserId: item.executorDiscordUserId,
       displayName:
         fromRoster?.displayName ||
         item.executorGlobalName ||
@@ -1362,6 +1368,23 @@ export function App() {
     queueState.nextStartsInMs,
     participants,
   ]);
+
+  // PIP quick actions need the block list and owned shocker ids (for STOP ALL).
+  useEffect(() => {
+    if (!pip || !token || !me?.consent || !me.pishockLinked) return;
+    void apiFetch<{ bannedDiscordUserIds: string[] }>('/activity/bans', token)
+      .then((data) => setOwnBannedIds(new Set((data.bannedDiscordUserIds ?? []).map(String))))
+      .catch(() => undefined);
+    if (!devices) void refreshDevices(token).catch(() => undefined);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pip, token, me?.consent, me?.pishockLinked]);
+
+  // PIP has no dismissable toast — let errors fade so the window does not stay red.
+  useEffect(() => {
+    if (!pip || !actionError) return;
+    const id = window.setTimeout(() => setActionError(null), 6_000);
+    return () => window.clearTimeout(id);
+  }, [pip, actionError]);
 
   // While PIP is open, refresh logs so hits still show if WS was missed
   useEffect(() => {
@@ -2034,6 +2057,12 @@ export function App() {
         method: 'PUT',
         body: JSON.stringify({ starred }),
       });
+      setOwnStarredIds((prev) => {
+        const next = new Set(prev);
+        if (starred) next.add(discordUserId);
+        else next.delete(discordUserId);
+        return next;
+      });
       setParticipantStatus((prev) => {
         const row = prev[discordUserId];
         if (!row) return prev;
@@ -2052,6 +2081,36 @@ export function App() {
       if (queueState.enabled) {
         void refreshQueue(token).catch(() => undefined);
       }
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  /** Block / unblock one sender (PIP quick action). Server also drops their queued commands. */
+  const setSenderBlocked = async (discordUserId: string, blocked: boolean) => {
+    if (!token) return;
+    setActionError(null);
+    try {
+      const result = await apiFetch<{ bannedDiscordUserIds: string[] }>(
+        `/activity/bans/${encodeURIComponent(discordUserId)}`,
+        token,
+        { method: 'PUT', body: JSON.stringify({ banned: blocked }) },
+      );
+      setOwnBannedIds(new Set((result.bannedDiscordUserIds ?? []).map(String)));
+      if (blocked) {
+        setOwnStarredIds((prev) => {
+          if (!prev.has(discordUserId)) return prev;
+          const next = new Set(prev);
+          next.delete(discordUserId);
+          return next;
+        });
+        if (ownStarredIds.has(discordUserId)) {
+          // A blocked sender should not keep queue priority if they are later unblocked.
+          void toggleQueueStar(discordUserId, false);
+        }
+      }
+      setActionNotice(blocked ? 'Blocked — their queued commands were removed.' : 'Unblocked.');
+      if (queueState.enabled) void refreshQueue(token).catch(() => undefined);
     } catch (err) {
       setActionError(err instanceof Error ? err.message : String(err));
     }
@@ -2565,7 +2624,39 @@ export function App() {
 
     // PIP: last hit + next queue item / ETA — no header, menu, safety bar, or controls
     if (pip) {
-      return <PipIncomingShock hit={pipHit} queueNext={pipQueueNext} />;
+      const ownedStopTargets = ownedAndShared.filter((s) => s.owned);
+      const pipMessageText = actionError || actionNotice;
+      const pipControls: PipControls | null = me.pishockLinked
+        ? {
+            selfDiscordUserId: me.user?.id ?? null,
+            stopTargetCount: ownedStopTargets.length,
+            stoppedCount: ownedStopTargets.filter((s) => emergencyStopIds.has(s.id)).length,
+            onEmergencyStop: (engaged) => {
+              // Engage covers every owned shocker; release only the ones actually latched.
+              const ids = (
+                engaged
+                  ? ownedStopTargets
+                  : ownedStopTargets.filter((s) => emergencyStopIds.has(s.id))
+              ).map((s) => s.id);
+              if (!ids.length) return;
+              void setEmergencyStop({ shockerId: ids[0]!, shockerIds: ids, engaged });
+            },
+            queueEnabled: queueState.enabled,
+            queuePaused: queueState.paused,
+            queueHasActive: Boolean(queueState.active),
+            onToggleQueuePaused: (paused) => void setQueuePaused(paused),
+            onSkipActive: () => void skipQueue(),
+            isStarred: (id) => ownStarredIds.has(id),
+            isBlocked: (id) => ownBannedIds.has(id),
+            onToggleStar: (id, starred) => void toggleQueueStar(id, starred),
+            onToggleBlock: (id, blocked) => void setSenderBlocked(id, blocked),
+            busy: busy || queueBusy,
+            message: pipMessageText
+              ? { tone: actionError ? 'error' : 'ok', text: pipMessageText }
+              : null,
+          }
+        : null;
+      return <PipIncomingShock hit={pipHit} queueNext={pipQueueNext} controls={pipControls} />;
     }
 
     const toastText = actionError || actionNotice;

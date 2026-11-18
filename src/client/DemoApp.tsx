@@ -9,7 +9,7 @@ import { OfficialController } from './components/OfficialController';
 import { SharesPanel } from './components/SharesPanel';
 import { CommandLog } from './components/CommandLog';
 import { FriendsParticipantList } from './components/FriendsParticipantList';
-import { PipIncomingShock } from './components/PipIncomingShock';
+import { PipIncomingShock, type PipControls } from './components/PipIncomingShock';
 import { PsDialog } from './components/PsDialog';
 import { ThemePreview } from './components/ThemePreview';
 import type { ShockerView } from './components/ShockerCard';
@@ -306,7 +306,8 @@ export function DemoApp() {
       ) : null}
 
       {screen === 'pip' ? (
-        <div style={{ height: 160, width: 280, margin: 16, border: '1px solid #333' }}>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 16, margin: 16 }}>
+        <div style={{ height: 160, width: 280, border: '1px solid #333' }}>
           <PipIncomingShock
             hit={{
               executorDiscordUserId: '111',
@@ -323,6 +324,15 @@ export function DemoApp() {
               targetAvatarUrl: participantAvatarUrl('222'),
             }}
           />
+        </div>
+        {[
+          { w: 330, h: 400 },
+          { w: 300, h: 180 },
+        ].map(({ w, h }) => (
+          <div key={`${w}x${h}`} style={{ height: h, width: w, border: '1px solid #333' }}>
+            <DemoPipInteractive />
+          </div>
+        ))}
         </div>
       ) : null}
 
@@ -478,5 +488,62 @@ export function DemoApp() {
         </div>
       ) : null}
     </div>
+  );
+}
+
+/** Linked-owner PIP with quick actions, backed by local mock state. */
+function DemoPipInteractive() {
+  const [stopped, setStopped] = useState(false);
+  const [paused, setPaused] = useState(false);
+  const [stars, setStars] = useState<Set<string>>(() => new Set());
+  const [blocked, setBlocked] = useState<Set<string>>(() => new Set());
+  const toggle = (set: Set<string>, id: string, on: boolean) => {
+    const next = new Set(set);
+    if (on) next.add(id);
+    else next.delete(id);
+    return next;
+  };
+  const controls: PipControls = {
+    selfDiscordUserId: '999',
+    stopTargetCount: 2,
+    stoppedCount: stopped ? 2 : 0,
+    onEmergencyStop: setStopped,
+    queueEnabled: true,
+    queuePaused: paused,
+    queueHasActive: true,
+    onToggleQueuePaused: setPaused,
+    onSkipActive: () => undefined,
+    isStarred: (id) => stars.has(id),
+    isBlocked: (id) => blocked.has(id),
+    onToggleStar: (id, on) => setStars((s) => toggle(s, id, on)),
+    onToggleBlock: (id, on) => setBlocked((s) => toggle(s, id, on)),
+    busy: false,
+    message: null,
+  };
+  return (
+    <PipIncomingShock
+      controls={controls}
+      hit={{
+        executorDiscordUserId: '111',
+        displayName: 'Xeravax',
+        avatarUrl: participantAvatarUrl('111'),
+        action: 'shock',
+        intensity: 100,
+        durationMs: 1000,
+        at: Date.now() - 4000,
+        success: true,
+        kind: 'personal',
+      }}
+      queueNext={{
+        executorDiscordUserId: '333',
+        displayName: 'RogerfireFox',
+        avatarUrl: participantAvatarUrl('333'),
+        operation: 'vibrate',
+        intensity: 40,
+        durationMs: 2000,
+        estimatedStartAt: Date.now() + 12_000,
+        startsInMs: 12_000,
+      }}
+    />
   );
 }

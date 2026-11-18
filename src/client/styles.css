@@ -670,6 +670,218 @@ html.pip-mode #root > * {
   padding: 8px;
 }
 
+/* ---- Interactive PIP: owner quick actions ---- */
+
+.pip-incoming__body {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 6px;
+}
+
+.pip-status {
+  flex: 0 0 auto;
+  padding: 3px 8px;
+  border-radius: var(--ps-r-sm);
+  font-family: var(--ps-font-label);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  text-align: center;
+  color: var(--ps-cyan);
+  background: var(--ps-tint-strong);
+  border: 1px solid var(--ps-border-accent);
+}
+
+.pip-status--estop {
+  color: var(--ps-danger-text);
+  background: var(--ps-danger-bg);
+  border-color: var(--ps-danger-border);
+}
+
+.pip-person-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 5px;
+}
+
+.pip-person-actions--compact {
+  margin: 0 0 0 auto;
+  flex-wrap: nowrap;
+  flex-shrink: 0;
+}
+
+.pip-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  min-height: 24px;
+  padding: 2px 8px;
+  border-radius: var(--ps-r-pill);
+  border: 1px solid var(--ps-border-strong);
+  background: var(--ps-surface-raised);
+  color: var(--ps-text-soft);
+  font: 600 11px/1 var(--ps-font-body);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.pip-chip .q-icon {
+  font-size: 14px;
+}
+
+.pip-chip:hover:not(:disabled) {
+  border-color: var(--ps-border-accent-strong);
+  color: var(--ps-text);
+}
+
+.pip-chip:focus-visible,
+.pip-stop:focus-visible,
+.pip-icon-btn:focus-visible {
+  outline: none;
+  box-shadow: var(--ps-focus);
+}
+
+.pip-chip:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.pip-chip--starred {
+  color: var(--ps-yellow);
+  border-color: rgba(244, 214, 0, 0.5);
+}
+
+.pip-chip--block:hover:not(:disabled),
+.pip-chip--confirm,
+.pip-chip--blocked {
+  color: var(--ps-danger-text);
+  border-color: var(--ps-danger-border);
+  background: var(--ps-danger-bg);
+}
+
+.pip-message {
+  flex: 0 0 auto;
+  font-size: 11px;
+  line-height: 1.25;
+  text-align: center;
+  padding: 3px 6px;
+  border-radius: var(--ps-r-sm);
+}
+
+.pip-message--error {
+  color: var(--ps-danger-text);
+  background: var(--ps-danger-bg);
+}
+
+.pip-message--ok {
+  color: var(--ps-success);
+  background: rgba(92, 219, 138, 0.1);
+}
+
+.pip-controls {
+  flex: 0 0 auto;
+  display: flex;
+  gap: 6px;
+  align-items: stretch;
+}
+
+.pip-stop {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border: 0;
+  border-radius: var(--ps-r-md);
+  background: var(--ps-danger);
+  color: #fff;
+  font: 700 13px/1 var(--ps-font-label);
+  letter-spacing: 0.08em;
+  cursor: pointer;
+}
+
+.pip-stop .q-icon {
+  font-size: 18px;
+}
+
+.pip-stop:hover:not(:disabled) {
+  filter: brightness(1.1);
+}
+
+.pip-stop:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.pip-stop--engaged {
+  background: var(--ps-danger-bg);
+  color: var(--ps-danger-text);
+  box-shadow: inset 0 0 0 1px var(--ps-danger-border);
+  letter-spacing: 0.02em;
+}
+
+.pip-stop--confirm {
+  background: var(--ps-yellow);
+  color: var(--ps-yellow-ink);
+  box-shadow: none;
+}
+
+.pip-icon-btn {
+  flex: 0 0 auto;
+  width: 38px;
+  min-height: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--ps-r-md);
+  border: 1px solid var(--ps-border-strong);
+  background: var(--ps-surface-raised);
+  color: var(--ps-text);
+  cursor: pointer;
+}
+
+.pip-icon-btn .q-icon {
+  font-size: 20px;
+}
+
+.pip-icon-btn--on {
+  color: var(--ps-cyan-ink);
+  background: var(--ps-cyan);
+  border-color: var(--ps-cyan);
+}
+
+.pip-icon-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+/* Collapsed / tiny PIP: keep STOP reachable, drop chip labels. */
+@media (max-height: 210px) {
+  .pip-incoming--interactive .pip-person-actions:not(.pip-person-actions--compact) .pip-chip span {
+    display: none;
+  }
+  .pip-incoming--interactive .pip-incoming__eyebrow,
+  .pip-incoming--interactive .pip-incoming__queue-label {
+    display: none;
+  }
+  .pip-stop,
+  .pip-icon-btn {
+    min-height: 28px;
+  }
+  .pip-status {
+    padding: 1px 6px;
+    font-size: 10px;
+  }
+}
+
 .official-mode-btn {
   text-align: left !important;
 }

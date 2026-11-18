@@ -16,9 +16,26 @@ import {
   listActivityShares,
   replaceActivityBans,
   replaceActivityShares,
+  setActivityBan,
   setPersonalActivityLimits,
 } from '../session.js';
 import { broadcastRealtimeAll } from '../realtime.js';
+import { commandQueue } from '../pishock/command-queue-runtime.js';
+
+function banIds(bans: Array<{ bannedDiscordUserId: string }>): string[] {
+  return bans.map((b) => b.bannedDiscordUserId);
+}
+
+/** Newly blocked senders lose anything already waiting in (or running from) the owner's queue. */
+async function purgeBannedFromQueue(ownerDiscordUserId: string, bannedIds: string[]): Promise<void> {
+  for (const id of bannedIds) {
+    try {
+      await commandQueue.removeByExecutor(ownerDiscordUserId, id);
+    } catch {
+      // Queue dispatch re-checks bans, so a failed purge cannot run their command.
+    }
+  }
+}
 
 type IncomingShare = {
   shockerId?: number;
@@ -179,6 +196,47 @@ export const activityShareRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (a
     };
   });
 
+  /** Owner's block list. No PiShock call, so PIP can load it cheaply. */
+  app.get('/api/activity/bans', async (req, reply) => {
+    if (!req.hasConsent) {
+      return reply.code(403).send({ error: 'Consent required', code: 'CONSENT_REQUIRED' });
+    }
+    const bans = await listActivityBans(req.discordUser.id);
+    return { bannedDiscordUserIds: banIds(bans) };
+  });
+
+  /** Block / unblock one person without resending the whole share config (PIP quick action). */
+  app.put('/api/activity/bans/:discordUserId', async (req, reply) => {
+    if (!req.hasConsent) {
+      return reply.code(403).send({ error: 'Consent required', code: 'CONSENT_REQUIRED' });
+    }
+    const targetId = String((req.params as { discordUserId?: string }).discordUserId ?? '').trim();
+    if (!/^\d{1,25}$/.test(targetId)) {
+      return reply.code(400).send({ error: 'Valid Discord user id required' });
+    }
+    if (targetId === req.discordUser.id) {
+      return reply.code(400).send({ error: 'Cannot block yourself' });
+    }
+    const body = req.body as { banned?: boolean };
+    if (typeof body?.banned !== 'boolean') {
+      return reply.code(400).send({ error: 'banned boolean required' });
+    }
+
+    const bans = await setActivityBan(req.discordUser.id, targetId, body.banned);
+    if (body.banned) {
+      await purgeBannedFromQueue(req.discordUser.id, [targetId]);
+    }
+    broadcastRealtimeAll({
+      type: 'activity_share_changed',
+      ownerDiscordUserId: req.discordUser.id,
+      ownerUsername: req.discordUser.username ?? null,
+      ownerGlobalName: req.discordUser.global_name ?? null,
+      reason: 'availability',
+      at: Date.now(),
+    });
+    return { ok: true, banned: body.banned, bannedDiscordUserIds: banIds(bans) };
+  });
+
   app.get('/api/activity/settings', async (req, reply) => {
     if (!req.hasConsent) {
       return reply.code(403).send({ error: 'Consent required', code: 'CONSENT_REQUIRED' });
@@ -310,9 +368,14 @@ export const activityShareRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (a
     const shares = await replaceActivityShares(req.discordUser.id, normalized);
     let bans = await listActivityBans(req.discordUser.id);
     if (Array.isArray(body.bannedDiscordUserIds)) {
+      const before = new Set(banIds(bans));
       bans = await replaceActivityBans(
         req.discordUser.id,
         body.bannedDiscordUserIds.map(String).filter((id) => id && id !== req.discordUser.id),
+      );
+      await purgeBannedFromQueue(
+        req.discordUser.id,
+        banIds(bans).filter((id) => !before.has(id)),
       );
     }
 
