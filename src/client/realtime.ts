@@ -1,5 +1,6 @@
 import { apiBase } from './api';
 import { getActivityInstanceId } from './discord';
+import type { ApprovalRequest } from './safety';
 
 export type RealtimeEvent =
   | {
@@ -105,6 +106,24 @@ export type RealtimeEvent =
       paused: boolean;
       estimatedWaitMs: number | null;
       estimatedStartAt: number | null;
+      at: number;
+    }
+  | ({ type: 'approval_request' } & Omit<ApprovalRequest, never>)
+  | {
+      type: 'approval_resolved';
+      approvalId: string;
+      ownerDiscordUserId: string;
+      executorDiscordUserId: string;
+      outcome: 'accepted' | 'denied' | 'expired' | 'canceled';
+      at: number;
+    }
+  | { type: 'checkin_due'; ownerDiscordUserId: string; deadline: number; at: number }
+  | { type: 'checkin_missed'; ownerDiscordUserId: string; at: number }
+  | {
+      type: 'budget_exhausted';
+      ownerDiscordUserId: string;
+      usedShocks: number;
+      usedShockMs: number;
       at: number;
     }
   | {

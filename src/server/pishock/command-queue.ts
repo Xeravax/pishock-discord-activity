@@ -15,14 +15,20 @@ export const QUEUE_MAX_PER_SENDER_MAX = 1_000_000;
 /**
  * How long the queue holds an item before advancing.
  * Never shorter than the command itself (plus hold grace), so ops don't overlap.
+ * A wearer cooldown only takes over when it is longer than the queue progress.
  */
-export function resolveQueueAdvanceMs(durationMs: number, progressMs: number): number {
+export function resolveQueueAdvanceMs(
+  durationMs: number,
+  progressMs: number,
+  globalCooldownMs = 0,
+): number {
   const commandHold = Math.max(0, durationMs) + HOLD_AUTO_END_GRACE_MS;
   const configured = Math.max(
     QUEUE_PROGRESS_MIN_MS,
     Math.min(QUEUE_PROGRESS_MAX_MS, Math.floor(Number(progressMs) || 0)),
   );
-  return Math.max(commandHold, configured);
+  const cooldown = Math.max(0, Math.floor(Number(globalCooldownMs) || 0));
+  return Math.max(commandHold, configured, cooldown);
 }
 
 export function clampQueueMaxPerSender(value: unknown): number {
@@ -34,7 +40,15 @@ export function clampQueueMaxPerSender(value: unknown): number {
 export type QueueOwnerLimits = {
   progressMs: number;
   maxPerSender: number;
+  /** Wearer cooldown between any two commands (queue uses max(this, progressMs)). */
+  cooldownGlobalMs?: number;
+  /** Wearer cooldown between two commands from the same sender. */
+  cooldownPerSenderMs?: number;
 };
+
+function advanceFor(item: { durationMs: number }, limits: QueueOwnerLimits): number {
+  return resolveQueueAdvanceMs(item.durationMs, limits.progressMs, limits.cooldownGlobalMs ?? 0);
+}
 
 export type QueuedOperation = 'shock' | 'vibrate' | 'beep' | 'hold' | 'warning';
 
@@ -159,6 +173,10 @@ type OwnerQueue = {
   running: boolean;
   /** Resolvers waiting to interrupt the active duration sleep. */
   wake: Array<() => void>;
+  /** When each sender's last item started (per-sender cooldown). */
+  lastStartBySender: Map<string, number>;
+  /** A delayed pump is scheduled because every waiting sender is cooling down. */
+  cooldownWakePending: boolean;
 };
 
 function defaultSleep(ms: number): Promise<void> {
@@ -208,6 +226,8 @@ export function createCommandQueue(deps: CommandQueueDeps) {
         advanceHeld: false,
         running: false,
         wake: [],
+        lastStartBySender: new Map(),
+        cooldownWakePending: false,
       };
       queues.set(ownerDiscordUserId, q);
     }
@@ -257,15 +277,15 @@ export function createCommandQueue(deps: CommandQueueDeps) {
           Boolean(await deps.isStarred(ownerDiscordUserId, q.active.executorDiscordUserId)),
         )
       : null;
-    // One isStarred pass, then priority-order for UI / next-item ETA.
+    // Planned start order (stars first, FIFO, senders on cooldown wait their turn).
+    const ordered = await orderedWaiting(ownerDiscordUserId, q.waiting);
+    const limits = await deps.getLimits(ownerDiscordUserId);
+    const plan = planStarts(q, ordered, limits);
     const tagged = await withPriorities(ownerDiscordUserId, q.waiting);
-    const byEnqueue = (a: QueueItemPublic, b: QueueItemPublic) => a.enqueuedAt - b.enqueuedAt;
-    const waiting = [
-      ...tagged.filter((item) => item.priority).sort(byEnqueue),
-      ...tagged.filter((item) => !item.priority).sort(byEnqueue),
-    ];
+    const startOf = (item: QueueItemPublic) => plan.get(item.id) ?? Number.MAX_SAFE_INTEGER;
+    const waiting = [...tagged].sort((a, b) => startOf(a) - startOf(b) || a.enqueuedAt - b.enqueuedAt);
     const next = waiting[0] ?? null;
-    const nextStartsInMs = next ? remainingActiveMs(q) : null;
+    const nextStartsInMs = next ? (plan.get(next.id) ?? remainingActiveMs(q)) : null;
     const nextEstimatedStartAt =
       nextStartsInMs == null ? null : now() + nextStartsInMs;
     return {
@@ -314,44 +334,86 @@ export function createCommandQueue(deps: CommandQueueDeps) {
     return Math.max(0, q.activeAdvanceMs - elapsed);
   }
 
+  /** When this sender may start again (absolute ms; 0 = no cooldown). */
+  function senderReadyAt(
+    lastStarts: Map<string, number>,
+    sender: string,
+    limits: QueueOwnerLimits,
+  ): number {
+    const gap = Math.max(0, Math.floor(Number(limits.cooldownPerSenderMs) || 0));
+    const last = lastStarts.get(sender);
+    return gap > 0 && last != null ? last + gap : 0;
+  }
+
+  /**
+   * Simulate the pick order: priority-ordered, but a sender still on cooldown is skipped
+   * until they are ready. Returns item id -> ms from now until it starts.
+   */
+  function planStarts(
+    q: OwnerQueue,
+    ordered: QueueItemInternal[],
+    limits: QueueOwnerLimits,
+  ): Map<string, number> {
+    const out = new Map<string, number>();
+    const base = now();
+    let t = base + remainingActiveMs(q);
+    const lastStarts = new Map(q.lastStartBySender);
+    const pending = [...ordered];
+    while (pending.length) {
+      let idx = pending.findIndex((i) => senderReadyAt(lastStarts, i.executorDiscordUserId, limits) <= t);
+      if (idx < 0) {
+        t = Math.min(...pending.map((i) => senderReadyAt(lastStarts, i.executorDiscordUserId, limits)));
+        idx = pending.findIndex((i) => senderReadyAt(lastStarts, i.executorDiscordUserId, limits) <= t);
+        if (idx < 0) idx = 0;
+      }
+      const [item] = pending.splice(idx, 1);
+      out.set(item!.id, t - base);
+      lastStarts.set(item!.executorDiscordUserId, t);
+      t += advanceFor(item!, limits);
+    }
+    return out;
+  }
+
+  async function plannedOrder(ownerDiscordUserId: string): Promise<{
+    ordered: QueueItemInternal[];
+    plan: Map<string, number>;
+  }> {
+    const q = ensure(ownerDiscordUserId);
+    const limits = await deps.getLimits(ownerDiscordUserId);
+    const byPriority = await orderedWaiting(ownerDiscordUserId, q.waiting);
+    const plan = planStarts(q, byPriority, limits);
+    const ordered = [...byPriority].sort((a, b) => (plan.get(a.id) ?? 0) - (plan.get(b.id) ?? 0));
+    return { ordered, plan };
+  }
+
   async function estimateWaitMs(
     ownerDiscordUserId: string,
     itemId: string,
   ): Promise<number | null> {
     const q = ensure(ownerDiscordUserId);
-    const limits = await deps.getLimits(ownerDiscordUserId);
     if (q.active?.id === itemId) return 0;
-    const ordered = await orderedWaiting(ownerDiscordUserId, q.waiting);
-    const idx = ordered.findIndex((w) => w.id === itemId);
-    if (idx < 0) return null;
-    let wait = remainingActiveMs(q);
-    for (let i = 0; i < idx; i++) {
-      wait += resolveQueueAdvanceMs(ordered[i]!.durationMs, limits.progressMs);
-    }
-    return wait;
+    const { plan } = await plannedOrder(ownerDiscordUserId);
+    return plan.get(itemId) ?? null;
   }
 
   async function positionOf(ownerDiscordUserId: string, itemId: string): Promise<number | null> {
     const q = ensure(ownerDiscordUserId);
     if (q.active?.id === itemId) return 0;
-    const ordered = await orderedWaiting(ownerDiscordUserId, q.waiting);
+    const { ordered } = await plannedOrder(ownerDiscordUserId);
     const idx = ordered.findIndex((w) => w.id === itemId);
     return idx >= 0 ? idx + 1 : null;
   }
 
   async function notifyWaitingPositions(ownerDiscordUserId: string): Promise<void> {
     const q = ensure(ownerDiscordUserId);
-    const ordered = await orderedWaiting(ownerDiscordUserId, q.waiting);
-    const limits = await deps.getLimits(ownerDiscordUserId);
-    let wait = remainingActiveMs(q);
+    const { ordered, plan } = await plannedOrder(ownerDiscordUserId);
     for (let i = 0; i < ordered.length; i++) {
       const item = ordered[i]!;
-      const estimatedWaitMs = wait;
+      const estimatedWaitMs = plan.get(item.id) ?? 0;
       emitTicket(item, 'queued', i + 1, q.paused, {
         estimatedWaitMs,
         estimatedStartAt: now() + estimatedWaitMs,
       });
-      wait += resolveQueueAdvanceMs(item.durationMs, limits.progressMs);
     }
   }
 
@@ -374,14 +436,39 @@ export function createCommandQueue(deps: CommandQueueDeps) {
     return [...starred, ...open];
   }
 
-  async function pickNext(ownerDiscordUserId: string): Promise<QueueItemInternal | null> {
+  /**
+   * Next runnable item, skipping senders still on their per-sender cooldown.
+   * When everyone waiting is cooling down, returns how long until the first is ready.
+   */
+  async function pickNext(
+    ownerDiscordUserId: string,
+    limits: QueueOwnerLimits,
+  ): Promise<{ item: QueueItemInternal | null; waitMs: number }> {
     const q = ensure(ownerDiscordUserId);
-    if (q.waiting.length === 0) return null;
+    if (q.waiting.length === 0) return { item: null, waitMs: 0 };
     const ordered = await orderedWaiting(ownerDiscordUserId, q.waiting);
-    const next = ordered[0] ?? null;
-    if (!next) return null;
+    const t = now();
+    const next = ordered.find(
+      (w) => senderReadyAt(q.lastStartBySender, w.executorDiscordUserId, limits) <= t,
+    );
+    if (!next) {
+      const readyAt = Math.min(
+        ...ordered.map((w) => senderReadyAt(q.lastStartBySender, w.executorDiscordUserId, limits)),
+      );
+      return { item: null, waitMs: Math.max(1, readyAt - t) };
+    }
     q.waiting = q.waiting.filter((w) => w.id !== next.id);
-    return next;
+    return { item: next, waitMs: 0 };
+  }
+
+  function scheduleCooldownWake(ownerDiscordUserId: string, waitMs: number): void {
+    const q = ensure(ownerDiscordUserId);
+    if (q.cooldownWakePending) return;
+    q.cooldownWakePending = true;
+    void sleep(waitMs).then(() => {
+      q.cooldownWakePending = false;
+      void pump(ownerDiscordUserId);
+    });
   }
 
   async function pump(ownerDiscordUserId: string): Promise<void> {
@@ -394,8 +481,12 @@ export function createCommandQueue(deps: CommandQueueDeps) {
         if (q.active) break;
 
         const gen = q.generation;
-        const next = await pickNext(ownerDiscordUserId);
-        if (!next) break;
+        const picked = await pickNext(ownerDiscordUserId, await deps.getLimits(ownerDiscordUserId));
+        const next = picked.item;
+        if (!next) {
+          if (picked.waitMs > 0) scheduleCooldownWake(ownerDiscordUserId, picked.waitMs);
+          break;
+        }
         if (q.generation !== gen) {
           emitTicket(next, 'removed', null, q.paused, { estimatedWaitMs: null, estimatedStartAt: null });
           continue;
@@ -445,7 +536,8 @@ export function createCommandQueue(deps: CommandQueueDeps) {
           q.waiting.push(next);
           break;
         }
-        const waitMs = resolveQueueAdvanceMs(next.durationMs, limits.progressMs);
+        const waitMs = advanceFor(next, limits);
+        q.lastStartBySender.set(next.executorDiscordUserId, now());
         q.active = next;
         q.activeStartedAt = now();
         q.activeAdvanceMs = waitMs;
@@ -491,7 +583,13 @@ export function createCommandQueue(deps: CommandQueueDeps) {
     } finally {
       q.running = false;
       // Another enqueue may have raced while we were leaving.
-      if (!q.paused && !q.advanceHeld && !q.active && q.waiting.length > 0) {
+      if (
+        !q.paused &&
+        !q.advanceHeld &&
+        !q.active &&
+        !q.cooldownWakePending &&
+        q.waiting.length > 0
+      ) {
         void pump(ownerDiscordUserId);
       }
     }

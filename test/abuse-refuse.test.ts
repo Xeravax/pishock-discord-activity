@@ -97,6 +97,7 @@ function baseDeps(overrides: Partial<OperatePolicyDeps> = {}): OperatePolicyDeps
     getConsent: async () => true,
     isExecutorBanned: async () => false,
     isEmergencyStopped: async () => false,
+    isFavoritesOnlyBlocked: async () => false,
     ...overrides,
   };
 }

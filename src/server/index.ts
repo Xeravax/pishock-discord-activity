@@ -13,6 +13,8 @@ import { participantRoutes } from './routes/participants.js';
 import { queueRoutes } from './routes/queue.js';
 import { announcementRoutes } from './routes/announcements.js';
 import { attachRealtime, broadcastRealtimeAll } from './realtime.js';
+import { safetyRoutes } from './routes/safety.js';
+import { startWearerSafetyRuntime } from './wearer-safety-runtime.js';
 import { loadAppVersion } from './app-version.js';
 import { prisma } from './db.js';
 import { closeAllBrokerSessions } from './pishock/broker.js';
@@ -79,6 +81,7 @@ async function main() {
   await app.register(activityShareRoutes, { env });
   await app.register(participantRoutes, { env });
   await app.register(queueRoutes, { env });
+  await app.register(safetyRoutes, { env });
   await app.register(announcementRoutes);
 
   const clientDist = resolveClientDist();
@@ -101,6 +104,7 @@ async function main() {
 
   await app.listen({ port: env.port, host: '0.0.0.0' });
   const disposeRealtime = attachRealtime(app.server);
+  const disposeSafety = startWearerSafetyRuntime();
   app.log.info(`Listening on ${env.publicUrl} (port ${env.port})`);
   app.log.info('Realtime WebSocket at /api/ws');
 
@@ -118,6 +122,7 @@ async function main() {
     try {
       broadcastRealtimeAll({ type: 'server_shutting_down', at: Date.now() });
       await new Promise((resolve) => setTimeout(resolve, SHUTDOWN_NOTIFY_MS));
+      disposeSafety();
       disposeRealtime();
       closeAllBrokerSessions();
       await app.close();

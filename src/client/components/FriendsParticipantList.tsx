@@ -24,6 +24,10 @@ type Props = {
   inviteBusy?: boolean;
   /** Star someone so their commands to you get queue priority */
   onTogglePriority?: (discordUserId: string, starred: boolean) => void;
+  /** Per-person limits (extra feature): set only when the wearer turned the feature on. */
+  onOpenPersonLimits?: (discordUserId: string, displayName: string) => void;
+  /** People you already set per-person limits for (cog shows highlighted). */
+  personLimitedIds?: ReadonlySet<string>;
 };
 
 /** Discord Shockers roster styled like the official PISHOCKS FAB list */
@@ -43,6 +47,8 @@ export function FriendsParticipantList({
   onInvite,
   inviteBusy = false,
   onTogglePriority,
+  onOpenPersonLimits,
+  personLimitedIds,
 }: Props) {
   const others = participants.filter((p) => p.id !== currentUserId);
   const selectedIds = selectedTargetIds ?? (selectedTargetId ? [selectedTargetId] : []);
@@ -200,7 +206,19 @@ export function FriendsParticipantList({
                     ) : null}
                   </span>
                   <span className="official-friend-meta">
-                    <span className="official-friend-name ellipsis">{p.displayName}</span>
+                    <span className="official-friend-name ellipsis">
+                      {p.displayName}
+                      {status?.safety?.approveEachCommand ? (
+                        <span className="official-friend-badge" title="They approve each command before it runs">
+                          <i className="q-icon mdi mdi-hand-back-left-outline" aria-hidden /> asks first
+                        </span>
+                      ) : null}
+                      {status?.safety?.budget?.exhausted ? (
+                        <span className="official-friend-badge" title="Their shock budget is used up">
+                          <i className="q-icon mdi mdi-battery-alert-variant-outline" aria-hidden /> budget used
+                        </span>
+                      ) : null}
+                    </span>
                     <span
                       className={`official-friend-status ${
                         banned || eStop || notLoggedIn || !status?.available ? 'bad' : 'ok'
@@ -242,6 +260,21 @@ export function FriendsParticipantList({
                       style={{ fontSize: 16 }}
                       aria-hidden
                     />
+                  </button>
+                ) : null}
+                {onOpenPersonLimits ? (
+                  <button
+                    type="button"
+                    className={`official-friend-cog ${personLimitedIds?.has(p.id) ? 'active' : ''}`}
+                    title={`Limits for ${p.displayName} on your shockers`}
+                    aria-label={`Limits for ${p.displayName}`}
+                    onClick={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      onOpenPersonLimits(p.id, p.displayName);
+                    }}
+                  >
+                    <i className="q-icon mdi mdi-cog-outline" style={{ fontSize: 16 }} aria-hidden />
                   </button>
                 ) : null}
               </div>

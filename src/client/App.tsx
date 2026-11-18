@@ -68,6 +68,31 @@ import { PsDialog } from './components/PsDialog';
 import { LinkConfirmPanel } from './components/LinkConfirmPanel';
 import { ApiKeyRevealPanel } from './components/ApiKeyRevealPanel';
 import { AuthLoadingScreen } from './components/AuthLoadingScreen';
+import { SafetyFeaturesSettings } from './components/SafetyFeaturesSettings';
+import {
+  ApprovalPrompts,
+  ApproveEachStrip,
+  CheckInMissedBanner,
+  CheckInPrompt,
+} from './components/SafetyPrompts';
+import { PersonLimitsDialog } from './components/PersonLimitsDialog';
+import {
+  ackCheckIn,
+  answerApproval,
+  clearPersonLimit,
+  loadPersonLimits,
+  loadSafety,
+  raiseBudget,
+  resetBudget as resetSafetyBudget,
+  resumeAfterCheckIn,
+  safetyErrorMessage,
+  savePersonLimit,
+  saveSafety,
+  type ApprovalRequest,
+  type PersonLimit,
+  type SafetySnapshot,
+  type WearerSafety,
+} from './safety';
 import { DefaultMenuPrompt } from './components/DefaultMenuPrompt';
 import {
   loadDefaultStartMenu,
@@ -149,7 +174,16 @@ type DevicesResponse = {
   online: Record<string, boolean>;
 };
 
-type Overlay = null | 'menu' | 'availability' | 'settings' | 'shares' | 'logs' | 'link' | 'logPrivacy';
+type Overlay =
+  | null
+  | 'menu'
+  | 'availability'
+  | 'settings'
+  | 'shares'
+  | 'logs'
+  | 'link'
+  | 'logPrivacy'
+  | 'safety';
 
 type LegalView = null | 'terms' | 'privacy';
 
@@ -231,6 +265,19 @@ export function App() {
   const [pinging, setPinging] = useState(false);
   const [pairDialog, setPairDialog] = useState<ShockerView | null>(null);
   const [lastIncoming, setLastIncoming] = useState<IncomingShockHit | null>(null);
+  /** Extra features (wearer safety): settings snapshot + live prompts. */
+  const [safety, setSafety] = useState<SafetySnapshot | null>(null);
+  const [approvalQueue, setApprovalQueue] = useState<ApprovalRequest[]>([]);
+  const [approvalBusyId, setApprovalBusyId] = useState<string | null>(null);
+  const [checkInDeadline, setCheckInDeadline] = useState<number | null>(null);
+  const [checkInMissed, setCheckInMissed] = useState(false);
+  const [safetyBusy, setSafetyBusy] = useState(false);
+  const [personLimits, setPersonLimits] = useState<Record<string, PersonLimit>>({});
+  const [personLimitTarget, setPersonLimitTarget] = useState<{ id: string; name: string } | null>(
+    null,
+  );
+  /** Groups one multishock fire (several shockers, same tick) into one cooldown / approval. */
+  const operateBatchRef = useRef<{ id: string; at: number } | null>(null);
   /** Per-shocker Discord share caps (what guests are limited to) */
   const [discordShareLimits, setDiscordShareLimits] = useState<Record<number, ShareLimitRow>>(
     {},
@@ -867,6 +914,12 @@ export function App() {
           setMe((prev) =>
             prev ? { ...prev, commandQueueEnabled: Boolean(event.enabled) } : prev,
           );
+          // Queue "stars only" and Extra features "Favorites only" are one setting.
+          setSafety((prev) =>
+            prev && prev.settings.favoritesOnly !== Boolean(event.starOnly)
+              ? { ...prev, settings: { ...prev.settings, favoritesOnly: Boolean(event.starOnly) } }
+              : prev,
+          );
         }
         return;
       }
@@ -891,6 +944,43 @@ export function App() {
               setMyQueueTicket((prev) => (prev?.itemId === event.itemId ? null : prev));
             }, 2500);
           }
+        }
+        return;
+      }
+      if (event.type === 'approval_request') {
+        if (selfIdRef.current && event.ownerDiscordUserId === selfIdRef.current) {
+          const { type: _type, ...req } = event;
+          setApprovalQueue((prev) => [...prev.filter((r) => r.approvalId !== req.approvalId), req]);
+        }
+        return;
+      }
+      if (event.type === 'approval_resolved') {
+        setApprovalQueue((prev) => prev.filter((r) => r.approvalId !== event.approvalId));
+        return;
+      }
+      if (event.type === 'checkin_due') {
+        if (selfIdRef.current && event.ownerDiscordUserId === selfIdRef.current) {
+          setCheckInDeadline(event.deadline);
+        }
+        return;
+      }
+      if (event.type === 'checkin_missed') {
+        if (selfIdRef.current && event.ownerDiscordUserId === selfIdRef.current) {
+          setCheckInDeadline(null);
+          setCheckInMissed(true);
+          void refreshMe(token).catch(() => undefined);
+        }
+        return;
+      }
+      if (event.type === 'budget_exhausted') {
+        if (selfIdRef.current && event.ownerDiscordUserId === selfIdRef.current) {
+          setActionError(null);
+          setActionNotice(
+            `Your shock budget is used up (${event.usedShocks} shocks). Reset or raise it in Extra features.`,
+          );
+          void loadSafety(token)
+            .then(setSafety)
+            .catch(() => undefined);
         }
         return;
       }
@@ -1804,16 +1894,33 @@ export function App() {
 
   const operate = async (input: Record<string, unknown>) => {
     if (!token) return;
-    operateInflightRef.current += 1;
-    setBusy(true);
+    const targetId =
+      typeof input.targetDiscordUserId === 'string'
+        ? input.targetDiscordUserId
+        : selectedTargetId && friendsMode
+          ? selectedTargetId
+          : null;
+    // Commands fired in the same tick (multishock) share one batch id.
+    const nowMs = Date.now();
+    if (!operateBatchRef.current || nowMs - operateBatchRef.current.at > 250) {
+      operateBatchRef.current = {
+        id: `b${nowMs.toString(36)}${Math.random().toString(36).slice(2, 8)}`,
+        at: nowMs,
+      };
+    }
+    const batchId = operateBatchRef.current.id;
+    // Approve-each wearers hold the request until they answer — don't lock the controls meanwhile.
+    const awaitsApproval = Boolean(targetId && participantStatus[targetId]?.safety?.approveEachCommand);
+    if (!awaitsApproval) {
+      operateInflightRef.current += 1;
+      setBusy(true);
+    }
     setActionError(null);
+    if (awaitsApproval && targetId) {
+      const who = participants.find((p) => p.id === targetId)?.displayName ?? 'They';
+      setActionNotice(`Waiting for ${who} to accept…`);
+    }
     try {
-      const targetId =
-        typeof input.targetDiscordUserId === 'string'
-          ? input.targetDiscordUserId
-          : selectedTargetId && friendsMode
-            ? selectedTargetId
-            : null;
       const instanceId = getActivityInstanceId();
       const locationHint = await resolveActivityLocationHint(token).catch(() => null);
       if (targetId) {
@@ -1825,10 +1932,15 @@ export function App() {
           paused?: boolean;
           estimatedWaitMs?: number;
           estimatedStartAt?: number;
+          clampedReason?: string | null;
         }>(`/participants/${targetId}/operate`, token, {
           method: 'POST',
-          body: JSON.stringify({ ...input, instanceId, locationHint }),
+          body: JSON.stringify({ ...input, instanceId, locationHint, batchId }),
         });
+        if (awaitsApproval) setActionNotice(null);
+        if (result.clampedReason === 'escalation') {
+          setActionNotice('Intensity was lowered — they limit how fast shocks can escalate.');
+        }
         if (result.queued && result.itemId) {
           setMyQueueTicket({
             ownerDiscordUserId: targetId,
@@ -1869,9 +1981,29 @@ export function App() {
       } else if (err instanceof ApiError && err.code === 'EMERGENCY_STOP') {
         setActionError('Emergency stop is engaged — owner must release STOP');
         if (token) void refreshParticipantStatus(token, participants, true).catch(() => undefined);
-      } else if (err instanceof ApiError && err.code === 'STAR_ONLY') {
-        setActionError('They only accept commands from starred people');
+      } else if (
+        err instanceof ApiError &&
+        (err.code === 'STAR_ONLY' || err.code === 'FAVORITES_ONLY')
+      ) {
+        setActionNotice(null);
+        setActionError(safetyErrorMessage(err.code, err.message));
         if (token) void refreshParticipantStatus(token, participants, true).catch(() => undefined);
+      } else if (
+        err instanceof ApiError &&
+        [
+          'COOLDOWN',
+          'BUDGET_EXHAUSTED',
+          'APPROVAL_DENIED',
+          'APPROVAL_TIMEOUT',
+          'APPROVAL_CANCELED',
+          'PERSON_LIMIT',
+        ].includes(err.code ?? '')
+      ) {
+        setActionNotice(null);
+        setActionError(safetyErrorMessage(err.code, err.message));
+        if (err.code === 'BUDGET_EXHAUSTED' && token) {
+          void refreshParticipantStatus(token, participants, true).catch(() => undefined);
+        }
       } else if (err instanceof ApiError && err.code === 'QUEUE_HALTED') {
         setActionError('Their queue is closed to new commands');
         if (token) void refreshParticipantStatus(token, participants, true).catch(() => undefined);
@@ -1900,8 +2032,10 @@ export function App() {
         setActionError(err instanceof Error ? err.message : String(err));
       }
     } finally {
-      operateInflightRef.current = Math.max(0, operateInflightRef.current - 1);
-      if (operateInflightRef.current === 0) setBusy(false);
+      if (!awaitsApproval) {
+        operateInflightRef.current = Math.max(0, operateInflightRef.current - 1);
+        if (operateInflightRef.current === 0) setBusy(false);
+      }
     }
   };
 
@@ -2274,6 +2408,186 @@ export function App() {
     };
   }, [token, me?.consent]);
 
+  // --- Extra features (wearer safety) -------------------------------------
+  useEffect(() => {
+    if (!token || !me?.consent) return;
+    let cancelled = false;
+    loadSafety(token)
+      .then((snap) => {
+        if (cancelled) return;
+        setSafety(snap);
+        setApprovalQueue(snap.pendingApprovals);
+        setCheckInDeadline(snap.checkInDeadline);
+      })
+      .catch(() => {
+        /* feature defaults (all off) until the settings load */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [token, me?.consent]);
+
+  useEffect(() => {
+    if (!token || !safety?.settings.perPersonLimitsEnabled) {
+      setPersonLimits({});
+      return;
+    }
+    let cancelled = false;
+    loadPersonLimits(token)
+      .then((rows) => {
+        if (!cancelled) {
+          setPersonLimits(Object.fromEntries(rows.map((r) => [r.controllerDiscordUserId, r])));
+        }
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [token, safety?.settings.perPersonLimitsEnabled]);
+
+  const loadSafetyCb = useCallback(async (): Promise<SafetySnapshot> => {
+    if (!token) throw new Error('Not signed in');
+    const snap = await loadSafety(token);
+    setSafety(snap);
+    return snap;
+  }, [token]);
+
+  const saveSafetyCb = useCallback(
+    async (next: Partial<WearerSafety>): Promise<SafetySnapshot> => {
+      if (!token) throw new Error('Not signed in');
+      const snap = await saveSafety(token, next);
+      setSafety(snap);
+      setApprovalQueue(snap.pendingApprovals);
+      setCheckInDeadline(snap.checkInDeadline);
+      return snap;
+    },
+    [token],
+  );
+
+  const resetBudgetCb = useCallback(async (): Promise<SafetySnapshot> => {
+    if (!token) throw new Error('Not signed in');
+    await resetSafetyBudget(token);
+    return loadSafetyCb();
+  }, [token, loadSafetyCb]);
+
+  const raiseBudgetCb = useCallback(
+    async (add: { shocks?: number; shockMs?: number }): Promise<SafetySnapshot> => {
+      if (!token) throw new Error('Not signed in');
+      const snap = await raiseBudget(token, add);
+      setSafety(snap);
+      return snap;
+    },
+    [token],
+  );
+
+  const answerApprovalCb = useCallback(
+    async (approvalId: string, accept: boolean) => {
+      if (!token) return;
+      setApprovalBusyId(approvalId);
+      try {
+        await answerApproval(token, approvalId, accept);
+      } catch {
+        /* already expired / answered elsewhere */
+      } finally {
+        setApprovalQueue((prev) => prev.filter((r) => r.approvalId !== approvalId));
+        setApprovalBusyId(null);
+      }
+    },
+    [token],
+  );
+
+  const disableApproveEach = useCallback(async () => {
+    setSafetyBusy(true);
+    try {
+      await saveSafetyCb({ approveEachCommand: false });
+      setApprovalQueue([]);
+      setActionNotice('Approve each command is off.');
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSafetyBusy(false);
+    }
+  }, [saveSafetyCb]);
+
+  const ackCheckInCb = useCallback(async () => {
+    if (!token) return;
+    setSafetyBusy(true);
+    try {
+      await ackCheckIn(token);
+      setCheckInDeadline(null);
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSafetyBusy(false);
+    }
+  }, [token]);
+
+  const resumeAfterCheckInCb = useCallback(async () => {
+    if (!token) return;
+    setSafetyBusy(true);
+    try {
+      const n = await resumeAfterCheckIn(token);
+      setCheckInMissed(false);
+      setActionNotice(n ? `Resumed ${n} shocker${n === 1 ? '' : 's'}.` : 'Nothing to resume.');
+      void refreshMe(token).catch(() => undefined);
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSafetyBusy(false);
+    }
+  }, [token, refreshMe]);
+
+  const savePersonLimitCb = useCallback(
+    async (discordUserId: string, patch: Omit<PersonLimit, 'controllerDiscordUserId'>) => {
+      if (!token) throw new Error('Not signed in');
+      const row = await savePersonLimit(token, discordUserId, patch);
+      setPersonLimits((prev) => ({ ...prev, [discordUserId]: row }));
+    },
+    [token],
+  );
+
+  const clearPersonLimitCb = useCallback(
+    async (discordUserId: string) => {
+      if (!token) throw new Error('Not signed in');
+      await clearPersonLimit(token, discordUserId);
+      setPersonLimits((prev) => {
+        const next = { ...prev };
+        delete next[discordUserId];
+        return next;
+      });
+    },
+    [token],
+  );
+
+  const safetyOverlays = (
+    <>
+      <ApprovalPrompts
+        requests={approvalQueue}
+        busyId={approvalBusyId}
+        onAnswer={(id, accept) => void answerApprovalCb(id, accept)}
+      />
+      {checkInDeadline ? (
+        <CheckInPrompt deadline={checkInDeadline} busy={safetyBusy} onOk={() => void ackCheckInCb()} />
+      ) : null}
+    </>
+  );
+
+  const safetyStrips =
+    safety?.settings.approveEachCommand || checkInMissed ? (
+      <div className="safety-strips">
+        {checkInMissed ? (
+          <CheckInMissedBanner
+            busy={safetyBusy}
+            onResume={() => void resumeAfterCheckInCb()}
+            onDismiss={() => setCheckInMissed(false)}
+          />
+        ) : null}
+        {safety?.settings.approveEachCommand ? (
+          <ApproveEachStrip busy={safetyBusy} onDisable={() => void disableApproveEach()} />
+        ) : null}
+      </div>
+    ) : null;
+
   const loadLogPrivacy = useCallback(async (): Promise<LogPrivacy> => {
     if (!token) throw new Error('Not signed in');
     const res = await apiFetch<{ privacy?: Partial<LogPrivacy> }>('/logs/privacy', token);
@@ -2334,6 +2648,7 @@ export function App() {
       personal: PersonalLimits;
       queue?: QueuePanelSettings;
       logPrivacy?: LogPrivacy;
+      safety?: WearerSafety;
     }) => {
       setSetupShareBusy(true);
       setLinkError(null);
@@ -2364,9 +2679,14 @@ export function App() {
           canBeep: s.canBeep,
           canHold: s.canHold,
           requiredWarningLevel: s.requiredWarningLevel ?? 'none',
+          maxIntensityStep: s.maxIntensityStep ?? null,
         }));
         await saveSettings({ personal: result.personal, shares });
         if (result.logPrivacy) await saveLogPrivacy(result.logPrivacy);
+        if (result.queue && result.safety) {
+          // One setting: "Favorites only" is also the queue's stars-only flag.
+          result.queue = { ...result.queue, starOnly: result.safety.favoritesOnly };
+        }
         if (result.queue && token) {
           const queueResult = await apiFetch<QueueState & { ok: boolean }>('/queue/settings', token, {
             method: 'POST',
@@ -2377,13 +2697,14 @@ export function App() {
             prev ? { ...prev, commandQueueEnabled: Boolean(queueResult.enabled) } : prev,
           );
         }
+        if (result.safety) await saveSafetyCb(result.safety);
         finishSetupShare();
       } catch (err) {
         setLinkError(err instanceof Error ? err.message : String(err));
         setSetupShareBusy(false);
       }
     },
-    [saveSettings, finishSetupShare, token],
+    [saveSettings, finishSetupShare, token, saveSafetyCb],
   );
 
   useEffect(() => {
@@ -2553,6 +2874,7 @@ export function App() {
         initialSelectedIds={initialSelectedIds}
         initialShares={savedShareRows}
         initialLogPrivacy={logPrivacy ?? undefined}
+        initialSafety={safety?.settings}
         initialQueue={{
           enabled: queueState.enabled,
           progressMs: queueState.progressMs,
@@ -2656,7 +2978,13 @@ export function App() {
               : null,
           }
         : null;
-      return <PipIncomingShock hit={pipHit} queueNext={pipQueueNext} controls={pipControls} />;
+      return (
+        <>
+          {safetyOverlays}
+          {safetyStrips}
+          <PipIncomingShock hit={pipHit} queueNext={pipQueueNext} controls={pipControls} />
+        </>
+      );
     }
 
     const toastText = actionError || actionNotice;
@@ -2664,6 +2992,8 @@ export function App() {
 
     return (
       <div className="official-activity-root">
+        {safetyOverlays}
+        {safetyStrips}
         {toastText && toastTone ? (
           <div
             className={`q-banner text-white official-error-toast${
@@ -2833,6 +3163,12 @@ export function App() {
                   ? (id, starred) => void toggleQueueStar(id, starred)
                   : undefined
               }
+              onOpenPersonLimits={
+                me.pishockLinked && safety?.settings.perPersonLimitsEnabled
+                  ? (id, name) => setPersonLimitTarget({ id, name })
+                  : undefined
+              }
+              personLimitedIds={new Set(Object.keys(personLimits))}
             />
           )}
           onOperate={(input) => {
@@ -2984,6 +3320,7 @@ export function App() {
                 ['shares', 'Shares', 'mdi-share-variant'],
                 ['logs', 'Logs', 'mdi-message-text-clock'],
                 ['logPrivacy', 'Log sharing', 'mdi-eye-settings-outline'],
+                ['safety', 'Extra features', 'mdi-shield-account-outline'],
               ] as const
             )
               .filter(([id]) => me.pishockLinked || id === 'logs' || id === 'logPrivacy')
@@ -3003,6 +3340,10 @@ export function App() {
                   }
                   if (id === 'logPrivacy') {
                     setOverlay('logPrivacy');
+                    return;
+                  }
+                  if (id === 'safety') {
+                    setOverlay('safety');
                     return;
                   }
                   if (id === 'settings') setSettingsFocusShockerId(null);
@@ -3194,6 +3535,39 @@ export function App() {
         >
           <LogPrivacySettings onLoad={loadLogPrivacy} onSave={saveLogPrivacy} />
         </PsDialog>
+
+        <PsDialog
+          open={overlay === 'safety'}
+          title="Extra features"
+          onClose={() => setOverlay(null)}
+          wide
+        >
+          <SafetyFeaturesSettings
+            onLoad={loadSafetyCb}
+            onSave={async (next) => {
+              const snap = await saveSafetyCb(next);
+              // Keep the queue's stars-only flag in step (same setting).
+              setQueueState((prev) => ({ ...prev, starOnly: snap.settings.favoritesOnly }));
+              return snap;
+            }}
+            onResetBudget={resetBudgetCb}
+            onRaiseBudget={raiseBudgetCb}
+            queueEnabled={queueState.enabled}
+          />
+        </PsDialog>
+
+        <PersonLimitsDialog
+          open={Boolean(personLimitTarget)}
+          personName={personLimitTarget?.name ?? ''}
+          initial={personLimitTarget ? (personLimits[personLimitTarget.id] ?? null) : null}
+          onClose={() => setPersonLimitTarget(null)}
+          onSave={(patch) =>
+            personLimitTarget ? savePersonLimitCb(personLimitTarget.id, patch) : Promise.resolve()
+          }
+          onClear={() =>
+            personLimitTarget ? clearPersonLimitCb(personLimitTarget.id) : Promise.resolve()
+          }
+        />
 
         <PsDialog open={overlay === 'shares'} title="Shares" onClose={() => setOverlay(null)} wide>
           <SharesPanel

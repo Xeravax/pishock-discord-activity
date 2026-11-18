@@ -36,8 +36,36 @@ model DiscordUser {
   commandQueueProgressMs Int @default(0)
   /// How many waiting commands one sender may have lined up.
   commandQueueMaxPerSender Int @default(3)
-  /// When true, only starred participants may operate this wearer's shared shockers.
-  commandQueueStarOnly Boolean @default(false)
+  /// When true, only favorited (starred) participants may operate this wearer's shared shockers.
+  /// Global: applies with or without the command queue (was commandQueueStarOnly).
+  favoritesOnly Boolean @default(false)
+  /// Extra features: every incoming command must be accepted by the wearer first.
+  approveEachCommand Boolean @default(false)
+  /// How long a sender waits for the wearer to accept before the command is dropped.
+  approvalTimeoutMs Int @default(20000)
+  /// Minimum gap between two commands from the same sender (0 = off).
+  cooldownPerSenderMs Int @default(0)
+  /// Minimum gap between any two commands on this wearer (0 = off). Queue uses max(this, progress).
+  cooldownGlobalMs Int @default(0)
+  /// Shock budget: cap shocks / shock-time per period; wearer can reset or raise it any time.
+  budgetEnabled Boolean @default(false)
+  /// session | day | manual
+  budgetPeriod String @default("session")
+  budgetMaxShocks Int?
+  budgetMaxShockMs Int?
+  budgetUsedShocks Int @default(0)
+  budgetUsedShockMs Int @default(0)
+  budgetPeriodStartedAt DateTime?
+  /// IANA timezone used for the "day" budget period.
+  budgetTimezone String?
+  /// Last time the wearer had a live activity connection (session budget / recaps).
+  lastSeenAt DateTime?
+  /// Periodic in-app "Still OK?" check; a missed check pauses all shares.
+  checkInEnabled Boolean @default(false)
+  checkInIntervalMs Int @default(900000)
+  checkInGraceMs Int @default(60000)
+  /// Per-person limits: lower caps for specific controllers (settings cog in the people list).
+  perPersonLimitsEnabled Boolean @default(false)
   /// Log sharing: where other people can see hits on you (everywhere|server|channel|private).
   logVisibility      String  @default("everywhere")
   /// Log sharing: what other people can see about hits on you.
@@ -62,6 +90,8 @@ model DiscordUser {
   bannedBy       ActivityBan[]   @relation("BannedUser")
   queueStarsGiven ActivityQueueStar[] @relation("QueueStarOwner")
   queueStarsReceived ActivityQueueStar[] @relation("QueueStarStarred")
+  personLimitsOwned  ActivityPersonLimit[] @relation("PersonLimitOwner")
+  personLimitsReceived ActivityPersonLimit[] @relation("PersonLimitController")
 }
 
 model PiShockSession {
@@ -121,6 +151,8 @@ model ActivityShare {
   canHold       Boolean     @default(true)
   /// Guests must use at least this warning before shock (none|small|mid|long)
   requiredWarningLevel String @default("none")
+  /// Escalation cap: max shock-intensity increase over the previous shock (null = off).
+  maxIntensityStep Int?
   createdAt     DateTime    @default(now())
   updatedAt     DateTime    @updatedAt
 
@@ -150,6 +182,29 @@ model ActivityQueueStar {
   createdAt            DateTime    @default(now())
 
   @@unique([ownerDiscordUserId, starredDiscordUserId])
+  @@index([ownerDiscordUserId])
+}
+
+/// Wearer-set caps for one specific controller (nest under share + personal limits).
+model ActivityPersonLimit {
+  id                      String      @id @default(cuid())
+  ownerDiscordUserId      String
+  owner                   DiscordUser @relation("PersonLimitOwner", fields: [ownerDiscordUserId], references: [id], onDelete: Cascade)
+  controllerDiscordUserId String
+  controller              DiscordUser @relation("PersonLimitController", fields: [controllerDiscordUserId], references: [id], onDelete: Cascade)
+  shockMaxIntensity       Int?
+  shockMaxDurationMs      Int?
+  vibMaxIntensity         Int?
+  vibMaxDurationMs        Int?
+  beepMaxIntensity        Int?
+  beepMaxDurationMs       Int?
+  canShock                Boolean     @default(true)
+  canVibrate              Boolean     @default(true)
+  canBeep                 Boolean     @default(true)
+  createdAt               DateTime    @default(now())
+  updatedAt               DateTime    @updatedAt
+
+  @@unique([ownerDiscordUserId, controllerDiscordUserId], map: "ActivityPersonLimit_owner_controller_key")
   @@index([ownerDiscordUserId])
 }
 

@@ -58,6 +58,7 @@ export type ShareLimitRow = {
   canBeep: boolean;
   canHold: boolean;
   requiredWarningLevel: WarningLevel;
+  maxIntensityStep?: number | null;
 };
 
 type Props = {
@@ -179,6 +180,7 @@ function shareToMode(row: ShareLimitRow): ModeLimitsValue {
       maxDurationMs: row.beepMaxDurationMs,
     },
     requiredWarningLevel: normalizeWarningLevel(row.requiredWarningLevel),
+    maxIntensityStep: row.maxIntensityStep ?? null,
   };
 }
 
@@ -202,6 +204,7 @@ function modeToShare(row: ShareLimitRow, m: ModeLimitsValue): ShareLimitRow {
     beepMinDurationMs: m.beep.minDurationMs,
     beepMaxDurationMs: m.beep.maxDurationMs,
     requiredWarningLevel: m.requiredWarningLevel,
+    maxIntensityStep: m.maxIntensityStep ?? null,
   };
 }
 

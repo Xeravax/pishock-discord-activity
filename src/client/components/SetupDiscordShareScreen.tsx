@@ -23,6 +23,8 @@ import {
   LogPrivacyForm,
   type LogPrivacy,
 } from './LogPrivacySettings';
+import { SafetyFeaturesForm } from './SafetyFeaturesForm';
+import { normalizeWearerSafety, type WearerSafety } from '../safety';
 
 type SetupStep = 'loading' | 'devices' | 'limits' | 'logs' | 'features';
 
@@ -40,6 +42,8 @@ type Props = {
   initialQueue?: QueuePanelSettings;
   /** Current log sharing settings (defaults when unknown). */
   initialLogPrivacy?: LogPrivacy;
+  /** Current extra-feature safety settings (defaults when unknown). */
+  initialSafety?: WearerSafety;
   /** Demo / review only: open directly on this step once devices are ready. */
   startStep?: 'devices' | 'limits' | 'logs' | 'features';
   /** True after post-confirm device fetch finishes (even if the list is empty). */
@@ -51,6 +55,7 @@ type Props = {
     personal: PersonalLimits;
     queue?: QueuePanelSettings;
     logPrivacy?: LogPrivacy;
+    safety?: WearerSafety;
   }) => void | Promise<void>;
   onSkip: () => void;
 };
@@ -188,6 +193,7 @@ function savedShareToMode(s: ShockerView, row: ShareLimitRow): ModeLimitsValue {
       maxDurationMs: beepMaxD,
     },
     requiredWarningLevel: normalizeWarningLevel(row.requiredWarningLevel),
+    maxIntensityStep: row.maxIntensityStep ?? null,
   };
 }
 
@@ -224,6 +230,7 @@ function toShare(
     canBeep: mode.canBeep,
     canHold: mode.canHold,
     requiredWarningLevel: mode.requiredWarningLevel,
+    maxIntensityStep: mode.maxIntensityStep ?? null,
   };
 }
 
@@ -238,6 +245,7 @@ export function SetupDiscordShareScreen({
   initialShares,
   initialQueue,
   initialLogPrivacy,
+  initialSafety,
   startStep,
   devicesReady = false,
   busy,
@@ -261,6 +269,15 @@ export function SetupDiscordShareScreen({
   );
   const [logTouched, setLogTouched] = useState(false);
   const [openFeature, setOpenFeature] = useState<'queue' | null>(null);
+  const [safety, setSafety] = useState<WearerSafety>(() =>
+    normalizeWearerSafety(initialSafety ?? { favoritesOnly: initialQueue?.starOnly ?? false }),
+  );
+  const [safetyTouched, setSafetyTouched] = useState(false);
+
+  useEffect(() => {
+    if (safetyTouched || !initialSafety) return;
+    setSafety(normalizeWearerSafety(initialSafety));
+  }, [safetyTouched, initialSafety]);
 
   useEffect(() => {
     if (logTouched || !initialLogPrivacy) return;
@@ -347,6 +364,7 @@ export function SetupDiscordShareScreen({
       queue: includeQueue ? queue : undefined,
       // Untouched = what's already saved (or the server default), so don't overwrite.
       logPrivacy: logTouched ? logPrivacy : undefined,
+      safety: includeQueue && safetyTouched ? safety : undefined,
     });
   };
 
@@ -354,7 +372,7 @@ export function SetupDiscordShareScreen({
     go('logs', 'forward');
   };
 
-  /** The extras step only holds the command queue, which needs a shared shocker. */
+  /** Extras (queue + safety features) only matter once something is shared. */
   const hasExtras = selectedOwned.length > 0;
 
   const stepIndex =
@@ -731,8 +749,20 @@ export function SetupDiscordShareScreen({
                 </div>
               ) : null}
 
-              <div className="setup-features">
-                {hasExtras ? (
+              <SafetyFeaturesForm
+                value={safety}
+                disabled={busy}
+                queueEnabled={queue.enabled}
+                onChange={(next) => {
+                  setSafetyTouched(true);
+                  setSafety(next);
+                  if (next.favoritesOnly !== safety.favoritesOnly) {
+                    // Same setting as the queue's stars-only flag.
+                    setQueueTouched(true);
+                    setQueue((q) => ({ ...q, starOnly: next.favoritesOnly }));
+                  }
+                }}
+                leading={hasExtras ? (
                   <section className={`setup-feature${openFeature === 'queue' ? ' is-open' : ''}`}>
                     <button
                       type="button"
@@ -811,23 +841,6 @@ export function SetupDiscordShareScreen({
                             setQueue((q) => ({ ...q, maxPerSender }));
                           }}
                         />
-                        <label className={`auth-boot__shocker${queue.starOnly ? ' is-on' : ''}`}>
-                          <input
-                            type="checkbox"
-                            checked={queue.starOnly}
-                            disabled={busy}
-                            onChange={(e) => {
-                              setQueueTouched(true);
-                              setQueue((q) => ({ ...q, starOnly: e.target.checked }));
-                            }}
-                          />
-                          <span className="auth-boot__shocker-copy">
-                            <span className="auth-boot__shocker-name">Stars only</span>
-                            <span className="auth-boot__shocker-hub">
-                              Only people you star can control your shockers
-                            </span>
-                          </span>
-                        </label>
                       </div>
                     ) : null}
 
@@ -835,8 +848,7 @@ export function SetupDiscordShareScreen({
                     ) : null}
                   </section>
                 ) : null}
-
-              </div>
+              />
 
               <div className="auth-boot__actions">
                 <button

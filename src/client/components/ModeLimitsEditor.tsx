@@ -27,6 +27,8 @@ export type ModeLimitsValue = {
   vibrate: ModeBand;
   beep: ModeBand;
   requiredWarningLevel: WarningLevel;
+  /** Escalation cap (share only): max shock-intensity jump over the previous shock. */
+  maxIntensityStep?: number | null;
 };
 
 type ModeKey = 'shock' | 'vibrate' | 'extra';
@@ -320,6 +322,22 @@ export function ModeLimitsEditor({
                   </span>
                 </label>
               </>
+            )}
+
+            {hideActionToggles ? null : (
+              <div className="mode-limits-escalation">
+                <LimitSlider
+                  label="Max jump between shocks"
+                  value={value.maxIntensityStep ?? 0}
+                  min={0}
+                  max={50}
+                  step={1}
+                  formatValue={(n) => (n <= 0 ? 'Off' : `+${n}%`)}
+                  hint="Each shock can be at most this much stronger than the previous one (within 10 min)."
+                  disabled={disabled || !value.canShock}
+                  onChange={(n) => onChange({ ...value, maxIntensityStep: n <= 0 ? null : n })}
+                />
+              </div>
             )}
 
             {showWarning ? (
