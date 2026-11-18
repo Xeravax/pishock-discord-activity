@@ -8,6 +8,8 @@ import {
   getPersonalActivityLimits,
   isEmergencyStopped,
   isExecutorBanned,
+  getCommandQueueSettings,
+  isQueueStarred,
 } from './session.js';
 import {
   LIMIT_BAND_CONFLICT_MESSAGE,
@@ -273,6 +275,8 @@ export type OperatePolicyDeps = {
     executorDiscordUserId: string,
   ) => Promise<boolean>;
   isEmergencyStopped: (discordUserId: string, shockerId: number) => Promise<boolean>;
+  /** Wearer has "Favorites only" on and the caller is not one of their favorites. */
+  isFavoritesOnlyBlocked?: (ownerDiscordUserId: string, callerDiscordUserId: string) => Promise<boolean>;
   /** Owner PiShock credentials, when this process can load them. */
   loadOwnerPiShockCreds?: (discordUserId: string) => Promise<PiShockCreds | null>;
   /** Pause check that already has the owner's credentials. Do not call with the caller's key. */
@@ -291,6 +295,8 @@ const defaultOperatePolicyDeps: OperatePolicyDeps = {
   getConsent,
   isExecutorBanned,
   isEmergencyStopped,
+  isFavoritesOnlyBlocked: async (owner, caller) =>
+    (await getCommandQueueSettings(owner)).starOnly && !(await isQueueStarred(owner, caller)),
 };
 
 function numField(row: Record<string, unknown>, ...keys: string[]): number | null {
@@ -445,6 +451,16 @@ export async function resolveOwnOperatePolicy(
             'This user has blocked you from controlling their device',
             403,
             'BANNED',
+          );
+        }
+        if (
+          deps.isFavoritesOnlyBlocked &&
+          (await deps.isFavoritesOnlyBlocked(registered.discordUserId, callerDiscordUserId))
+        ) {
+          throw new OperatePolicyError(
+            'This person only accepts commands from their favorites',
+            403,
+            'FAVORITES_ONLY',
           );
         }
         if (!registered.enabled || registered.paused) {

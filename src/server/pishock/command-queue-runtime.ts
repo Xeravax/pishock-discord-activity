@@ -9,13 +9,16 @@ import {
   resolveDeviceCeilingsFromPiShock,
   scheduleHoldAutoEnd,
 } from '../operate-policy.js';
-import { bandForOperation, nestBands, personalBandsFromUser, shareBandsFromRow } from '../limit-bands.js';
+import { bandForOperation, personalBandsFromUser, shareBandsFromRow } from '../limit-bands.js';
 import { atLeastWarning, normalizeWarningLevel, warningRank, type WarningLevel } from '../../shared/warning.js';
 import {
   findActivityShareByShocker,
+  getAdminLimitConsent,
   getCommandQueueSettings,
   getConsent,
+  getEffectivePersonLimit,
   getPersonalActivityLimits,
+  getWearerSafety,
   isEmergencyStopped,
   isExecutorBanned,
   isQueueStarred,
@@ -42,13 +45,33 @@ import {
   type QueuedOperation,
 } from './command-queue.js';
 import type { ActivityLocationContext } from '../discord-location.js';
+import {
+  applyEscalationCap,
+  assertPersonAllows,
+  buildEffectiveModes,
+  deviceOnlyModes,
+} from '../wearer-safety.js';
+import { hasLimitConsent, type BypassGate } from '../admin-bypass.js';
+import {
+  escalation,
+  queuedItemWithinBudget,
+  recordWearerHit,
+  setCheckInMissedHandler,
+} from '../wearer-safety-runtime.js';
 
 export type QueuedOperatePayload = {
   env: AppEnv;
   location: ActivityLocationContext | null;
   /** Executor had a PiShock session at enqueue time; re-checked at run. */
   executorHadSession: boolean;
+  /** Admin bypass was used at enqueue (admin verified server-side then). */
+  adminBypass?: boolean;
+  bypassedGates?: BypassGate[];
 };
+
+function bypassedFor(item: QueueItemInternal): BypassGate[] {
+  return (item.payload as QueuedOperatePayload | undefined)?.bypassedGates ?? [];
+}
 
 function executorLabel(user: {
   username?: string | null;
@@ -78,8 +101,10 @@ async function auditParticipantCommand(input: {
   success: boolean;
   detail: string;
   location?: ActivityLocationContext | null;
+  bypassedGates?: BypassGate[];
 }) {
   const loc = input.location;
+  const bypassedGates = input.bypassedGates ?? [];
   const base = {
     executorDiscordUserId: input.executorDiscordUserId,
     targetDiscordUserId: input.targetDiscordUserId,
@@ -100,6 +125,8 @@ async function auditParticipantCommand(input: {
     locationKind: loc?.locationKind,
     locationName: loc?.locationName,
     locationIconUrl: loc?.locationIconUrl,
+    adminBypass: bypassedGates.length > 0,
+    bypassedGates,
   };
   await Promise.all([
     logCommand({ discordUserId: input.executorDiscordUserId, ...base }),
@@ -134,7 +161,39 @@ async function auditParticipantCommand(input: {
       },
       { discordUserId: input.targetDiscordUserId },
     );
+    if (bypassedGates.length > 0) {
+      broadcastRealtime(
+        {
+          type: 'admin_bypass',
+          targetDiscordUserId: input.targetDiscordUserId,
+          adminDiscordUserId: input.executorDiscordUserId,
+          adminName: input.executorGlobalName ?? input.executorUsername ?? null,
+          action: input.action,
+          intensity: input.intensity,
+          durationMs: input.durationMs,
+          gates: bypassedGates,
+          at: Date.now(),
+        },
+        { discordUserId: input.targetDiscordUserId },
+      );
+    }
   }
+}
+
+function queuedModes(
+  share: Parameters<typeof shareBandsFromRow>[0] & { deviceMaxIntensity: number; deviceMaxDurationMs: number },
+  personalRow: Parameters<typeof personalBandsFromUser>[0],
+  personLimit: Awaited<ReturnType<typeof getEffectivePersonLimit>>,
+) {
+  const shareBands = shareBandsFromRow(share);
+  const personal = personalBandsFromUser(personalRow);
+  return buildEffectiveModes(
+    shareBands,
+    personal,
+    { maxIntensity: share.deviceMaxIntensity, maxDurationMs: share.deviceMaxDurationMs },
+    atLeastWarning(shareBands.requiredWarningLevel, personal.requiredWarningLevel),
+    personLimit,
+  );
 }
 
 function opFor(operation: QueuedOperation) {
@@ -143,17 +202,24 @@ function opFor(operation: QueuedOperation) {
   return ShockerOp.Beep;
 }
 
-async function validateQueuedItem(item: QueueItemInternal): Promise<boolean> {
+export async function validateQueuedItem(item: QueueItemInternal): Promise<boolean> {
   const settings = await getCommandQueueSettings(item.ownerDiscordUserId);
   if (!settings.enabled) {
     return false;
   }
-  if (settings.starOnly) {
+  const bypassed = bypassedFor(item);
+  if (settings.starOnly && !bypassed.includes('favorites')) {
     if (!(await isQueueStarred(item.ownerDiscordUserId, item.executorDiscordUserId))) {
       return false;
     }
   }
   if (await isExecutorBanned(item.ownerDiscordUserId, item.executorDiscordUserId)) {
+    return false;
+  }
+  if (
+    !bypassed.includes('budget') &&
+    !(await queuedItemWithinBudget(item.ownerDiscordUserId, item.operation, item.durationMs))
+  ) {
     return false;
   }
   if (!(await getConsent(item.ownerDiscordUserId))) {
@@ -235,7 +301,7 @@ async function endQueuedItem(item: QueueItemInternal): Promise<boolean> {
   return published;
 }
 
-async function executeQueuedItem(
+export async function executeQueuedItem(
   item: QueueItemInternal,
   isCanceled?: () => boolean,
 ): Promise<void> {
@@ -278,6 +344,7 @@ async function executeQueuedItem(
     intensity: item.intensity,
     durationMs: item.durationMs,
     location,
+    bypassedGates: bypassedFor(item),
   };
 
   try {
@@ -291,36 +358,43 @@ async function executeQueuedItem(
       canBeep: share.canBeep,
       canHold: share.canHold,
     });
-    const shareBands = shareBandsFromRow(share);
-    const ownerPersonal = personalBandsFromUser(
-      await getPersonalActivityLimits(item.ownerDiscordUserId),
+    const safety = await getWearerSafety(item.ownerDiscordUserId);
+    const personLimit = await getEffectivePersonLimit(
+      item.ownerDiscordUserId,
+      item.executorDiscordUserId,
+      safety,
     );
-    const modes = {
-      shock: nestBands(
-        [shareBands.shock, ownerPersonal.shock],
-        share.deviceMaxIntensity,
-        share.deviceMaxDurationMs,
-      ),
-      vibrate: nestBands(
-        [shareBands.vibrate, ownerPersonal.vibrate],
-        share.deviceMaxIntensity,
-        share.deviceMaxDurationMs,
-      ),
-      beep: nestBands(
-        [shareBands.beep, ownerPersonal.beep],
-        share.deviceMaxIntensity,
-        share.deviceMaxDurationMs,
-      ),
-      requiredWarningLevel: atLeastWarning(
-        shareBands.requiredWarningLevel,
-        ownerPersonal.requiredWarningLevel,
-      ),
-    };
+    const normalModes = queuedModes(
+      share,
+      await getPersonalActivityLimits(item.ownerDiscordUserId),
+      personLimit,
+    );
+    // Admin limit override only while the wearer's consent still stands (it can be revoked).
+    const limitOverride =
+      Boolean(payload.adminBypass) &&
+      hasLimitConsent(await getAdminLimitConsent(item.ownerDiscordUserId));
+    const modes = limitOverride
+      ? deviceOnlyModes(
+          { maxIntensity: share.deviceMaxIntensity, maxDurationMs: share.deviceMaxDurationMs },
+          normalModes.requiredWarningLevel,
+        )
+      : normalModes;
+    if (!limitOverride) {
+      assertPersonAllows(modes, item.operation);
+      // Consent was revoked after enqueue: the command is clamped, so nothing exceeded limits.
+      auditBase.bypassedGates = auditBase.bypassedGates.filter((g) => g !== 'limits');
+    }
     const band = bandForOperation(modes, item.operation);
-    const intensity = Math.max(
+    let intensity = Math.max(
       1,
       clampIntensity(item.intensity, band.maxIntensity, band.minIntensity),
     );
+    if (!limitOverride && (item.operation === 'shock' || item.operation === 'hold')) {
+      intensity = applyEscalationCap(
+        intensity,
+        escalation.cap(item.ownerDiscordUserId, item.shockerId, share.maxIntensityStep, band.minIntensity),
+      ).intensity;
+    }
     const durationMs = clampDurationMs(item.durationMs, band.maxDurationMs, band.minDurationMs);
     auditBase.shockerName = share.shockerName ?? null;
     auditBase.hubClientId = clientId ?? share.hubClientId ?? null;
@@ -359,31 +433,20 @@ async function executeQueuedItem(
       canBeep: shareNow.canBeep,
       canHold: shareNow.canHold,
     });
-    const shareBandsNow = shareBandsFromRow(shareNow);
-    const ownerPersonalNow = personalBandsFromUser(
+    const normalModesNow = queuedModes(
+      shareNow,
       await getPersonalActivityLimits(item.ownerDiscordUserId),
+      await getEffectivePersonLimit(item.ownerDiscordUserId, item.executorDiscordUserId),
     );
-    const modesNow = {
-      shock: nestBands(
-        [shareBandsNow.shock, ownerPersonalNow.shock],
-        shareNow.deviceMaxIntensity,
-        shareNow.deviceMaxDurationMs,
-      ),
-      vibrate: nestBands(
-        [shareBandsNow.vibrate, ownerPersonalNow.vibrate],
-        shareNow.deviceMaxIntensity,
-        shareNow.deviceMaxDurationMs,
-      ),
-      beep: nestBands(
-        [shareBandsNow.beep, ownerPersonalNow.beep],
-        shareNow.deviceMaxIntensity,
-        shareNow.deviceMaxDurationMs,
-      ),
-      requiredWarningLevel: atLeastWarning(
-        shareBandsNow.requiredWarningLevel,
-        ownerPersonalNow.requiredWarningLevel,
-      ),
-    };
+    const overrideNow =
+      limitOverride && hasLimitConsent(await getAdminLimitConsent(item.ownerDiscordUserId));
+    const modesNow = overrideNow
+      ? deviceOnlyModes(
+          { maxIntensity: shareNow.deviceMaxIntensity, maxDurationMs: shareNow.deviceMaxDurationMs },
+          normalModesNow.requiredWarningLevel,
+        )
+      : normalModesNow;
+    if (!overrideNow) assertPersonAllows(modesNow, item.operation);
     if (item.operation === 'shock' || item.operation === 'hold') {
       const sentWarning = atLeastWarning(
         normalizeWarningLevel(item.warningLevel),
@@ -440,6 +503,13 @@ async function executeQueuedItem(
             queued: true,
           }),
         });
+        await recordWearerHit({
+          ownerDiscordUserId: item.ownerDiscordUserId,
+          shockerId: item.shockerId,
+          operation: item.operation,
+          intensity,
+          durationMs,
+        });
         return;
       }
     }
@@ -465,6 +535,13 @@ async function executeQueuedItem(
         instanceId: item.instanceId,
         queued: true,
       }),
+    });
+    await recordWearerHit({
+      ownerDiscordUserId: item.ownerDiscordUserId,
+      shockerId: item.shockerId,
+      operation: item.operation,
+      intensity,
+      durationMs,
     });
   } catch (err) {
     if (err instanceof PiShockApiError && err.status === 503) {
@@ -515,10 +592,12 @@ async function emitQueueState(state: QueueStatePublic): Promise<void> {
 export const commandQueue = createCommandQueue({
   isStarred: (owner, executor) => isQueueStarred(owner, executor),
   getLimits: async (owner) => {
-    const s = await getCommandQueueSettings(owner);
+    const [s, safety] = await Promise.all([getCommandQueueSettings(owner), getWearerSafety(owner)]);
     return {
       progressMs: s.progressMs,
       maxPerSender: s.maxPerSender,
+      cooldownGlobalMs: safety.cooldownGlobalMs,
+      cooldownPerSenderMs: safety.cooldownPerSenderMs,
     };
   },
   validateBeforeRun: validateQueuedItem,
@@ -528,4 +607,9 @@ export const commandQueue = createCommandQueue({
   onTicket: (ticket) => {
     broadcastRealtime(ticket, { discordUserId: ticket.executorDiscordUserId });
   },
+});
+
+// Missed check-in: drop everything waiting and cut the active command short.
+setCheckInMissedHandler(async (owner) => {
+  await commandQueue.hardClear(owner);
 });

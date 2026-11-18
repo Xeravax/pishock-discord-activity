@@ -21,6 +21,7 @@ import {
 } from '../session.js';
 import { broadcastRealtimeAll } from '../realtime.js';
 import { commandQueue } from '../pishock/command-queue-runtime.js';
+import { checkIns } from '../wearer-safety-runtime.js';
 
 function banIds(bans: Array<{ bannedDiscordUserId: string }>): string[] {
   return bans.map((b) => b.bannedDiscordUserId);
@@ -64,7 +65,18 @@ type IncomingShare = {
   canBeep?: boolean;
   canHold?: boolean;
   requiredWarningLevel?: string | null;
+  /** Escalation cap: max shock-intensity jump over the previous shock (null / 0 = off). */
+  maxIntensityStep?: number | null;
 };
+
+/** undefined keeps the stored value; null / 0 turns the cap off. */
+function normalizeIntensityStep(raw: unknown, prev: number | null | undefined): number | null {
+  if (raw === undefined) return prev ?? null;
+  if (raw === null) return null;
+  const n = Math.floor(Number(raw));
+  if (!Number.isFinite(n) || n <= 0) return null;
+  return Math.min(100, n);
+}
 
 type ExistingShare = Awaited<ReturnType<typeof listActivityShares>>[number];
 
@@ -171,6 +183,7 @@ async function normalizeShareRow(
       canBeep,
       canHold,
       requiredWarningLevel,
+      maxIntensityStep: normalizeIntensityStep(s.maxIntensityStep, prev?.maxIntensityStep),
     },
   };
 }
@@ -325,6 +338,7 @@ export const activityShareRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (a
     }
 
     const personal = await getPersonalActivityLimits(req.discordUser.id);
+    void checkIns.refresh(req.discordUser.id);
     broadcastRealtimeAll({
       type: 'activity_share_changed',
       ownerDiscordUserId: req.discordUser.id,
@@ -379,6 +393,7 @@ export const activityShareRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (a
       );
     }
 
+    void checkIns.refresh(req.discordUser.id);
     broadcastRealtimeAll({
       type: 'activity_share_changed',
       ownerDiscordUserId: req.discordUser.id,
@@ -484,6 +499,7 @@ export function serializeShare(s: {
   canBeep: boolean;
   canHold: boolean;
   requiredWarningLevel?: string | null;
+  maxIntensityStep?: number | null;
 }) {
   const bands = shareBandsFromRow(s);
   return {
@@ -513,5 +529,6 @@ export function serializeShare(s: {
     canBeep: s.canBeep,
     canHold: s.canHold,
     requiredWarningLevel: bands.requiredWarningLevel,
+    maxIntensityStep: s.maxIntensityStep ?? null,
   };
 }

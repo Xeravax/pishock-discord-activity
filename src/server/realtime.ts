@@ -114,6 +114,102 @@ export type RealtimeEvent =
       at: number;
     }
   | {
+      /** Wearer: someone wants to operate your shocker(s); accept or deny (approve-each mode). */
+      type: 'approval_request';
+      approvalId: string;
+      ownerDiscordUserId: string;
+      executorDiscordUserId: string;
+      executorUsername: string | null;
+      executorGlobalName: string | null;
+      executorAvatar: string | null;
+      operation: string;
+      /** All shockers in this request (multishock batches share one prompt). */
+      items: Array<{ shockerId: number; shockerName: string | null; intensity: number; durationMs: number }>;
+      expiresAt: number;
+      at: number;
+    }
+  | {
+      /** Approval closed (accepted, denied, expired or canceled by E-STOP). Sent to wearer + sender. */
+      type: 'approval_resolved';
+      approvalId: string;
+      ownerDiscordUserId: string;
+      executorDiscordUserId: string;
+      outcome: 'accepted' | 'denied' | 'expired' | 'canceled';
+      at: number;
+    }
+  | {
+      /** Wearer: answer the in-app "Still OK?" check before the deadline. */
+      type: 'checkin_due';
+      ownerDiscordUserId: string;
+      deadline: number;
+      at: number;
+    }
+  | {
+      /** Wearer missed a check-in; all their shares were paused. */
+      type: 'checkin_missed';
+      ownerDiscordUserId: string;
+      at: number;
+    }
+  | {
+      /** Wearer's shock budget ran out (sent to wearer; senders get a 429). */
+      type: 'budget_exhausted';
+      ownerDiscordUserId: string;
+      usedShocks: number;
+      usedShockMs: number;
+      at: number;
+    }
+  | {
+      /** Wearer: an admin bypassed your gates / limits for this command (always shown, red). */
+      type: 'admin_bypass';
+      targetDiscordUserId: string;
+      adminDiscordUserId: string;
+      adminName: string | null;
+      action: string;
+      intensity: number;
+      durationMs: number;
+      gates: string[];
+      at: number;
+    }
+  | {
+      /** Room vote: someone wants to spin the roulette wheel on a participant. */
+      type: 'roulette_vote_open';
+      voteId: string;
+      targetDiscordUserId: string;
+      starterDiscordUserId: string;
+      actions: string[];
+      endsAt: number;
+      at: number;
+    }
+  | {
+      type: 'roulette_vote_closed';
+      voteId: string;
+      targetDiscordUserId: string;
+      outcome: 'passed' | 'failed' | 'vetoed' | 'canceled';
+      yes: number;
+      no: number;
+      at: number;
+    }
+  | {
+      /** Identical for every viewer: same segments, result and start time. */
+      type: 'roulette_spin';
+      spinId: string;
+      targetDiscordUserId: string;
+      starterDiscordUserId: string;
+      segments: Array<{ action: 'shock' | 'vibrate' | 'beep' | 'safe'; intensity: number; durationMs: number }>;
+      resultIndex: number;
+      startAt: number;
+      spinMs: number;
+      at: number;
+    }
+  | {
+      type: 'roulette_result';
+      spinId: string;
+      targetDiscordUserId: string;
+      outcome: 'sent' | 'queued' | 'safe' | 'refused';
+      message: string | null;
+      at: number;
+    }
+  | {
       type: 'hello_ok';
       discordUserId: string;
       at: number;
@@ -139,6 +235,40 @@ type RealtimeClient = {
 
 const clients = new Set<RealtimeClient>();
 const AUTH_TIMEOUT_MS = 5_000;
+
+export type PresenceChange = { discordUserId: string; online: boolean; at: number };
+type PresenceListener = (change: PresenceChange) => void;
+const presenceListeners = new Set<PresenceListener>();
+
+/** Fires when a user's first socket connects (online) or their last socket closes (offline). */
+export function onPresenceChange(listener: PresenceListener): () => void {
+  presenceListeners.add(listener);
+  return () => presenceListeners.delete(listener);
+}
+
+function socketsFor(discordUserId: string): number {
+  let n = 0;
+  for (const c of clients) if (c.discordUserId === discordUserId) n += 1;
+  return n;
+}
+
+export function isUserOnline(discordUserId: string): boolean {
+  return socketsFor(discordUserId) > 0;
+}
+
+export function onlineUserIds(): string[] {
+  return [...new Set([...clients].map((c) => c.discordUserId))];
+}
+
+function emitPresence(change: PresenceChange) {
+  for (const listener of presenceListeners) {
+    try {
+      listener(change);
+    } catch (err) {
+      console.warn('[realtime] presence listener failed', err instanceof Error ? err.message : err);
+    }
+  }
+}
 
 function pathOnly(url: string | undefined): string {
   if (!url) return '';
@@ -188,6 +318,24 @@ export function broadcastRealtime(event: RealtimeEvent, filter?: {
   }
 }
 
+/** Users with a socket joined to this activity instance. */
+export function usersInInstance(instanceId: string): string[] {
+  return [
+    ...new Set([...clients].filter((c) => c.instanceId === instanceId).map((c) => c.discordUserId)),
+  ];
+}
+
+/** Send to every socket of each listed user (deduped). */
+export function broadcastToUsers(discordUserIds: Iterable<string>, event: RealtimeEvent) {
+  const ids = new Set(discordUserIds);
+  if (ids.size === 0) return;
+  const payload = JSON.stringify(event);
+  for (const client of clients) {
+    if (!ids.has(client.discordUserId)) continue;
+    if (client.ws.readyState === WebSocket.OPEN) client.ws.send(payload);
+  }
+}
+
 /** Fan-out to every connected activity client (small N; Discord activity scale). */
 export function broadcastRealtimeAll(event: RealtimeEvent) {
   const payload = JSON.stringify(event);
@@ -204,8 +352,10 @@ function attachAuthenticatedClient(ws: WebSocket, discordUserId: string) {
     discordUserId,
     instanceId: null,
   };
+  const wasOnline = socketsFor(discordUserId) > 0;
   clients.add(client);
   send(ws, { type: 'hello_ok', discordUserId, at: Date.now() });
+  if (!wasOnline) emitPresence({ discordUserId, online: true, at: Date.now() });
 
   ws.on('message', (raw) => {
     let parsed: unknown;
@@ -225,12 +375,14 @@ function attachAuthenticatedClient(ws: WebSocket, discordUserId: string) {
     }
   });
 
-  ws.on('close', () => {
-    clients.delete(client);
-  });
-  ws.on('error', () => {
-    clients.delete(client);
-  });
+  const detach = () => {
+    if (!clients.delete(client)) return;
+    if (socketsFor(discordUserId) === 0) {
+      emitPresence({ discordUserId, online: false, at: Date.now() });
+    }
+  };
+  ws.on('close', detach);
+  ws.on('error', detach);
 }
 
 export function attachRealtime(server: HttpServer): () => void {

@@ -30,6 +30,7 @@ export type ActivityShareConfig = {
   canBeep: boolean;
   canHold: boolean;
   requiredWarningLevel: 'none' | 'small' | 'mid' | 'long';
+  maxIntensityStep?: number | null;
 };
 
 type Props = {
@@ -196,6 +197,7 @@ export function AvailabilitySettings({
       maxDurationMs: cfg.beepMaxDurationMs ?? cfg.maxDurationMs,
     },
     requiredWarningLevel: normalizeWarningLevel(cfg.requiredWarningLevel),
+    maxIntensityStep: cfg.maxIntensityStep ?? null,
   });
 
   const applyMode = (shockerId: number, m: ModeLimitsValue) => {
@@ -217,6 +219,7 @@ export function AvailabilitySettings({
       beepMinDurationMs: m.beep.minDurationMs,
       beepMaxDurationMs: m.beep.maxDurationMs,
       requiredWarningLevel: m.requiredWarningLevel,
+      maxIntensityStep: m.maxIntensityStep ?? null,
     });
   };
 

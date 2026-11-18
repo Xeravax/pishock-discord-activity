@@ -153,6 +153,9 @@ export type PublicLogRow = {
   target: LogPerson;
   /** Whether this viewer may create a share card from the row. */
   shareable?: boolean;
+  /** An admin bypassed the wearer's gates / limits (always marked, whatever the privacy). */
+  adminBypass?: boolean;
+  bypassedGates?: string[];
 };
 
 /** Row location used for scope checks (independent of whether the name is shown). */

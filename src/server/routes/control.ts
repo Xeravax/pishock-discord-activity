@@ -72,6 +72,7 @@ import {
   type ClientLocationHint,
 } from '../discord-location.js';
 import { resolveLogViewer } from '../log-viewer.js';
+import { onWearerEmergencyStop } from '../wearer-safety-runtime.js';
 
 /** Activity feed row: always attribute to the device owner so the public log can dedupe. */
 async function logOperateEvent(input: {
@@ -239,6 +240,8 @@ export const controlRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app, op
     let result;
     if (body.engaged) {
       gateEmergencyStops(req.discordUser.id, shockerIds, true);
+      // E-STOP wins over everything: close open approval prompts right away.
+      onWearerEmergencyStop(req.discordUser.id);
       for (const id of shockerIds) cancelPendingHold(req.discordUser.id, id);
       commandQueue.holdAdvance(req.discordUser.id);
       commandQueue.invalidateInFlight(req.discordUser.id);

@@ -49,6 +49,8 @@ function makeHarness(opts?: {
   progressMs?: number;
   maxPerSender?: number;
   endActive?: (item: QueueItemInternal) => Promise<boolean | void>;
+  cooldownGlobalMs?: number;
+  cooldownPerSenderMs?: number;
 }): Harness {
   let now = 1_000_000;
   const timers: Array<{ at: number; resolve: () => void }> = [];
@@ -78,7 +80,7 @@ function makeHarness(opts?: {
   };
 
   const flush = async () => {
-    for (let i = 0; i < 20; i++) {
+    for (let i = 0; i < 200; i++) {
       await Promise.resolve();
     }
   };
@@ -87,7 +89,12 @@ function makeHarness(opts?: {
     now: () => now,
     sleep,
     isStarred: (owner, executor) => stars.has(`${owner}:${executor}`),
-    getLimits: () => ({ progressMs, maxPerSender }),
+    getLimits: () => ({
+      progressMs,
+      maxPerSender,
+      cooldownGlobalMs: opts?.cooldownGlobalMs ?? 0,
+      cooldownPerSenderMs: opts?.cooldownPerSenderMs ?? 0,
+    }),
     validateBeforeRun: opts?.validate ?? (async () => true),
     execute: async (item) => {
       executed.push(item.id);
@@ -120,6 +127,46 @@ describe('command queue', () => {
     assert.equal(resolveQueueAdvanceMs(100, 0), 100 + HOLD_AUTO_END_GRACE_MS);
     assert.equal(resolveQueueAdvanceMs(100, 50), 100 + HOLD_AUTO_END_GRACE_MS);
     assert.equal(resolveQueueAdvanceMs(100, 5_000), 5_000);
+  });
+
+  it('wearer cooldown only takes over when longer than queue progress', () => {
+    assert.equal(resolveQueueAdvanceMs(100, 1_000, 500), 1_000);
+    assert.equal(resolveQueueAdvanceMs(100, 1_000, 3_000), 3_000);
+    assert.equal(resolveQueueAdvanceMs(100, 0, 0), 100 + HOLD_AUTO_END_GRACE_MS);
+  });
+
+  it('spaces items by the global cooldown when it beats progress', async () => {
+    const h = makeHarness({ progressMs: 500, cooldownGlobalMs: 2_000 });
+    await h.queue.enqueue(baseInput({ ownerDiscordUserId: 'owner', executorDiscordUserId: 'a', durationMs: 40 }));
+    const second = await h.queue.enqueue(
+      baseInput({ ownerDiscordUserId: 'owner', executorDiscordUserId: 'b', durationMs: 40 }),
+    );
+    assert.equal(second.estimatedWaitMs, 2_000);
+    await h.flush();
+    await h.advance(1_000);
+    await h.flush();
+    assert.equal(h.executed.length, 1);
+    await h.advance(1_100);
+    await h.flush();
+    assert.equal(h.executed[1], second.itemId);
+  });
+
+  it('lets other senders go first while one sender is on cooldown', async () => {
+    const h = makeHarness({ cooldownPerSenderMs: 5_000 });
+    const a1 = await h.queue.enqueue(baseInput({ ownerDiscordUserId: 'owner', executorDiscordUserId: 'a', durationMs: 40 }));
+    const a2 = await h.queue.enqueue(baseInput({ ownerDiscordUserId: 'owner', executorDiscordUserId: 'a', durationMs: 40 }));
+    const b1 = await h.queue.enqueue(baseInput({ ownerDiscordUserId: 'owner', executorDiscordUserId: 'b', durationMs: 40 }));
+    await h.flush();
+    assert.equal(h.executed[0], a1.itemId);
+    await h.advance(400);
+    await h.flush();
+    assert.equal(h.executed[1], b1.itemId, 'b jumps ahead of a (still cooling down)');
+    await h.advance(1_000);
+    await h.flush();
+    assert.equal(h.executed.length, 2, 'a2 waits for its cooldown');
+    await h.advance(4_000);
+    await h.flush();
+    assert.equal(h.executed[2], a2.itemId);
   });
 
   it('honors owner progressMs when longer than the command', async () => {

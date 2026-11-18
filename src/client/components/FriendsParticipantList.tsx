@@ -24,6 +24,14 @@ type Props = {
   inviteBusy?: boolean;
   /** Star someone so their commands to you get queue priority */
   onTogglePriority?: (discordUserId: string, starred: boolean) => void;
+  /** Per-person limits (extra feature): set only when the wearer turned the feature on. */
+  onOpenPersonLimits?: (discordUserId: string, displayName: string) => void;
+  /** People you already set per-person limits for (cog shows highlighted). */
+  personLimitedIds?: ReadonlySet<string>;
+  /** Admins only: arm a bypass for the next fire (logged red, wearer notified). */
+  adminBypass?: { armed: boolean; onToggle: () => void };
+  /** Open the roulette start dialog for someone who allows it. */
+  onSpinRoulette?: (discordUserId: string, displayName: string) => void;
 };
 
 /** Discord Shockers roster styled like the official PISHOCKS FAB list */
@@ -43,6 +51,10 @@ export function FriendsParticipantList({
   onInvite,
   inviteBusy = false,
   onTogglePriority,
+  onOpenPersonLimits,
+  personLimitedIds,
+  adminBypass,
+  onSpinRoulette,
 }: Props) {
   const others = participants.filter((p) => p.id !== currentUserId);
   const selectedIds = selectedTargetIds ?? (selectedTargetId ? [selectedTargetId] : []);
@@ -56,6 +68,22 @@ export function FriendsParticipantList({
           {multiSelect ? (individualIntensity ? ' · MULTI · PER PERSON' : ' · MULTI') : ''}
         </div>
         <div className="row items-center no-wrap q-gutter-xs">
+          {adminBypass ? (
+            <button
+              type="button"
+              className={`admin-bypass-pill${adminBypass.armed ? ' is-armed' : ''}`}
+              aria-pressed={adminBypass.armed}
+              title={
+                adminBypass.armed
+                  ? 'Next command bypasses cooldowns, budget, favorites only and approval (and limits where the wearer consented). Logged in red; the wearer is notified.'
+                  : 'Admin bypass for the next command'
+              }
+              onClick={adminBypass.onToggle}
+            >
+              <i className="q-icon mdi mdi-shield-crown-outline" aria-hidden />
+              {adminBypass.armed ? 'BYPASS ARMED' : 'ADMIN'}
+            </button>
+          ) : null}
           {onToggleMultiSelect ? (
             <MultiShockToggle
               active={multiSelect}
@@ -200,7 +228,19 @@ export function FriendsParticipantList({
                     ) : null}
                   </span>
                   <span className="official-friend-meta">
-                    <span className="official-friend-name ellipsis">{p.displayName}</span>
+                    <span className="official-friend-name ellipsis">
+                      {p.displayName}
+                      {status?.safety?.approveEachCommand ? (
+                        <span className="official-friend-badge" title="They approve each command before it runs">
+                          <i className="q-icon mdi mdi-hand-back-left-outline" aria-hidden /> asks first
+                        </span>
+                      ) : null}
+                      {status?.safety?.budget?.exhausted ? (
+                        <span className="official-friend-badge" title="Their shock budget is used up">
+                          <i className="q-icon mdi mdi-battery-alert-variant-outline" aria-hidden /> budget used
+                        </span>
+                      ) : null}
+                    </span>
                     <span
                       className={`official-friend-status ${
                         banned || eStop || notLoggedIn || !status?.available ? 'bad' : 'ok'
@@ -242,6 +282,36 @@ export function FriendsParticipantList({
                       style={{ fontSize: 16 }}
                       aria-hidden
                     />
+                  </button>
+                ) : null}
+                {onSpinRoulette && status?.safety?.rouletteAllowed && status.available && !banned ? (
+                  <button
+                    type="button"
+                    className="official-friend-wheel"
+                    title={`Spin the roulette wheel for ${p.displayName}`}
+                    aria-label={`Roulette for ${p.displayName}`}
+                    onClick={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      onSpinRoulette(p.id, p.displayName);
+                    }}
+                  >
+                    <i className="q-icon mdi mdi-ship-wheel" style={{ fontSize: 16 }} aria-hidden />
+                  </button>
+                ) : null}
+                {onOpenPersonLimits ? (
+                  <button
+                    type="button"
+                    className={`official-friend-cog ${personLimitedIds?.has(p.id) ? 'active' : ''}`}
+                    title={`Limits for ${p.displayName} on your shockers`}
+                    aria-label={`Limits for ${p.displayName}`}
+                    onClick={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      onOpenPersonLimits(p.id, p.displayName);
+                    }}
+                  >
+                    <i className="q-icon mdi mdi-cog-outline" style={{ fontSize: 16 }} aria-hidden />
                   </button>
                 ) : null}
               </div>
