@@ -59,6 +59,11 @@ export function PrivacyPolicy({ onBack }: Props) {
           <li>When you were last connected (used for session budgets)</li>
           <li>Whether and when you allowed admins to exceed your limits</li>
           <li>Data deletion / anonymisation requests and when they ran</li>
+          <li>
+            Your sessions (start and end) with a recap of what was done to you. If you turn on recap
+            DMs, the recap is sent to you by the app&apos;s Discord bot. If you choose to join our
+            Discord server, the one-time Discord approval is used to add you and is not stored.
+          </li>
         </ul>
       </section>
 

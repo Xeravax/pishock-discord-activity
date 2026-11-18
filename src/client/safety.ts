@@ -19,6 +19,7 @@ export type WearerSafety = {
   checkInGraceMs: number;
   perPersonLimitsEnabled: boolean;
   rouletteAllowed: boolean;
+  recapDmEnabled: boolean;
 };
 
 export const DEFAULT_WEARER_SAFETY: WearerSafety = {
@@ -37,6 +38,7 @@ export const DEFAULT_WEARER_SAFETY: WearerSafety = {
   checkInGraceMs: 60_000,
   perPersonLimitsEnabled: false,
   rouletteAllowed: false,
+  recapDmEnabled: false,
 };
 
 export type BudgetState = {

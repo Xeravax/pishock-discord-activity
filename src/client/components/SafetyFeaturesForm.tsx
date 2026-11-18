@@ -2,7 +2,15 @@ import { useState, type ReactNode } from 'react';
 import { LimitSlider, formatDurationMs } from './LimitSlider';
 import type { BudgetPeriod, WearerSafety } from '../safety';
 
-type FeatureId = 'favorites' | 'approve' | 'cooldown' | 'budget' | 'checkin' | 'person' | 'roulette';
+type FeatureId =
+  | 'favorites'
+  | 'approve'
+  | 'cooldown'
+  | 'budget'
+  | 'checkin'
+  | 'person'
+  | 'roulette'
+  | 'recap';
 
 type Props = {
   value: WearerSafety;
@@ -380,6 +388,28 @@ export function SafetyFeaturesForm({ value, onChange, disabled, queueEnabled, le
           title="Let people spin the wheel on me"
           hint="The wheel mixes shock / vibrate / beep / safe, always within your limits. Room votes need at least 2 yes and you can veto. Results still go through approve-each, budget, cooldowns and your queue."
           onChange={(rouletteAllowed) => set({ rouletteAllowed })}
+        />
+      </Feature>
+
+      <Feature
+        id="recap"
+        open={open === 'recap'}
+        onToggle={toggle}
+        icon="mdi-message-text-clock-outline"
+        title="Session recaps"
+        on={value.recapDmEnabled}
+        summary={
+          value.recapDmEnabled
+            ? 'On — a summary is DM’d to you after each session'
+            : 'In-app only — see Menu → My history'
+        }
+      >
+        <Switch
+          checked={value.recapDmEnabled}
+          disabled={disabled}
+          title="DM me a recap after each session"
+          hint="Recaps are always kept in My history. Discord only allows the DM if you share a server with the app — if it fails, you can join ours from My history."
+          onChange={(recapDmEnabled) => set({ recapDmEnabled })}
         />
       </Feature>
     </div>

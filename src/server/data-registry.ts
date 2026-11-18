@@ -18,6 +18,7 @@ export const USER_DATA_MODELS = {
   ActivityPersonLimit: 'limits you set (deleted); limits others set for you are kept as their safety data',
   CommandLog: 'your log copies (deleted or anonymised); you are replaced by "Deleted user" in others’ logs',
   DataDeletionRequest: 'the request itself; your id is cleared once it has run',
+  ActivitySession: 'your sessions and their recaps — deleted (follows your log retention)',
 } as const;
 
 export type UserDataModel = keyof typeof USER_DATA_MODELS;
@@ -65,7 +66,12 @@ export async function buildUserExport(discordUserId: string) {
       prisma.commandLog.findMany({ where: { discordUserId }, orderBy: { createdAt: 'desc' } }),
       prisma.dataDeletionRequest.findMany({ where: { discordUserId } }),
     ]);
+  const sessions = await prisma.activitySession.findMany({
+    where: { discordUserId },
+    orderBy: { startedAt: 'desc' },
+  });
   return {
+    sessions,
     format: 'pishock-activity-export/1',
     exportedAt: new Date().toISOString(),
     note:
@@ -240,8 +246,14 @@ export async function runDueDeletions(
   return n;
 }
 
-/** Delete log copies older than each owner's retention setting. */
+/** Delete log copies (and session recaps) older than each owner's retention setting. */
 export async function applyLogRetention(): Promise<number> {
+  await prisma.$executeRaw`
+    DELETE FROM "ActivitySession" s
+    USING "DiscordUser" u
+    WHERE s."discordUserId" = u."id"
+      AND u."logRetentionDays" IS NOT NULL
+      AND s."startedAt" < NOW() - (u."logRetentionDays" * INTERVAL '1 day')`;
   return prisma.$executeRaw`
     DELETE FROM "CommandLog" c
     USING "DiscordUser" u

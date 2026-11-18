@@ -74,6 +74,8 @@ model DiscordUser {
   logRetentionDays Int? @default(365)
   /// Roulette: others may spin a wheel (solo or by room vote) whose result is sent to you.
   rouletteAllowed Boolean @default(false)
+  /// Send a recap of each session as a Discord DM (always also stored in your history).
+  recapDmEnabled Boolean @default(false)
   /// Log sharing: where other people can see hits on you (everywhere|server|channel|private).
   logVisibility      String  @default("everywhere")
   /// Log sharing: what other people can see about hits on you.
@@ -98,6 +100,7 @@ model DiscordUser {
   bannedBy       ActivityBan[]   @relation("BannedUser")
   queueStarsGiven ActivityQueueStar[] @relation("QueueStarOwner")
   queueStarsReceived ActivityQueueStar[] @relation("QueueStarStarred")
+  activitySessions   ActivitySession[]
   personLimitsOwned  ActivityPersonLimit[] @relation("PersonLimitOwner")
   personLimitsReceived ActivityPersonLimit[] @relation("PersonLimitController")
 }
@@ -275,4 +278,21 @@ model DataDeletionRequest {
 
   @@index([discordUserId])
   @@index([executeAfter])
+}
+
+/// One stretch of time a user was in the activity (ends after 10 min away), with a recap.
+model ActivitySession {
+  id            String      @id @default(cuid())
+  discordUserId String
+  discordUser   DiscordUser @relation(fields: [discordUserId], references: [id], onDelete: Cascade)
+  startedAt     DateTime    @default(now())
+  endedAt       DateTime?
+  /// Recap built from command logs when the session ends.
+  summary       Json?
+  /// pending | sent | failed | disabled | empty
+  dmStatus      String      @default("pending")
+  seenAt        DateTime?
+
+  @@index([discordUserId, startedAt])
+  @@index([endedAt])
 }

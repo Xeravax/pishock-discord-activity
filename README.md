@@ -199,6 +199,8 @@ Copy [`.env.example`](.env.example) → `.env` and set:
 | `PUBLIC_URL` | ✅ | Public HTTPS URL Discord points at |
 | `PORT` | Optional | Host port mapped to the app (default `3000`) |
 | `ADMIN_DISCORD_USER_IDS` | Optional | Comma-separated admin Discord ids (admin bypass; always logged and notified) |
+| `DISCORD_COMMUNITY_GUILD_ID` | Optional | Guild users can join for recap DMs (default set; `off` disables). Bot needs Create Invite there |
+| `DISCORD_COMMUNITY_INVITE_URL` | Optional | Invite link shown when the OAuth join is declined |
 | `PISHOCK_IMAGE` | Optional | Override GHCR image when using `docker-compose.ghcr.yml` |
 
 **Security notes**
@@ -286,6 +288,8 @@ npm run dev:client   # Vite UI (separate terminal)
 | `PUBLIC_URL` | Runtime | Yes | Public activity origin |
 | `PORT` | Runtime | No | Listen / host port (default 3000) |
 | `ADMIN_DISCORD_USER_IDS` | Runtime | No | Admin bypass ids; exceeding limits needs the wearer's consent |
+| `DISCORD_COMMUNITY_GUILD_ID` | Runtime | No | Community guild for recap DMs (`off` disables) |
+| `DISCORD_COMMUNITY_INVITE_URL` | Runtime | No | Fallback invite link |
 | `VITE_DISCORD_CLIENT_ID` | Build | Yes* | Usually set from `DISCORD_CLIENT_ID` during Docker/CI build |
 
 \*Required for a working Discord embed; without it the client falls back to a dummy id and Discord rejects the origin.

@@ -17,6 +17,13 @@ function parseIdList(raw: string | undefined): ReadonlySet<string> {
   );
 }
 
+/** Unset → default; "off" / "none" → disabled (null). */
+function optionalSetting(raw: string | undefined, fallback: string): string | null {
+  const v = raw?.trim();
+  if (v === undefined || v === '') return fallback;
+  return /^(off|none|false|0)$/i.test(v) ? null : v;
+}
+
 export function loadEnv() {
   const port = Number(process.env.PORT ?? '3000');
   return {
@@ -50,6 +57,15 @@ export function loadEnv() {
      * gates; exceeding a wearer's limits additionally needs that wearer's explicit consent.
      */
     adminDiscordUserIds: parseIdList(process.env.ADMIN_DISCORD_USER_IDS),
+    /**
+     * Community server people can join (OAuth guilds.join) so the bot can DM session recaps.
+     * Set to "off" to disable. The bot must be in this guild with Create Invite permission.
+     */
+    communityGuildId: optionalSetting(process.env.DISCORD_COMMUNITY_GUILD_ID, '1572537113545805824'),
+    communityInviteUrl: optionalSetting(
+      process.env.DISCORD_COMMUNITY_INVITE_URL,
+      'https://discord.gg/M6XjdQmb3E',
+    ),
   };
 }
 

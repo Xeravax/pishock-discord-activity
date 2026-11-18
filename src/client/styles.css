@@ -6163,3 +6163,53 @@ button.auth-boot__api-key:not(.secret-value--shown) {
   justify-content: center;
   flex-shrink: 0;
 }
+
+/* My history (session recaps + full history) */
+.my-history__tabs {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+}
+.my-history__recap {
+  border: 1px solid var(--ps-border);
+  border-radius: var(--ps-r-md);
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 0.86rem;
+}
+.my-history__recap.is-unread {
+  border-color: var(--ps-border-accent-strong);
+  background: var(--ps-tint);
+}
+.my-history__recap-head {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+.my-history__dm {
+  margin-left: auto;
+  font-size: 0.72rem;
+  color: var(--ps-muted);
+}
+.my-history__filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.my-history__entry {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.86rem;
+}
+.menu-badge {
+  margin-left: auto;
+  background: var(--ps-cyan);
+  color: var(--ps-cyan-ink);
+  border-radius: var(--ps-r-pill);
+  font: 700 0.7rem/1 var(--ps-font-label);
+  padding: 3px 7px;
+}

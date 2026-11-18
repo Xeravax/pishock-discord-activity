@@ -16,6 +16,8 @@ import { attachRealtime, broadcastRealtimeAll } from './realtime.js';
 import { safetyRoutes } from './routes/safety.js';
 import { dataRoutes } from './routes/data.js';
 import { rouletteRoutes } from './routes/roulette.js';
+import { profileRoutes } from './routes/profile.js';
+import { startSessionTracker } from './session-tracker.js';
 import { applyLogRetention, runDueDeletions } from './data-registry.js';
 import { commandQueue } from './pishock/command-queue-runtime.js';
 
@@ -113,6 +115,7 @@ async function main() {
   await app.register(safetyRoutes, { env });
   await app.register(dataRoutes, { env });
   await app.register(rouletteRoutes, { env });
+  await app.register(profileRoutes, { env });
   await app.register(announcementRoutes);
 
   const clientDist = resolveClientDist();
@@ -137,6 +140,7 @@ async function main() {
   const disposeRealtime = attachRealtime(app.server);
   const disposeSafety = startWearerSafetyRuntime();
   const disposeDataJobs = startDataJobs();
+  const disposeSessions = startSessionTracker(env);
   app.log.info(`Listening on ${env.publicUrl} (port ${env.port})`);
   app.log.info('Realtime WebSocket at /api/ws');
 
@@ -156,6 +160,7 @@ async function main() {
       await new Promise((resolve) => setTimeout(resolve, SHUTDOWN_NOTIFY_MS));
       disposeSafety();
       disposeDataJobs();
+      disposeSessions();
       disposeRealtime();
       closeAllBrokerSessions();
       await app.close();

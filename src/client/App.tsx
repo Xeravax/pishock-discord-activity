@@ -79,6 +79,7 @@ import {
 } from './components/SafetyPrompts';
 import { PersonLimitsDialog } from './components/PersonLimitsDialog';
 import { MyDataPanel } from './components/MyDataPanel';
+import { MyHistoryPanel } from './components/MyHistoryPanel';
 import {
   RouletteSpinOverlay,
   RouletteStartDialog,
@@ -198,7 +199,8 @@ type Overlay =
   | 'link'
   | 'logPrivacy'
   | 'safety'
-  | 'myData';
+  | 'myData'
+  | 'history';
 
 type LegalView = null | 'terms' | 'privacy';
 
@@ -296,6 +298,9 @@ export function App() {
   const [rouletteBusy, setRouletteBusy] = useState(false);
   const [rouletteVotes, setRouletteVotes] = useState<RouletteVoteView[]>([]);
   const [rouletteSpin, setRouletteSpin] = useState<RouletteSpinView | null>(null);
+  /** Unread session recaps (badge on Menu → My history). */
+  const [unreadRecaps, setUnreadRecaps] = useState(0);
+  const markRecapsSeen = useCallback(() => setUnreadRecaps(0), []);
   /** Admin only: next fire skips soft gates (and limits where the wearer consented). */
   const [adminBypassArmed, setAdminBypassArmed] = useState(false);
   /** Groups one multishock fire (several shockers, same tick) into one cooldown / approval. */
@@ -2507,6 +2512,20 @@ export function App() {
     };
   }, [token, me?.consent]);
 
+  // Session recaps: unread count for the menu badge (refreshed when the menu opens).
+  useEffect(() => {
+    if (!token || !me?.consent || (overlay !== null && overlay !== 'menu')) return;
+    let cancelled = false;
+    apiFetch<{ unread: number }>('/me/sessions', token)
+      .then((res) => {
+        if (!cancelled) setUnreadRecaps(res.unread ?? 0);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [token, me?.consent, overlay]);
+
   // --- Extra features (wearer safety) -------------------------------------
   useEffect(() => {
     if (!token || !me?.consent) return;
@@ -3483,11 +3502,17 @@ export function App() {
                 ['logs', 'Logs', 'mdi-message-text-clock'],
                 ['logPrivacy', 'Log sharing', 'mdi-eye-settings-outline'],
                 ['safety', 'Extra features', 'mdi-shield-account-outline'],
+                ['history', 'My history', 'mdi-history'],
                 ['myData', 'My data', 'mdi-database-lock-outline'],
               ] as const
             )
               .filter(
-                ([id]) => me.pishockLinked || id === 'logs' || id === 'logPrivacy' || id === 'myData',
+                ([id]) =>
+                  me.pishockLinked ||
+                  id === 'logs' ||
+                  id === 'logPrivacy' ||
+                  id === 'myData' ||
+                  id === 'history',
               )
               .map(([id, label, icon]) => (
               <button
@@ -3507,7 +3532,7 @@ export function App() {
                     setOverlay('logPrivacy');
                     return;
                   }
-                  if (id === 'safety' || id === 'myData') {
+                  if (id === 'safety' || id === 'myData' || id === 'history') {
                     setOverlay(id);
                     return;
                   }
@@ -3521,6 +3546,11 @@ export function App() {
                 <div className="q-item__section column q-item__section--main justify-center">
                   <div className="q-item__label text-grey-3">{label}</div>
                 </div>
+                {id === 'history' && unreadRecaps > 0 ? (
+                  <span className="menu-badge" aria-label={`${unreadRecaps} new recaps`}>
+                    {unreadRecaps}
+                  </span>
+                ) : null}
               </button>
             ))}
             {me.pishockLinked ? (
@@ -3727,6 +3757,12 @@ export function App() {
             }}
             queueEnabled={queueState.enabled}
           />
+        </PsDialog>
+
+        <PsDialog open={overlay === 'history'} title="My history" onClose={() => setOverlay(null)} wide>
+          {token && overlay === 'history' ? (
+            <MyHistoryPanel token={token} onSeen={markRecapsSeen} />
+          ) : null}
         </PsDialog>
 
         <PsDialog open={overlay === 'myData'} title="My data" onClose={() => setOverlay(null)} wide>
