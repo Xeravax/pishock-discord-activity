@@ -1,5 +1,21 @@
 # Changelog
 
+## v2.5.0 — 2026-11-18
+
+## What's changed
+
+- #minor Batch dependency updates: Node 26 image, vitest 5, jsdom 31, Actions v7 (421e82c)
+- Merge pull request #24 from Xeravax:chore/dependabot-batch-v2 (0c82be5)
+- chore: address review on Node support (46411de)
+- chore: require Node >=22.22.2 (1ee65a3)
+- chore(deps): batch Dependabot updates (25051b5)
+- Revert "Merge pull request #23 from Xeravax/chore/dependabot-batch" (18a0faf)
+- Merge pull request #23 from Xeravax/chore/dependabot-batch (92cf0d9)
+- chore: require Node >=22.22.2 (9d19d7c)
+- chore(deps): batch Dependabot updates (a5feef9)
+
+**Full changelog**: https://github.com/Xeravax/pishock-discord-activity/compare/v2.4.0...v2.5.0
+
 ## v2.4.0 — 2026-11-17
 
 ## What's changed
