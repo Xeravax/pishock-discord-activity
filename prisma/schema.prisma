@@ -296,3 +296,44 @@ model ActivitySession {
   @@index([discordUserId, startedAt])
   @@index([endedAt])
 }
+
+/// App-wide ban set by an admin, with the reason shown to the banned user.
+/// No foreign key: the record outlives the user row so a deleted account that returns is
+/// still banned. History is kept — lifting a ban sets liftedAt instead of deleting it.
+model GlobalBan {
+  id                    String    @id @default(cuid())
+  discordUserId         String
+  reason                String
+  bannedByDiscordUserId String
+  createdAt             DateTime  @default(now())
+  /// Null = permanent.
+  expiresAt             DateTime?
+  liftedAt              DateTime?
+  liftedByDiscordUserId String?
+  liftReason            String?
+
+  @@index([discordUserId, createdAt])
+  @@index([createdAt])
+}
+
+/// Accountability trail of admin actions (profile views, bans, app settings).
+model AdminAuditLog {
+  id                  String   @id @default(cuid())
+  adminDiscordUserId  String
+  /// view_profile | ban | unban | set_notice | clear_notice
+  action              String
+  targetDiscordUserId String?
+  detail              Json?
+  createdAt           DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([targetDiscordUserId, createdAt])
+}
+
+/// App-wide settings managed from the admin panel (e.g. the notice shown to everyone).
+model AppSetting {
+  key                    String   @id
+  value                  Json
+  updatedAt              DateTime @updatedAt
+  updatedByDiscordUserId String?
+}

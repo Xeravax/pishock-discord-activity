@@ -1,7 +1,6 @@
 import type { DiscordParticipant, ParticipantStatus } from '../participants';
 import type { VoiceStateFlags } from '../discord';
 import { colorForUser } from '../multiColors';
-import { IndividualIntensityToggle, MultiShockToggle } from './MultiShockToggle';
 
 type Props = {
   participants: DiscordParticipant[];
@@ -14,9 +13,7 @@ type Props = {
   /** Multi-select ids when Multishock / multi friend targeting is on */
   selectedTargetIds?: string[];
   multiSelect?: boolean;
-  onToggleMultiSelect?: () => void;
   individualIntensity?: boolean;
-  onToggleIndividualIntensity?: () => void;
   onSelect: (discordUserId: string | null) => void;
   onRefresh?: () => void;
   /** Invite someone into this activity (guild invite dialog or share link). */
@@ -43,9 +40,7 @@ export function FriendsParticipantList({
   selectedTargetId = null,
   selectedTargetIds,
   multiSelect = false,
-  onToggleMultiSelect,
   individualIntensity = false,
-  onToggleIndividualIntensity,
   onSelect,
   onRefresh,
   onInvite,
@@ -83,21 +78,6 @@ export function FriendsParticipantList({
               <i className="q-icon mdi mdi-shield-crown-outline" aria-hidden />
               {adminBypass.armed ? 'BYPASS ARMED' : 'ADMIN'}
             </button>
-          ) : null}
-          {onToggleMultiSelect ? (
-            <MultiShockToggle
-              active={multiSelect}
-              onToggle={onToggleMultiSelect}
-              compact
-              title="Select several people and operate them together"
-            />
-          ) : null}
-          {multiSelect && onToggleIndividualIntensity ? (
-            <IndividualIntensityToggle
-              active={individualIntensity}
-              onToggle={onToggleIndividualIntensity}
-              compact
-            />
           ) : null}
           {onInvite ? (
             <button

@@ -200,11 +200,11 @@ export function RouletteStartDialog({
       return next;
     });
   return (
-    <PsDialog open={open} title={`Spin the wheel for ${targetName}`} onClose={onClose}>
+    <PsDialog open={open} title={`Spin the wheel for ${targetName}`} onClose={onClose} wide>
       <div className="ps-stack ps-stack--lg">
         <div>
           <div className="ps-section-title">On the wheel</div>
-          <div className="log-privacy__toggles log-privacy__toggles--row">
+          <div className="log-privacy__toggles log-privacy__toggles--4">
             {(['shock', 'vibrate', 'beep', 'safe'] as const).map((a) => (
               <label key={a} className={`log-privacy__toggle${actions.has(a) ? ' is-on' : ''}`}>
                 <input type="checkbox" className="ps-check" checked={actions.has(a)} onChange={() => toggle(a)} />
@@ -216,13 +216,18 @@ export function RouletteStartDialog({
           </div>
           <p className="log-privacy__note">Values are random but always within their limits.</p>
         </div>
-        <div className="safety-periods" role="radiogroup" aria-label="How to spin">
+        <div className="safety-periods safety-periods--2" role="radiogroup" aria-label="How to spin">
           {(
             [
-              ['solo', 'Spin now', 'Only you see the wheel.'],
-              ['vote', 'Room vote', 'Everyone here votes for 20s. Needs 2+ yes and more yes than no; they can veto.'],
+              ['solo', 'mdi-ship-wheel', 'Spin now', 'Only you see the wheel.'],
+              [
+                'vote',
+                'mdi-account-group',
+                'Room vote',
+                'Everyone here votes for 20s. Needs 2+ yes and more yes than no; they can veto.',
+              ],
             ] as const
-          ).map(([id, title, hint]) => (
+          ).map(([id, icon, title, hint]) => (
             <button
               key={id}
               type="button"
@@ -231,6 +236,7 @@ export function RouletteStartDialog({
               className={`log-privacy__scope${mode === id ? ' is-active' : ''}`}
               onClick={() => setMode(id)}
             >
+              <i className={`q-icon mdi ${icon}`} aria-hidden />
               <span className="log-privacy__scope-title">{title}</span>
               <span className="log-privacy__scope-hint">{hint}</span>
             </button>

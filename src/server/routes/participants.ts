@@ -48,6 +48,7 @@ import {
   isEmergencyStopped,
   isEmergencyStopLatched,
   isExecutorBanned,
+  isGloballyBanned,
   listEnabledActivityShares,
   isQueueStarred,
   listQueueStars,
@@ -310,7 +311,7 @@ export const participantRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app
     const ids = [...new Set((body.discordUserIds ?? []).map(String).filter(Boolean))].slice(0, 50);
     const myStars = new Set(await listQueueStars(req.discordUser.id));
     const participants = await mapWithConcurrency(ids, PARTICIPANT_STATUS_CONCURRENCY, async (id) => {
-      const [user, shares, bannedYou, targetCreds, hasConsent, theirSettings, theyStarredMe, safety] =
+      const [user, shares, blockedOrBanned, targetCreds, hasConsent, theirSettings, theyStarredMe, safety, appBanned] =
         await Promise.all([
           prisma.discordUser.findUnique({ where: { id } }),
           listEnabledActivityShares(id),
@@ -320,7 +321,10 @@ export const participantRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app
           getCommandQueueSettings(id),
           isQueueStarred(id, req.discordUser.id),
           getWearerSafety(id),
+          isGloballyBanned(id),
         ]);
+      // Banned from the app: shown as unavailable, not as "blocked you".
+      const bannedYou = blockedOrBanned && !appBanned;
       const personLimit = await getEffectivePersonLimit(id, req.discordUser.id, safety);
       const budgetState = safety.budgetEnabled ? await getBudgetState(id, safety) : null;
       const budget = budgetState ? checkBudget(safety, budgetState, 0) : null;
@@ -343,7 +347,7 @@ export const participantRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app
         (s: { shockerId: number }) => !eStops.has(s.shockerId) && !shockerIsPaused(s.shockerId),
       );
       const allEStopped = allActiveShockersEStopped(active, eStops);
-      const visibleShockers = bannedYou
+      const visibleShockers = blockedOrBanned
         ? []
         : active.map(
             (s: {
@@ -404,7 +408,7 @@ export const participantRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app
         avatar: user?.avatar ?? null,
         linked: hasSession,
         consent: hasConsent,
-        available: hasSession && hasConsent && operable.length > 0 && !bannedYou,
+        available: hasSession && hasConsent && operable.length > 0 && !blockedOrBanned,
         paused:
           shares.length > 0 &&
           shares.every((s: { paused: boolean; enabled: boolean }) => s.paused || !s.enabled),
@@ -509,6 +513,9 @@ export const participantRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app
       body.locationHint ?? null,
     );
 
+    if (await isGloballyBanned(targetDiscordUserId)) {
+      return reply.code(403).send({ error: 'This user is banned from the activity', code: 'TARGET_BANNED' });
+    }
     if (await isExecutorBanned(targetDiscordUserId, req.discordUser.id)) {
       return reply.code(403).send({
         error: 'This user has blocked you from controlling their device',

@@ -1,4 +1,5 @@
 import { prisma } from '../db.js';
+import { isGloballyBanned } from './global-bans.js';
 
 export async function listActivityBans(ownerDiscordUserId: string) {
   return prisma.activityBan.findMany({
@@ -33,7 +34,15 @@ export async function replaceActivityBans(
   return listActivityBans(ownerDiscordUserId);
 }
 
+/**
+ * True when the executor may not operate the owner: the owner blocked them, or either of
+ * them is banned from the app (admin panel). Every firing path calls this — direct,
+ * queued (re-checked at execution), share-code and roulette — so a global ban covers all.
+ */
 export async function isExecutorBanned(ownerDiscordUserId: string, executorDiscordUserId: string) {
+  if ((await isGloballyBanned(executorDiscordUserId)) || (await isGloballyBanned(ownerDiscordUserId))) {
+    return true;
+  }
   const row = await prisma.activityBan.findUnique({
     where: {
       ownerDiscordUserId_bannedDiscordUserId: {

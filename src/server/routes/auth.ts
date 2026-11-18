@@ -13,6 +13,7 @@ import { localProfileUrls } from '../pishock/profile-images.js';
 import { isAdmin } from '../admin-bypass.js';
 import {
   clearConsent,
+  getAppNotice,
   getCommandQueueEnabled,
   getEmergencyStopShockerIds,
   getPersonalActivityLimits,
@@ -51,6 +52,20 @@ export const authRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app, opts)
   });
 
   app.get('/api/me', async (req) => {
+    if (req.globalBan) {
+      // Banned from the app: the client shows the ban screen and nothing else.
+      return {
+        user: {
+          id: req.discordUser.id,
+          username: req.discordUser.username,
+          global_name: req.discordUser.global_name,
+          avatar: req.discordUser.avatar,
+        },
+        globalBan: { ...req.globalBan, appealUrl: opts.env.communityInviteUrl },
+        consent: false,
+        isAdmin: false,
+      };
+    }
     const [personal, emergencyStopShockerIds, commandQueueEnabled] = await Promise.all([
       getPersonalActivityLimits(req.discordUser.id),
       getEmergencyStopShockerIds(req.discordUser.id),
@@ -113,6 +128,8 @@ export const authRoutes: FastifyPluginAsync<{ env: AppEnv }> = async (app, opts)
       commandQueueEnabled,
       /** UI only (shows the admin bypass toggle) — the server re-checks on every command. */
       isAdmin: isAdmin(opts.env.adminDiscordUserIds, req.discordUser.id),
+      globalBan: null,
+      appNotice: await getAppNotice(),
     };
   });
 

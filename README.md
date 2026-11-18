@@ -52,6 +52,7 @@ By using this application, you acknowledge that you have read, understood, and a
 - **Activity Logging**: Commands logged for transparency and accountability
 - **Consent Gate**: Safety warnings and acknowledgment required before use
 - **Ban System**: Block specific Discord users from controlling your devices
+- **Global bans (admins)**: App-wide ban with a documented reason; banned users see a dedicated screen
 - **Owner E-STOP**: Latched emergency stop per shocker; blocks all commands until released
 - **Encrypted Credentials**: PiShock tokens encrypted at rest with AES-256-GCM
 - **Instance Verification**: Optional Discord Activity Instance checks via bot token
@@ -244,6 +245,18 @@ Copy [`.env.example`](.env.example) → `.env` and set:
 - Ban unwanted Discord users from controlling your devices
 - Owner emergency stop latch
 - Safety notice / reminders in the UI
+
+### Admin panel
+Admins listed in `ADMIN_DISCORD_USER_IDS` get an **Admin panel** entry in the in-app Menu. Every call is re-checked on the server (non-admins get a plain 404). The panel covers:
+
+- **Overview** — live sockets/users, command counts, active bans, E-STOPs, version/uptime
+- **People** — search by name or Discord id; open a privacy-safe profile (counts and on/off flags only — no PiShock keys, share codes, device names, or who shocked whom). Profile views are written to the admin audit log
+- **Bans** — ban or lift with a required reason the user will see; optional length (1 day … permanent). On ban: their shares are paused, their queue is cleared, and their live sockets are closed
+- **Audit log** — recent admin actions
+- **Notice** — short app-wide banner shown to everyone (info or warning; optional auto-hide)
+
+#### Global bans
+A globally banned account cannot use the activity: the auth hook refuses every API path except `/api/me` (returns the ban) and their GDPR/AVG data rights (`/api/me/data`, export, deletion). Operate, shares, roulette, and realtime sockets are blocked. The client shows a full-screen **You have been banned** UI with the reason, length, reference id, appeal link (`DISCORD_COMMUNITY_INVITE_URL`), and a My data button. Lifting a ban keeps their shares paused until they turn them back on.
 
 ---
 

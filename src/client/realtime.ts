@@ -2,6 +2,8 @@ import { apiBase } from './api';
 import { getActivityInstanceId } from './discord';
 import type { ApprovalRequest } from './safety';
 
+export type AppNotice = { text: string; level: 'info' | 'warning'; expiresAt: string | null; updatedAt: string };
+
 export type RealtimeEvent =
   | {
       type: 'emergency_stop';
@@ -117,6 +119,12 @@ export type RealtimeEvent =
       outcome: 'accepted' | 'denied' | 'expired' | 'canceled';
       at: number;
     }
+  | {
+      type: 'global_ban';
+      ban: { id: string; reason: string; createdAt: string; expiresAt: string | null };
+      at: number;
+    }
+  | { type: 'app_notice'; notice: AppNotice | null; at: number }
   | { type: 'checkin_due'; ownerDiscordUserId: string; deadline: number; at: number }
   | { type: 'checkin_missed'; ownerDiscordUserId: string; at: number }
   | {
@@ -284,6 +292,10 @@ export function connectRealtime(
         }
         if (data.type === 'hello_ok' && !authed) {
           afterAuth();
+        }
+        if (data.type === 'global_ban') {
+          // Banned from the app: the server closes the socket; don't keep reconnecting.
+          closed = true;
         }
         onEvent(data);
       } catch {

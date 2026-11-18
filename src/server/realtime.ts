@@ -225,6 +225,17 @@ export type RealtimeEvent =
   | {
       type: 'server_shutting_down';
       at: number;
+    }
+  | {
+      /** Sent right before the user's sockets are closed: they were banned from the app. */
+      type: 'global_ban';
+      ban: { id: string; reason: string; createdAt: string; expiresAt: string | null };
+      at: number;
+    }
+  | {
+      type: 'app_notice';
+      notice: { text: string; level: 'info' | 'warning'; expiresAt: string | null; updatedAt: string } | null;
+      at: number;
     };
 
 type RealtimeClient = {
@@ -337,6 +348,36 @@ export function broadcastToUsers(discordUserIds: Iterable<string>, event: Realti
 }
 
 /** Fan-out to every connected activity client (small N; Discord activity scale). */
+/** Tell a user they were banned, then close every socket they have open. */
+export function disconnectUser(discordUserId: string, event: RealtimeEvent) {
+  for (const client of [...clients]) {
+    if (client.discordUserId !== discordUserId) continue;
+    if (client.ws.readyState === WebSocket.OPEN) client.ws.send(JSON.stringify(event));
+    try {
+      client.ws.close(4403, 'banned');
+    } catch {
+      // ignore
+    }
+  }
+}
+
+/** Live numbers for the admin overview. */
+export function realtimeStats() {
+  const users = new Set<string>();
+  const instances = new Set<string>();
+  for (const client of clients) {
+    users.add(client.discordUserId);
+    if (client.instanceId) instances.add(client.instanceId);
+  }
+  return { sockets: clients.size, users: users.size, instances: instances.size };
+}
+
+/** Set by the app so banned users never get a live socket (keeps this module DB-free). */
+let admission: ((discordUserId: string) => Promise<RealtimeEvent | null>) | null = null;
+export function setRealtimeAdmission(check: typeof admission) {
+  admission = check;
+}
+
 export function broadcastRealtimeAll(event: RealtimeEvent) {
   const payload = JSON.stringify(event);
   for (const client of clients) {
@@ -347,6 +388,30 @@ export function broadcastRealtimeAll(event: RealtimeEvent) {
 }
 
 function attachAuthenticatedClient(ws: WebSocket, discordUserId: string) {
+  if (!admission) {
+    attachAdmittedClient(ws, discordUserId);
+    return;
+  }
+  void admission(discordUserId)
+    .then((refusal) => {
+      if (!refusal) {
+        attachAdmittedClient(ws, discordUserId);
+        return;
+      }
+      send(ws, refusal);
+      ws.close(4403, 'banned');
+    })
+    .catch(() => {
+      // Fail safe: unknown ban state → no live socket; the client reconnects.
+      try {
+        ws.close(1011, 'admission check failed');
+      } catch {
+        // ignore
+      }
+    });
+}
+
+function attachAdmittedClient(ws: WebSocket, discordUserId: string) {
   const client: RealtimeClient = {
     ws,
     discordUserId,

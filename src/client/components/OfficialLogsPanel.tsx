@@ -224,7 +224,7 @@ export function OfficialLogsPanel({
         aria-modal="true"
         aria-label="Logs"
       >
-        <div className="official-logs-card ps-dialog-card q-card q-card--dark q-dark bg-dark">
+        <div className="official-logs-card ps-dialog-card is-wide q-card q-card--dark q-dark bg-dark">
           <div className="ps-dialog-header official-logs-header row items-center justify-between no-wrap">
             <div className="ps-dialog-title">
               <BrandGlyph size={22} />
